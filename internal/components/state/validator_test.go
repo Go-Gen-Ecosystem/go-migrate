@@ -399,13 +399,13 @@ func TestCheckBestPractices(t *testing.T) {
 	hasCreatedAtWarning := false
 
 	for _, warning := range warnings {
-		if containsString(warning, "primary key") {
+		if containsString(warning.Message, "primary key") {
 			hasPKWarning = true
 		}
-		if containsString(warning, "id") {
+		if containsString(warning.Message, "id") {
 			hasIDWarning = true
 		}
-		if containsString(warning, "created_at") {
+		if containsString(warning.Message, "created_at") {
 			hasCreatedAtWarning = true
 		}
 	}

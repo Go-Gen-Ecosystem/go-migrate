@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/constants"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/tracker"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
@@ -64,8 +65,32 @@ func (m *mockTracker) RecordMigration(ctx context.Context, migration *types.Migr
 	return nil
 }
 
-func (m *mockTracker) RecordChangelog(ctx context.Context, entry interface{}) error {
+func (m *mockTracker) RecordChangelog(ctx context.Context, entry *tracker.ChangelogEntry) error {
 	return nil
+}
+
+func (m *mockTracker) GetChangelog(ctx context.Context, limit, offset int) ([]*tracker.ChangelogEntry, error) {
+	return nil, nil
+}
+
+func (m *mockTracker) GetPendingMigrations(ctx context.Context) ([]*types.Migration, error) {
+	return nil, nil
+}
+
+func (m *mockTracker) GetMigrationHistory(ctx context.Context, limit, offset int) ([]*types.Migration, error) {
+	return nil, nil
+}
+
+func (m *mockTracker) ValidateChecksum(ctx context.Context, migration *types.Migration) (*tracker.ChecksumValidationResult, error) {
+	return &tracker.ChecksumValidationResult{}, nil
+}
+
+func (m *mockTracker) DetectDrift(ctx context.Context) ([]*tracker.DriftDetectionResult, error) {
+	return nil, nil
+}
+
+func (m *mockTracker) ValidateIdempotency(ctx context.Context, migration *types.Migration) (*tracker.IdempotencyValidationResult, error) {
+	return &tracker.IdempotencyValidationResult{}, nil
 }
 
 func (m *mockTracker) GetExecutedMigrations(ctx context.Context) ([]types.MigrationRecord, error) {

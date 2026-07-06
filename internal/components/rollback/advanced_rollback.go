@@ -693,11 +693,9 @@ func (arm *DefaultAdvancedRollbackManager) sortByReverseDependencyOrder(
 		visit(mig.ID)
 	}
 
-	// Reverse the sorted list (we want dependents first for rollback)
-	for i, j := 0, len(sorted)-1; i < j; i, j = i+1, j-1 {
-		sorted[i], sorted[j] = sorted[j], sorted[i]
-	}
-
+	// The DFS above appends each migration only after all of its dependents,
+	// so `sorted` is already in dependents-first order (the correct rollback
+	// order). No further reversal is required.
 	return sorted
 }
 
