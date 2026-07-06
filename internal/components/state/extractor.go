@@ -636,10 +636,16 @@ func (e *PostgreSQLSchemaExtractor) parseForeignKey(con *Constraint, conDef stri
 	if idx := strings.Index(conDef, "REFERENCES "); idx != -1 {
 		refPart := conDef[idx+11:]
 
-		// Get table name
+		// Get table name. pg_get_constraintdef emits "REFERENCES users(id)"
+		// with no space before the paren, so the first whitespace-delimited
+		// token is "users(id)"; strip the column list to leave the bare table.
 		parts := strings.Fields(refPart)
 		if len(parts) > 0 {
-			con.ReferencedTable = parts[0]
+			table := parts[0]
+			if p := strings.Index(table, "("); p != -1 {
+				table = table[:p]
+			}
+			con.ReferencedTable = table
 		}
 
 		// Get referenced columns

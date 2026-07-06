@@ -303,10 +303,10 @@ func TestExtractTable_ConstraintParsing(t *testing.T) {
 		t.Errorf("expected foreign_key type, got %s", fk.Type)
 	}
 	// pg_get_constraintdef emits "REFERENCES users(id)" with no space before the
-	// paren, so parseForeignKey's whitespace tokenizer captures the table name
-	// together with the column list. This asserts the parser's real output.
-	if fk.ReferencedTable != "users(id)" {
-		t.Errorf("expected referenced table token users(id), got %s", fk.ReferencedTable)
+	// paren; parseForeignKey strips the column list so the referenced table is
+	// the bare relation name.
+	if fk.ReferencedTable != "users" {
+		t.Errorf("expected referenced table users, got %s", fk.ReferencedTable)
 	}
 	// The referenced columns are still parsed correctly from the parenthesized list.
 	if len(fk.ReferencedColumns) != 1 || fk.ReferencedColumns[0] != "id" {
