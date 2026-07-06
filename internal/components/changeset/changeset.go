@@ -291,7 +291,8 @@ func (l *ChangesetMigrationLoader) generateChangesetRollback(migration *types.Mi
 
 func (l *ChangesetMigrationLoader) generateRollbackChange(change types.Change) *types.Change {
 	rollbackChange := &types.Change{
-		Type: "rollback",
+		Type:       "rollback",
+		Attributes: make(map[string]interface{}),
 	}
 
 	switch change.Type {

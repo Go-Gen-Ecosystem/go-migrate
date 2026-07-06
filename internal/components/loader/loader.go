@@ -148,6 +148,7 @@ func (l *FileMigrationLoader) LoadMigration(filePath string) (*types.Migration, 
 	// Create base migration
 	migration := &types.Migration{
 		ID:        GenerateMigrationID(filename),
+		FileName:  filename,
 		FilePath:  filePath,
 		Script:    string(content),
 		Checksum:  CalculateChecksum(string(content)),
