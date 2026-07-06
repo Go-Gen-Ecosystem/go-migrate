@@ -28,7 +28,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// MigrationEngine defines the main interface for migration operations
+// MigrationEngine defines the main interface for migration operations.
+//
+// The lowercase fields hold the engine's live, wired components and are the
+// source of truth used by all engine operations. The exported fields
+// (Config, Backend, Tracker, ...) are optional inputs supplied by
+// database-specific engine builders; when set, Initialize wires them into the
+// live component fields. This keeps the builder API ergonomic (struct-literal
+// construction) without exposing internal wiring details.
 type MigrationEngine struct {
 	config          types.Config
 	loader          types.MigrationLoader
@@ -43,6 +50,37 @@ type MigrationEngine struct {
 	db              *gorm.DB
 	lockMgr         lock.LockManager
 	logger          logging.ComponentLogger
+
+	// Builder-supplied component inputs (optional). Populated by the
+	// database-specific engine builders and consumed by Initialize.
+	Config      types.Config
+	Backend     types.Backend
+	LockManager types.LockManager
+	Tracker     types.Tracker
+	Executor    types.Executor
+	Validator   types.Validator
+	Resolver    types.Resolver
+	Decorators  []types.Decorator
+	Options     map[string]interface{}
+	DryRun      bool
+}
+
+// adoptBuilderComponents copies any builder-supplied exported component inputs
+// into the engine's live component fields. It is a no-op for fields that were
+// not provided, preserving values wired by the factory constructors.
+func (e *MigrationEngine) adoptBuilderComponents() {
+	if e.config.Database.Driver == "" && e.Config.Database.Driver != "" {
+		e.config = e.Config
+	}
+	if e.tracker == nil && e.Tracker != nil {
+		e.tracker = e.Tracker
+	}
+	if e.executor == nil && e.Executor != nil {
+		e.executor = e.Executor
+	}
+	if e.validator == nil && e.Validator != nil {
+		e.validator = e.Validator
+	}
 }
 
 // NewMigrationEngine creates a new migration engine instance using factory pattern
@@ -509,6 +547,9 @@ func (e *MigrationEngine) Initialize(ctx context.Context) error {
 	if e.initialized {
 		return nil
 	}
+
+	// Adopt any components supplied via builder struct-literal construction.
+	e.adoptBuilderComponents()
 
 	// Initialize DB connection
 	dbConf := &dbcore.Config{

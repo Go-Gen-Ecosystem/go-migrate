@@ -9,6 +9,8 @@
 package sqlserver
 
 import (
+	"fmt"
+
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
@@ -106,17 +108,15 @@ func (b *SQLServerEngineBuilder) Build() (types.MigrationEngine, error) {
 	}
 
 	// Create the migration engine directly using the builder's components
-	migrationEngine := engine.NewMigrationEngine(
-		b.config,
-		b.backend,
-		b.lockManager,
-		b.tracker,
-		b.executor,
-		b.validator,
-		b.resolver,
-		b.decorators,
-		b.options,
-	)
-
-	return migrationEngine, nil
+	return &engine.MigrationEngine{
+		Config:      b.config,
+		Backend:     b.backend,
+		LockManager: b.lockManager,
+		Tracker:     b.tracker,
+		Executor:    b.executor,
+		Validator:   b.validator,
+		Resolver:    b.resolver,
+		Decorators:  b.decorators,
+		Options:     b.options,
+	}, nil
 }

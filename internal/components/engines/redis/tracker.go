@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,14 +21,8 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
-// RedisConfig holds Redis connection configuration
-type RedisConfig struct {
-	Host     string
-	Port     int
-	Password string
-	Database int
-	SSL      bool
-}
+// RedisConfig (holding Redis connection configuration) is declared once in
+// executor.go and shared across this package.
 
 // RedisMigrationTracker implements MigrationTracker for Redis
 type RedisMigrationTracker struct {

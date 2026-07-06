@@ -21,6 +21,7 @@ import (
 // CassandraMigrationExecutor implements NoSQLMigrationExecutor for Cassandra
 type CassandraMigrationExecutor struct {
 	session *gocql.Session
+	cluster *gocql.ClusterConfig
 	config  *types.NoSQLConnectionConfig
 }
 

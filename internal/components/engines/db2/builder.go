@@ -97,7 +97,7 @@ func (b *DB2EngineBuilder) WithOption(key string, value interface{}) types.Engin
 }
 
 // Build constructs the MigrationEngine with DB2-optimized components
-func (b *DB2EngineBuilder) Build() (*engine.MigrationEngine, error) {
+func (b *DB2EngineBuilder) Build() (types.MigrationEngine, error) {
 	if b.config.Database.Driver == "" {
 		b.config.Database.Driver = "db2"
 	}
@@ -129,25 +129,24 @@ func (b *DB2EngineBuilder) Build() (*engine.MigrationEngine, error) {
 	}
 
 	// Create the base engine using the common engine package
-	baseEngine := engine.NewMigrationEngine(
-		b.config,
-		b.backend,
-		b.executor,
-		b.tracker,
-		b.lockManager,
-		b.validator,
-		b.resolver,
-		b.options,
-	)
-
-	// Apply decorators
-	var decoratedEngine *engine.MigrationEngine = baseEngine
-	for _, decorator := range b.decorators {
-		// Note: decorators would need to be properly typed to work with the new engine
-		_ = decorator // placeholder to avoid unused variable error
+	baseEngine := &engine.MigrationEngine{
+		Config:      b.config,
+		Backend:     b.backend,
+		Executor:    b.executor,
+		Tracker:     b.tracker,
+		LockManager: b.lockManager,
+		Validator:   b.validator,
+		Resolver:    b.resolver,
+		Options:     b.options,
+		DryRun:      b.dryRun,
 	}
 
-	return decoratedEngine, nil
+	// Apply decorators (extension point; wired once typed decorators exist).
+	for _, decorator := range b.decorators {
+		_ = decorator
+	}
+
+	return baseEngine, nil
 }
 
 // createDB2Backend creates a DB2-specific backend

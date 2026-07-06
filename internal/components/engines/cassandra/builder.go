@@ -109,7 +109,7 @@ func (b *CassandraEngineBuilder) WithDryRun(dryRun bool) types.EngineBuilder {
 
 // Build creates the final migration engine
 func (b *CassandraEngineBuilder) Build() (types.MigrationEngine, error) {
-	if b.config == nil {
+	if b.config.Database.Driver == "" {
 		return nil, fmt.Errorf("migration config is required")
 	}
 
@@ -126,7 +126,7 @@ func (b *CassandraEngineBuilder) Build() (types.MigrationEngine, error) {
 	}
 
 	return &engine.MigrationEngine{
-		Config:      *b.config,
+		Config:      b.config,
 		Backend:     b.backend,
 		LockManager: b.lockManager,
 		Tracker:     b.tracker,

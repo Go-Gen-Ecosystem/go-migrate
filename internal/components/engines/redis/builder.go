@@ -9,7 +9,6 @@
 package redis
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 
@@ -95,7 +94,7 @@ func (b *RedisEngineBuilder) WithOption(key string, value interface{}) types.Eng
 }
 
 // Build creates the final migration engine
-func (b *RedisEngineBuilder) Build() (*engine.MigrationEngine, error) {
+func (b *RedisEngineBuilder) Build() (types.MigrationEngine, error) {
 	if b.config.Database.Driver == "" {
 		b.config.Database.Driver = "redis"
 	}
@@ -127,25 +126,25 @@ func (b *RedisEngineBuilder) Build() (*engine.MigrationEngine, error) {
 	}
 
 	// Create the base engine using the common engine package
-	baseEngine := engine.NewMigrationEngine(
-		b.config,
-		b.backend,
-		b.executor,
-		b.tracker,
-		b.lockManager,
-		b.validator,
-		b.resolver,
-		b.options,
-	)
-
-	// Apply decorators
-	var decoratedEngine *engine.MigrationEngine = baseEngine
-	for _, decorator := range b.decorators {
-		// Note: decorators would need to be properly typed to work with the new engine
-		_ = decorator // placeholder to avoid unused variable error
+	baseEngine := &engine.MigrationEngine{
+		Config:      b.config,
+		Backend:     b.backend,
+		Executor:    b.executor,
+		Tracker:     b.tracker,
+		LockManager: b.lockManager,
+		Validator:   b.validator,
+		Resolver:    b.resolver,
+		Options:     b.options,
+		DryRun:      b.dryRun,
 	}
 
-	return decoratedEngine, nil
+	// Apply decorators (decorators are wired here once typed decorators are
+	// provided; the current no-op preserves the extension point).
+	for _, decorator := range b.decorators {
+		_ = decorator
+	}
+
+	return baseEngine, nil
 }
 
 // createRedisBackend creates a Redis-specific backend

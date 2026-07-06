@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	_ "github.com/ibmdb/go_ibm_db" // DB2 driver
@@ -316,10 +317,11 @@ func (b *DB2Backend) getMaxIdleConns() int {
 	return 5 // Default for DB2
 }
 
-// getConnMaxLifetime returns the connection maximum lifetime
-func (b *DB2Backend) getConnMaxLifetime() int {
+// getConnMaxLifetime returns the connection maximum lifetime. The
+// "conn_max_lifetime" option is interpreted as a number of seconds.
+func (b *DB2Backend) getConnMaxLifetime() time.Duration {
 	if lifetime, ok := b.options["conn_max_lifetime"].(int); ok {
-		return lifetime
+		return time.Duration(lifetime) * time.Second
 	}
-	return 3600 // 1 hour default
+	return time.Hour // 1 hour default
 }
