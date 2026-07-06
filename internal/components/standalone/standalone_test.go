@@ -68,14 +68,9 @@ func writeMigration(t *testing.T, dir, name, content string) {
 
 // --- End-to-end: real up-migration through the standalone tool ---------------------
 
-// NOTE ON CURRENT ENGINE BEHAVIOUR: the underlying MigrationEngine.Migrate
-// pipeline validates and resolves pending migrations but does not yet contain a
-// step that executes/records them (a flagged engine defect). These tests
-// therefore drive the real standalone tool end-to-end and pin the observable
-// behaviour: MigrateWithOptions runs the full pipeline without error, loading a
-// real migration from disk and connecting a real SQLite database, and Status
-// reads the real migration_history table. Once the engine gains its execution
-// step, the pending/executed assertions here should flip (see the flagged task).
+// These tests drive the real standalone tool end-to-end: MigrateWithOptions
+// loads a real migration from disk, connects a real SQLite database, executes
+// and records the migration, and Status reads the real migration_history table.
 
 func TestStandaloneTool_MigrateWithOptions_RunsPipelineEndToEnd(t *testing.T) {
 	ctx := context.Background()
@@ -99,14 +94,17 @@ func TestStandaloneTool_MigrateWithOptions_RunsPipelineEndToEnd(t *testing.T) {
 	assert.Equal(t, 1, preStatus.PendingCount)
 	assert.Equal(t, 1, preStatus.TotalMigrations)
 
-	// The full migrate pipeline runs against a real SQLite database without error.
+	// The full migrate pipeline runs against a real SQLite database.
 	require.NoError(t, tool.MigrateWithOptions(ctx, MigrateOptions{}))
 
-	// Status reads the real migration_history table through the tool's engine.
+	// After migration the migration is actually applied and recorded: Status
+	// reads it back from the real migration_history table as executed.
 	status, err := tool.Status(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, status)
 	assert.Equal(t, 1, status.TotalMigrations)
+	assert.Equal(t, 1, status.ExecutedCount)
+	assert.Equal(t, 0, status.PendingCount)
 }
 
 func TestStandaloneTool_Migrate_InterfaceMethod(t *testing.T) {
@@ -151,6 +149,33 @@ func TestStandaloneTool_DryRunDoesNotApply(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, status.ExecutedCount)
 	assert.Equal(t, 1, status.PendingCount)
+}
+
+func TestConfigManager_YAMLAndJSONRoundTrip(t *testing.T) {
+	dir := tempWorkspace(t)
+	m := NewDefaultConfigManager()
+	cfg := &types.StandaloneConfig{
+		Database:  types.DatabaseConfig{Driver: "postgres", Database: "app"},
+		Migration: types.MigrationConfig{MigrationsPath: "db/migrations", TableName: "schema_history"},
+	}
+
+	// Each extension round-trips through the format its extension selects.
+	for _, name := range []string{"config.yaml", "config.yml", "config.json"} {
+		path := filepath.Join(dir, name)
+		require.NoError(t, m.SaveConfig(cfg, path), name)
+
+		got, err := m.LoadConfig(path)
+		require.NoError(t, err, name)
+		require.NotNil(t, got, name)
+		assert.Equal(t, "postgres", got.Database.Driver, name)
+		assert.Equal(t, "db/migrations", got.Migration.MigrationsPath, name)
+		assert.Equal(t, "schema_history", got.Migration.TableName, name)
+	}
+
+	// A YAML file is genuinely YAML (not JSON): it must not parse as JSON.
+	yamlBytes, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	assert.False(t, json.Valid(yamlBytes) && yamlBytes[0] == '{', "yaml output should not be JSON")
 }
 
 func TestStandaloneTool_Validate(t *testing.T) {

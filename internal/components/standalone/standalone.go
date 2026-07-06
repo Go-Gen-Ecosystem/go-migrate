@@ -11,15 +11,19 @@ package standalone
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
-	"gorm.io/gorm"
 )
 
 // Tool represents a standalone migration tool
@@ -183,18 +187,24 @@ func (t *Tool) createBackup(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the standalone migration tool
+// Close releases the tool's resources. The migration engine owns the live
+// database connection, so closing it is what actually releases the handle (and,
+// on Windows, unlocks a SQLite file); t.db is closed too when set.
 func (t *Tool) Close() error {
-	if t.db != nil {
-		sqlDB, err := t.db.DB()
-		if err != nil {
-			return fmt.Errorf("failed to obtain underlying database handle: %w", err)
-		}
-		if err := sqlDB.Close(); err != nil {
-			return fmt.Errorf("failed to close database connection: %w", err)
+	var errs []error
+	if t.engine != nil {
+		if err := t.engine.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close migration engine: %w", err))
 		}
 	}
-	return nil
+	if t.db != nil {
+		if sqlDB, err := t.db.DB(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to obtain underlying database handle: %w", err))
+		} else if err := sqlDB.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close database connection: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Interface compatibility methods for types.StandaloneMigrationTool
@@ -333,7 +343,7 @@ func (m *DefaultConfigManager) LoadConfig(path string) (*types.StandaloneConfig,
 	}
 
 	var config types.StandaloneConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	if err := unmarshalConfig(path, data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
@@ -345,9 +355,35 @@ func (m *DefaultConfigManager) LoadConfig(path string) (*types.StandaloneConfig,
 	return &config, nil
 }
 
-// SaveConfig saves configuration to file
+// isYAMLPath reports whether the config path uses a YAML extension.
+func isYAMLPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
+}
+
+// unmarshalConfig decodes config data as YAML for .yaml/.yml paths, JSON otherwise.
+func unmarshalConfig(path string, data []byte, config *types.StandaloneConfig) error {
+	if isYAMLPath(path) {
+		return yaml.Unmarshal(data, config)
+	}
+	return json.Unmarshal(data, config)
+}
+
+// SaveConfig saves configuration to file, choosing YAML or JSON by extension.
 func (m *DefaultConfigManager) SaveConfig(config *types.StandaloneConfig, path string) error {
-	data, err := json.MarshalIndent(config, "", "  ")
+	var (
+		data []byte
+		err  error
+	)
+	if isYAMLPath(path) {
+		data, err = yaml.Marshal(config)
+	} else {
+		data, err = json.MarshalIndent(config, "", "  ")
+	}
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
