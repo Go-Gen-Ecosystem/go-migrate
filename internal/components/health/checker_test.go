@@ -591,18 +591,23 @@ func TestConcurrentHealthChecks(t *testing.T) {
 		IntegrityTimeout:     15 * time.Second,
 		ResourcesTimeout:     5 * time.Second,
 		MigrationStateTimeout: 10 * time.Second,
-		PerformanceThreshold: 100 * time.Millisecond,
+		// This test exercises concurrency correctness, not query latency. A tight
+		// latency threshold makes the reported status depend on scheduling jitter
+		// (a healthy DB easily exceeds 100ms under whole-suite parallel load),
+		// which would flip OverallStatus to degraded and fail the assertion below
+		// for reasons unrelated to what is under test. Keep it generous.
+		PerformanceThreshold: 30 * time.Second,
 	}
-	
+
 	checker := &SQLiteHealthChecker{
 		BaseHealthChecker: &BaseHealthChecker{
 			db:     db,
 			config: config,
 		},
 	}
-	
+
 	ctx := context.Background()
-	
+
 	// Run multiple health checks concurrently
 	const numChecks = 10
 	results := make(chan *HealthReport, numChecks)
@@ -627,7 +632,7 @@ func TestConcurrentHealthChecks(t *testing.T) {
 			healthReports = append(healthReports, healthReport)
 		case err := <-errors:
 			t.Fatalf("concurrent health check failed: %v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("timeout waiting for health checks")
 		}
 	}

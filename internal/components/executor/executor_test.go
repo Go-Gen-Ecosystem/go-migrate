@@ -80,10 +80,14 @@ func TestExecute_CreatesTable(t *testing.T) {
 	require.NoError(t, db.Table("users").Count(&count).Error)
 	assert.Equal(t, int64(1), count)
 
-	// Execution bookkeeping on the migration must be updated.
+	// Execution bookkeeping on the migration must be updated. ExecutionTime is
+	// asserted non-negative rather than strictly positive: an instant CREATE
+	// TABLE can measure exactly zero on a coarse monotonic clock (Windows), so
+	// zero is a legitimate reading. That the migration ran is proven by State
+	// and ExecutedAt above.
 	assert.Equal(t, "applied", m.State)
 	require.NotNil(t, m.ExecutedAt)
-	assert.Greater(t, m.ExecutionTime, time.Duration(0))
+	assert.GreaterOrEqual(t, m.ExecutionTime, time.Duration(0))
 }
 
 func TestExecute_MultiStatementScript(t *testing.T) {
