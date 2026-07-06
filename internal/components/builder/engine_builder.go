@@ -128,16 +128,17 @@ func (b *ConcreteMigrationEngineBuilder) Build() (*engine.MigrationEngine, error
 		return nil, fmt.Errorf("builder validation failed: %w", err)
 	}
 
-	// Create the base engine using the engine package constructor
-	migrationEngine := engine.NewMigrationEngine(
-		b.config,
-		b.backend,
-		b.executor,
-		b.tracker,
-		b.lockMgr,
-		b.validator,
-		b.resolver,
-	)
+	// Create the base engine using the engine package's builder inputs.
+	migrationEngine := &engine.MigrationEngine{
+		Config:      b.config,
+		Backend:     b.backend,
+		Executor:    b.executor,
+		Tracker:     b.tracker,
+		LockManager: b.lockMgr,
+		Validator:   b.validator,
+		Resolver:    b.resolver,
+		Options:     b.options,
+	}
 
 	// Wire rollback components if provided
 	if b.rollbackManager != nil {
