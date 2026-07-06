@@ -239,34 +239,55 @@ func TestAutoRollbackGenerator_GenerateRollback_XML(t *testing.T) {
 	assert.Contains(t, rb.Content, "databaseChangeLog")
 }
 
-// NOTE: analyzeYAMLChanges / analyzeJSONChanges validate the payload as
-// YAML/JSON but then delegate change analysis to analyzeXMLChanges(content),
-// re-parsing the same raw non-XML content as XML. As a result, YAML/JSON
-// rollback generation currently fails for any content that is not also valid
-// XML. These tests pin that real behaviour (see the flagged defect).
+// YAML and JSON changelogs are analyzed in their own format, not re-parsed as
+// XML. A createTable change must therefore yield a real DROP TABLE rollback.
 
-func TestAutoRollbackGenerator_GenerateRollback_YAML_DelegatesToXMLParser(t *testing.T) {
+func TestAutoRollbackGenerator_GenerateRollback_YAMLProducesRollback(t *testing.T) {
 	g := NewAutoRollbackGenerator()
 	mig := &types.Migration{
-		ID:     "y1",
-		Type:   types.MigrationTypeYAML,
-		Script: "changeSets: []\n", // valid YAML, not valid XML
+		ID:   "y1",
+		Type: types.MigrationTypeYAML,
+		Script: `changeSets:
+  - id: "1"
+    author: dev
+    changes:
+      - type: createTable
+        attributes:
+          tableName: users
+`,
 	}
-	_, err := g.GenerateRollback(context.Background(), mig)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse XML")
+	rb, err := g.GenerateRollback(context.Background(), mig)
+	require.NoError(t, err)
+	require.NotNil(t, rb)
+	require.Len(t, rb.Changes, 1)
+	assert.Equal(t, "DROP TABLE users", rb.Changes[0].RollbackSQL)
+	assert.Contains(t, rb.Content, "DROP TABLE users")
 }
 
-func TestAutoRollbackGenerator_GenerateRollback_JSON_DelegatesToXMLParser(t *testing.T) {
+func TestAutoRollbackGenerator_GenerateRollback_JSONProducesRollback(t *testing.T) {
 	g := NewAutoRollbackGenerator()
 	mig := &types.Migration{
 		ID:     "j1",
 		Type:   types.MigrationTypeJSON,
-		Script: `{"changeSets": []}`, // valid JSON, not valid XML
+		Script: `{"changeSets":[{"id":"1","author":"dev","changes":[{"type":"createTable","attributes":{"tableName":"orders"}}]}]}`,
 	}
-	_, err := g.GenerateRollback(context.Background(), mig)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse XML")
+	rb, err := g.GenerateRollback(context.Background(), mig)
+	require.NoError(t, err)
+	require.NotNil(t, rb)
+	require.Len(t, rb.Changes, 1)
+	assert.Equal(t, "DROP TABLE orders", rb.Changes[0].RollbackSQL)
+	assert.Contains(t, rb.Content, "DROP TABLE orders")
+}
+
+// An empty (but well-formed) YAML/JSON changelog analyzes cleanly to zero
+// changes rather than erroring.
+func TestAutoRollbackGenerator_GenerateRollback_EmptyYAMLNoError(t *testing.T) {
+	g := NewAutoRollbackGenerator()
+	mig := &types.Migration{ID: "y0", Type: types.MigrationTypeYAML, Script: "changeSets: []\n"}
+	rb, err := g.GenerateRollback(context.Background(), mig)
+	require.NoError(t, err)
+	require.NotNil(t, rb)
+	assert.Empty(t, rb.Changes)
 }
 
 func TestAutoRollbackGenerator_GenerateRollback_YAML_InvalidYAML(t *testing.T) {

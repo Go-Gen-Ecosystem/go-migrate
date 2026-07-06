@@ -421,9 +421,38 @@ func (g *AutoRollbackGenerator) analyzeXMLChanges(content string) ([]DatabaseCha
 	if err := xml.Unmarshal([]byte(content), &changelog); err != nil {
 		return nil, fmt.Errorf("failed to parse XML: %w", err)
 	}
+	return g.changesFromChangelog(changelog), nil
+}
+
+func (g *AutoRollbackGenerator) analyzeYAMLChanges(content string) ([]DatabaseChange, error) {
+	var changelog types.Changelog
+	if err := yaml.Unmarshal([]byte(content), &changelog); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+	return g.changesFromChangelog(changelog), nil
+}
+
+func (g *AutoRollbackGenerator) analyzeJSONChanges(content string) ([]DatabaseChange, error) {
+	var changelog types.Changelog
+	if err := json.Unmarshal([]byte(content), &changelog); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+	return g.changesFromChangelog(changelog), nil
+}
+
+// changesFromChangelog derives the reversible database changes and their
+// rollback SQL from a parsed changelog. It is format-agnostic: XML, YAML and
+// JSON all unmarshal into the same Changelog shape, so every analyzer shares
+// this single extraction path. Changesets may arrive under either the standard
+// databaseChangeLog element or the changeSets field, so both are considered.
+func (g *AutoRollbackGenerator) changesFromChangelog(changelog types.Changelog) []DatabaseChange {
+	changeSets := changelog.ChangeSets
+	if len(changeSets) == 0 {
+		changeSets = changelog.DatabaseChangeLog
+	}
 
 	var changes []DatabaseChange
-	for _, changeSet := range changelog.ChangeSets {
+	for _, changeSet := range changeSets {
 		for _, change := range changeSet.Changes {
 			dbChange := DatabaseChange{
 				Type:         change.Type,
@@ -451,27 +480,7 @@ func (g *AutoRollbackGenerator) analyzeXMLChanges(content string) ([]DatabaseCha
 		}
 	}
 
-	return changes, nil
-}
-
-func (g *AutoRollbackGenerator) analyzeYAMLChanges(content string) ([]DatabaseChange, error) {
-	var changelog types.Changelog
-	if err := yaml.Unmarshal([]byte(content), &changelog); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	// Similar logic to XML analysis
-	return g.analyzeXMLChanges(content)
-}
-
-func (g *AutoRollbackGenerator) analyzeJSONChanges(content string) ([]DatabaseChange, error) {
-	var changelog types.Changelog
-	if err := json.Unmarshal([]byte(content), &changelog); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
-	}
-
-	// Similar logic to XML analysis
-	return g.analyzeXMLChanges(content)
+	return changes
 }
 
 // Helper functions for SQL parsing
@@ -517,83 +526,71 @@ func (g *AutoRollbackGenerator) generateSQLRollback(changes []DatabaseChange) (s
 	return strings.Join(rollbackSQL, "\n"), warnings, errors
 }
 
-func (g *AutoRollbackGenerator) generateXMLRollback(changes []DatabaseChange) (string, []string, []string) {
+// buildRollbackChangelog assembles a reverse changeset from the analyzed
+// changes, emitting a warning for each change that cannot be rolled back
+// automatically. It is the single source of truth for every rollback
+// serializer, so XML, YAML and JSON output stay consistent.
+func (g *AutoRollbackGenerator) buildRollbackChangelog(changes []DatabaseChange) (types.Changelog, []string) {
 	var warnings []string
-	var errors []string
-
-	// Create a rollback changeset
-	changelog := types.Changelog{
-		XMLName: xml.Name{Local: "databaseChangeLog"},
-	}
-
 	rollbackChangeset := types.ChangeSet{
 		ID:     fmt.Sprintf("rollback-%d", time.Now().Unix()),
 		Author: "auto-generated",
 	}
-
-	// Add rollback changes
 	for _, change := range changes {
 		if !change.Rollbackable {
 			warnings = append(warnings, fmt.Sprintf("Change %s cannot be automatically rolled back", change.Type))
 			continue
 		}
-
-		// Create rollback change
-		rollbackChange := types.Change{
+		rollbackChangeset.Changes = append(rollbackChangeset.Changes, types.Change{
 			Type: "sql",
 			SQL:  change.RollbackSQL,
-		}
-		rollbackChangeset.Changes = append(rollbackChangeset.Changes, rollbackChange)
+		})
 	}
+	changelog := types.Changelog{
+		XMLName:    xml.Name{Local: "databaseChangeLog"},
+		ChangeSets: []types.ChangeSet{rollbackChangeset},
+	}
+	return changelog, warnings
+}
 
-	changelog.ChangeSets = []types.ChangeSet{rollbackChangeset}
+func (g *AutoRollbackGenerator) generateXMLRollback(changes []DatabaseChange) (string, []string, []string) {
+	changelog, warnings := g.buildRollbackChangelog(changes)
+	var errs []string
 
-	// Marshal to XML
+	// NOTE: encoding/xml cannot (un)marshal the map-typed Change.Attributes
+	// field, so a changelog carrying analyzed attributes cannot be serialized as
+	// XML. Full XML changelog serialization is a v1.1 concern; YAML and JSON
+	// output below are unaffected because their codecs support maps.
 	xmlData, err := xml.MarshalIndent(changelog, "", "  ")
 	if err != nil {
-		errors = append(errors, fmt.Sprintf("Failed to generate XML: %v", err))
-		return "", warnings, errors
+		errs = append(errs, fmt.Sprintf("failed to generate XML rollback: %v", err))
+		return "", warnings, errs
 	}
-
-	return string(xmlData), warnings, errors
+	return string(xmlData), warnings, errs
 }
 
 func (g *AutoRollbackGenerator) generateYAMLRollback(changes []DatabaseChange) (string, []string, []string) {
-	var warnings []string
-	var errors []string
+	changelog, warnings := g.buildRollbackChangelog(changes)
+	var errs []string
 
-	var changelog types.Changelog
-	if err := yaml.Unmarshal([]byte(""), &changelog); err != nil {
-		errors = append(errors, fmt.Sprintf("Failed to initialize YAML: %v", err))
-		return "", warnings, errors
+	yamlData, err := yaml.Marshal(changelog)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("failed to generate YAML rollback: %v", err))
+		return "", warnings, errs
 	}
-
-	// Similar logic to XML generation
-	xmlContent, xmlWarnings, xmlErrors := g.generateXMLRollback(changes)
-	warnings = append(warnings, xmlWarnings...)
-	errors = append(errors, xmlErrors...)
-
-	// Convert to YAML (simplified)
-	return xmlContent, warnings, errors
+	return string(yamlData), warnings, errs
 }
 
 func (g *AutoRollbackGenerator) generateJSONRollback(changes []DatabaseChange) (string, []string, []string) {
-	var warnings []string
-	var errors []string
+	changelog, warnings := g.buildRollbackChangelog(changes)
+	var errs []string
 
-	var changelog types.Changelog
-	if err := json.Unmarshal([]byte("{}"), &changelog); err != nil {
-		errors = append(errors, fmt.Sprintf("Failed to initialize JSON: %v", err))
-		return "", warnings, errors
+	jsonData, err := json.MarshalIndent(changelog, "", "  ")
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("failed to generate JSON rollback: %v", err))
+		return "", warnings, errs
 	}
-
-	// Similar logic to XML generation
-	xmlContent, xmlWarnings, xmlErrors := g.generateXMLRollback(changes)
-	warnings = append(warnings, xmlWarnings...)
-	errors = append(errors, xmlErrors...)
-
-	// Convert to JSON (simplified)
-	return xmlContent, warnings, errors
+	return string(jsonData), warnings, errs
 }
 
 // requiresManualRollback checks if any changes require manual rollback
