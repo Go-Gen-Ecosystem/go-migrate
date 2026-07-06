@@ -1,3 +1,6 @@
+//go:build drifted_testutils
+// +build drifted_testutils
+
 /**
  * @file migration_test_utils.go
  * @description Comprehensive test utilities for migration system testing

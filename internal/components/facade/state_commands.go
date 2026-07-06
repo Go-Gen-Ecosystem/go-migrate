@@ -1,7 +1,7 @@
 /**
  * @file state_commands.go
  * @description State-based migration CLI commands
- * @author Claude Code
+ * @author Admilson B. F. Cossa
  * @date 2025-01-01
  * @path pkg/core/database/migrations/internal/components/facade/state_commands.go
  */
@@ -33,7 +33,7 @@ func (c *StateInitCommand) Execute(ctx context.Context, args []string, opts *Exe
 
 	return &CommandResult{
 		Success:      true,
-		StandardOutput: output,
+		Output: output,
 		ExitCode:     0,
 	}, nil
 }
@@ -89,7 +89,7 @@ func (c *StateValidateCommand) Execute(ctx context.Context, args []string, opts 
 
 	return &CommandResult{
 		Success:        result.Valid,
-		StandardOutput: output.String(),
+		Output: output.String(),
 		ExitCode:       boolToExitCode(!result.Valid),
 	}, nil
 }
@@ -127,7 +127,7 @@ func (c *StatePreviewCommand) Execute(ctx context.Context, args []string, opts *
 
 	return &CommandResult{
 		Success:        true,
-		StandardOutput: output,
+		Output: output,
 		ExitCode:       0,
 	}, nil
 }
@@ -156,7 +156,7 @@ func (c *StatePlanCommand) Execute(ctx context.Context, args []string, opts *Exe
 		if err.Error() == "no changes to generate migration for" {
 			return &CommandResult{
 				Success:        true,
-				StandardOutput: "✓ Database is in sync with schema - no migration needed\n",
+				Output: "✓ Database is in sync with schema - no migration needed\n",
 				ExitCode:       0,
 			}, nil
 		}
@@ -175,7 +175,7 @@ func (c *StatePlanCommand) Execute(ctx context.Context, args []string, opts *Exe
 
 	return &CommandResult{
 		Success:        true,
-		StandardOutput: output,
+		Output: output,
 		ExitCode:       0,
 	}, nil
 }
@@ -223,7 +223,7 @@ func (c *StateApplyCommand) Execute(ctx context.Context, args []string, opts *Ex
 
 	return &CommandResult{
 		Success:        status.FailedCount == 0,
-		StandardOutput: output,
+		Output: output,
 		ExitCode:       boolToExitCode(status.FailedCount > 0),
 	}, nil
 }
@@ -288,7 +288,7 @@ func (c *StateExportCommand) Execute(ctx context.Context, args []string, opts *E
 
 	return &CommandResult{
 		Success:        true,
-		StandardOutput: output,
+		Output: output,
 		ExitCode:       0,
 	}, nil
 }
@@ -332,20 +332,20 @@ func (c *StateCheckCommand) Execute(ctx context.Context, args []string, opts *Ex
 
 	return &CommandResult{
 		Success:        inSync,
-		StandardOutput: output,
+		Output: output,
 		ExitCode:       boolToExitCode(!inSync),
 	}, nil
 }
 
 // Helper methods
 
-func (c *StateValidateCommand) getMigrator() (state.StateBasedMigrator, error) {
+func (c *StateValidateCommand) getMigrator() (*state.DefaultStateBasedMigrator, error) {
 	migratorInterface, err := c.facade.GetStateBasedMigrator()
 	if err != nil {
 		return nil, err
 	}
 
-	migrator, ok := migratorInterface.(state.StateBasedMigrator)
+	migrator, ok := migratorInterface.(*state.DefaultStateBasedMigrator)
 	if !ok {
 		return nil, fmt.Errorf("invalid state-based migrator type")
 	}
@@ -353,13 +353,13 @@ func (c *StateValidateCommand) getMigrator() (state.StateBasedMigrator, error) {
 	return migrator, nil
 }
 
-func (c *StatePreviewCommand) getMigrator() (state.StateBasedMigrator, error) {
+func (c *StatePreviewCommand) getMigrator() (*state.DefaultStateBasedMigrator, error) {
 	migratorInterface, err := c.facade.GetStateBasedMigrator()
 	if err != nil {
 		return nil, err
 	}
 
-	migrator, ok := migratorInterface.(state.StateBasedMigrator)
+	migrator, ok := migratorInterface.(*state.DefaultStateBasedMigrator)
 	if !ok {
 		return nil, fmt.Errorf("invalid state-based migrator type")
 	}
@@ -367,13 +367,13 @@ func (c *StatePreviewCommand) getMigrator() (state.StateBasedMigrator, error) {
 	return migrator, nil
 }
 
-func (c *StatePlanCommand) getMigrator() (state.StateBasedMigrator, error) {
+func (c *StatePlanCommand) getMigrator() (*state.DefaultStateBasedMigrator, error) {
 	migratorInterface, err := c.facade.GetStateBasedMigrator()
 	if err != nil {
 		return nil, err
 	}
 
-	migrator, ok := migratorInterface.(state.StateBasedMigrator)
+	migrator, ok := migratorInterface.(*state.DefaultStateBasedMigrator)
 	if !ok {
 		return nil, fmt.Errorf("invalid state-based migrator type")
 	}
@@ -381,13 +381,13 @@ func (c *StatePlanCommand) getMigrator() (state.StateBasedMigrator, error) {
 	return migrator, nil
 }
 
-func (c *StateApplyCommand) getMigrator() (state.StateBasedMigrator, error) {
+func (c *StateApplyCommand) getMigrator() (*state.DefaultStateBasedMigrator, error) {
 	migratorInterface, err := c.facade.GetStateBasedMigrator()
 	if err != nil {
 		return nil, err
 	}
 
-	migrator, ok := migratorInterface.(state.StateBasedMigrator)
+	migrator, ok := migratorInterface.(*state.DefaultStateBasedMigrator)
 	if !ok {
 		return nil, fmt.Errorf("invalid state-based migrator type")
 	}
@@ -395,13 +395,13 @@ func (c *StateApplyCommand) getMigrator() (state.StateBasedMigrator, error) {
 	return migrator, nil
 }
 
-func (c *StateExportCommand) getMigrator() (state.StateBasedMigrator, error) {
+func (c *StateExportCommand) getMigrator() (*state.DefaultStateBasedMigrator, error) {
 	migratorInterface, err := c.facade.GetStateBasedMigrator()
 	if err != nil {
 		return nil, err
 	}
 
-	migrator, ok := migratorInterface.(state.StateBasedMigrator)
+	migrator, ok := migratorInterface.(*state.DefaultStateBasedMigrator)
 	if !ok {
 		return nil, fmt.Errorf("invalid state-based migrator type")
 	}
@@ -409,13 +409,13 @@ func (c *StateExportCommand) getMigrator() (state.StateBasedMigrator, error) {
 	return migrator, nil
 }
 
-func (c *StateCheckCommand) getMigrator() (state.StateBasedMigrator, error) {
+func (c *StateCheckCommand) getMigrator() (*state.DefaultStateBasedMigrator, error) {
 	migratorInterface, err := c.facade.GetStateBasedMigrator()
 	if err != nil {
 		return nil, err
 	}
 
-	migrator, ok := migratorInterface.(state.StateBasedMigrator)
+	migrator, ok := migratorInterface.(*state.DefaultStateBasedMigrator)
 	if !ok {
 		return nil, fmt.Errorf("invalid state-based migrator type")
 	}
@@ -423,11 +423,9 @@ func (c *StateCheckCommand) getMigrator() (state.StateBasedMigrator, error) {
 	return migrator, nil
 }
 
-func getStringVar(vars map[string]interface{}, key, defaultValue string) string {
-	if val, ok := vars[key]; ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
+func getStringVar(vars map[string]string, key, defaultValue string) string {
+	if val, ok := vars[key]; ok && val != "" {
+		return val
 	}
 	return defaultValue
 }

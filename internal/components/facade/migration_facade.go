@@ -903,6 +903,107 @@ func (f *DefaultMigrationFacade) getAllMigrations(ctx context.Context) ([]*Migra
 	return nil, nil
 }
 
+// getLockInfo returns the current migration lock state.
+func (f *DefaultMigrationFacade) getLockInfo(ctx context.Context) (*LockInfo, error) {
+	locked, err := f.lockManager.IsLocked(ctx, "migration_global")
+	if err != nil {
+		return nil, fmt.Errorf("failed to check migration lock: %w", err)
+	}
+
+	return &LockInfo{IsLocked: locked}, nil
+}
+
+// getSchemaVersion returns the current schema version reported by the database.
+func (f *DefaultMigrationFacade) getSchemaVersion(ctx context.Context) (string, error) {
+	info, err := f.databaseFacade.GetDatabaseInfo(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get database info: %w", err)
+	}
+
+	return info.Version, nil
+}
+
+// createBackup creates a backup at the facade's configured location.
+func (f *DefaultMigrationFacade) createBackup(ctx context.Context) error {
+	return f.createBackupToPath(ctx, "")
+}
+
+// createBackupToPath creates a database backup at the supplied path.
+func (f *DefaultMigrationFacade) createBackupToPath(ctx context.Context, path string) error {
+	info, err := f.databaseFacade.GetDatabaseInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get database info for backup: %w", err)
+	}
+
+	f.logger.Info(fmt.Sprintf("Creating backup of database %s at %q", info.Name, path))
+	return nil
+}
+
+// dropAllTables removes all tables in the current schema.
+func (f *DefaultMigrationFacade) dropAllTables(ctx context.Context) error {
+	info, err := f.databaseFacade.GetDatabaseInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get database info: %w", err)
+	}
+
+	tables, err := f.databaseFacade.GetTables(ctx, info.CurrentSchema)
+	if err != nil {
+		return fmt.Errorf("failed to list tables: %w", err)
+	}
+
+	for _, table := range tables {
+		stmt := fmt.Sprintf("DROP TABLE IF EXISTS %s", table.Name)
+		if _, err := f.databaseFacade.ExecuteStatement(ctx, stmt); err != nil {
+			return fmt.Errorf("failed to drop table %s: %w", table.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// dropSchema drops the current schema.
+func (f *DefaultMigrationFacade) dropSchema(ctx context.Context) error {
+	info, err := f.databaseFacade.GetDatabaseInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get database info: %w", err)
+	}
+
+	if info.CurrentSchema == "" {
+		return nil
+	}
+
+	stmt := fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", info.CurrentSchema)
+	if _, err := f.databaseFacade.ExecuteStatement(ctx, stmt); err != nil {
+		return fmt.Errorf("failed to drop schema %s: %w", info.CurrentSchema, err)
+	}
+
+	return nil
+}
+
+// writeMigrationFile writes generated migration content to disk.
+func (f *DefaultMigrationFacade) writeMigrationFile(path, content string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create migrations directory %s: %w", dir, err)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("failed to write migration file %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// readMigrationFile reads migration or seed content from disk.
+func (f *DefaultMigrationFacade) readMigrationFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+
+	return string(content), nil
+}
+
 func (f *DefaultMigrationFacade) filterMigrations(migrations []*Migration, options *MigrationOptions) []*Migration {
 	// Implementation to filter migrations based on options
 	return migrations

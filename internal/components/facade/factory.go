@@ -579,15 +579,15 @@ func (f *DefaultCommandFacade) RegisterCommand(executor CommandExecutor) error {
 	return nil
 }
 
-func (f *DefaultCommandFacade) ExecuteCommand(ctx context.Context, name string, args []string, options map[string]interface{}) (*CommandResult, error) {
+func (f *DefaultCommandFacade) ExecuteCommand(ctx context.Context, name string, args []string, options *ExecutionOptions) (*CommandResult, error) {
 	if executor, exists := f.commands[name]; exists {
 		return executor.Execute(ctx, args, options)
 	}
 	return nil, fmt.Errorf("command not found: %s", name)
 }
 
-func (f *DefaultCommandFacade) GetCommands() []CommandInfo {
-	commands := make([]CommandInfo, 0, len(f.commands))
+func (f *DefaultCommandFacade) GetCommands() []*CommandInfo {
+	commands := make([]*CommandInfo, 0, len(f.commands))
 	for _, executor := range f.commands {
 		commands = append(commands, executor.GetInfo())
 	}

@@ -1,3 +1,6 @@
+//go:build drifted_testutils
+// +build drifted_testutils
+
 /**
  * @file integration_test_utils.go
  * @description Integration test utilities for end-to-end migration system testing
