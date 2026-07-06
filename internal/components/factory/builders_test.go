@@ -1,7 +1,7 @@
 /**
  * @file builders_test.go
  * @description Unit tests for factory builders
- * @author Claude Code
+ * @author Admilson B. F. Cossa
  * @date 2025-01-01
  */
 
@@ -273,8 +273,8 @@ func TestPlaceholderComponentsFactory(t *testing.T) {
 		dialect: "test",
 	}
 
-	// Create a minimal config
-	config := &MockConfig{}
+	// Create a minimal config (types.Config is a value struct)
+	config := types.Config{}
 
 	// Test NewBackend returns error
 	_, err := placeholder.NewBackend(config)
@@ -327,7 +327,9 @@ func TestPlaceholderEngineBuilder_ChainableMethods(t *testing.T) {
 	}
 
 	// Test all chainable methods return the builder
-	config := &MockConfig{}
+	// (types.Config is a value struct; the interface-typed dependencies use
+	// interface-embedding stubs since WithX only stores them without invoking them)
+	config := types.Config{Environment: "chainable-test"}
 	backend := &MockBackend{}
 	executor := &MockExecutor{}
 	tracker := &MockTracker{}
@@ -348,8 +350,10 @@ func TestPlaceholderEngineBuilder_ChainableMethods(t *testing.T) {
 		t.Fatal("Chainable methods returned nil")
 	}
 
-	// Verify fields were set
-	if placeholder.config == nil {
+	// Verify fields were set. config is a value struct (types.Config) containing
+	// maps, so it is neither nil-comparable nor ==-comparable; assert on a
+	// distinguishing field to confirm the builder stored the value we passed.
+	if placeholder.config.Environment != "chainable-test" {
 		t.Error("Config was not set")
 	}
 	if placeholder.backend == nil {
@@ -389,25 +393,22 @@ func stringContains(s, substr string) bool {
 	return false
 }
 
-// Mock implementations for testing
+// Mock implementations for testing.
+//
+// The EngineBuilder.WithX methods only store the supplied dependency and return
+// the builder; they never invoke any method on it. Each mock therefore embeds
+// the corresponding interface so it satisfies the type without hand-writing the
+// full (and here-unused) method set. Config is a value struct in the real API,
+// so no MockConfig is needed.
 
-type MockConfig struct{}
+type MockBackend struct{ types.EngineBackend }
 
-func (m *MockConfig) GetString(key string) string                     { return "" }
-func (m *MockConfig) GetInt(key string) int                           { return 0 }
-func (m *MockConfig) GetBool(key string) bool                         { return false }
-func (m *MockConfig) Get(key string) interface{}                      { return nil }
-func (m *MockConfig) Set(key string, value interface{})               {}
-func (m *MockConfig) GetAll() map[string]interface{}                  { return nil }
+type MockExecutor struct{ types.MigrationExecutor }
 
-type MockBackend struct{}
+type MockTracker struct{ types.MigrationTracker }
 
-type MockExecutor struct{}
+type MockLockManager struct{ types.LockManager }
 
-type MockTracker struct{}
+type MockValidator struct{ types.MigrationValidator }
 
-type MockLockManager struct{}
-
-type MockValidator struct{}
-
-type MockResolver struct{}
+type MockResolver struct{ types.DependencyResolver }
