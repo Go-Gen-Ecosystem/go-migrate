@@ -1,7 +1,7 @@
 /**
  * @file integration_test.go
  * @description Integration tests for the complete sharding system
- * @author Claude Code
+ * @author Admilson B. F. Cossa
  * @date 2025-10-31
  */
 
@@ -27,8 +27,6 @@ func TestEndToEnd_TenantPerDatabase(t *testing.T) {
 	config.MaxParallelShards = 3
 
 	strategy := NewTenantPerDatabaseStrategy(registry, config)
-	tracker := NewInMemoryShardedMigrationTracker()
-	coordinator := NewShardedMigrationCoordinator(strategy, tracker, config)
 
 	// Register shards
 	shards := []*Shard{
@@ -58,24 +56,23 @@ func TestEndToEnd_TenantPerDatabase(t *testing.T) {
 		}
 	}
 
-	// Register tenants
+	// Register tenants. The tenant-per-database strategy resolves routing via
+	// the registry, so a tenant must be registered before it can be routed.
 	tenants := []string{"tenant-1", "tenant-2", "tenant-3"}
 	for _, tenantID := range tenants {
-		shard, err := strategy.RouteToShard(ctx, tenantID)
-		if err != nil {
-			t.Fatalf("failed to route tenant %s: %v", tenantID, err)
-		}
-
 		tenant := &Tenant{
 			ID:       tenantID,
 			Name:     "Test " + tenantID,
-			ShardID:  shard.ID,
 			Status:   "active",
 			Metadata: make(map[string]string),
 		}
-
 		if err := registry.RegisterTenant(ctx, tenant); err != nil {
 			t.Fatalf("failed to register tenant %s: %v", tenantID, err)
+		}
+
+		shard, err := strategy.RouteToShard(ctx, tenantID)
+		if err != nil {
+			t.Fatalf("failed to route tenant %s: %v", tenantID, err)
 		}
 
 		if err := strategy.AssignTenantToShard(ctx, tenantID, shard.ID); err != nil {

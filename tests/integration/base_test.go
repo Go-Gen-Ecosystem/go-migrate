@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	migrations "github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 )
 
@@ -118,12 +118,6 @@ func (s *IntegrationTestSuite) SetupTest() {
 			s.cleanDatabase(dbType, db)
 		}
 	}
-	
-	// Debug: Check migration_history table state
-	if sqliteDB, exists := s.databases[SQLite]; exists {
-		count := s.getTableRowCount(sqliteDB, "migration_history")
-	}
-	
 }
 
 // TearDownTest runs after each test
@@ -573,15 +567,7 @@ func (s *IntegrationTestSuite) CreateMigrationEngine(db *TestDatabase) (*engine.
 	if s.currentTestMigrationDir != "" {
 		migrationPath = s.currentTestMigrationDir
 	}
-	
-	
-	// List files in the migration directory
-	if files, err := filepath.Glob(filepath.Join(migrationPath, "*.sql")); err == nil {
-		for _, file := range files {
-		}
-	} else {
-	}
-	
+
 	config := migrations.Config{
 		Environment: "test",
 		Database: migrations.DatabaseConfig{
@@ -612,20 +598,20 @@ func (s *IntegrationTestSuite) CreateMigrationEngine(db *TestDatabase) (*engine.
 			Monitoring:        true,
 		},
 	}
-	
+
 	// Use the engine package directly with the correct config type
 	migrationEngine, err := engine.NewMigrationEngine(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create migration engine: %w", err)
 	}
-	
+
 	// Initialize the migration engine
 	ctx := context.Background()
 	err = migrationEngine.Initialize(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize migration engine: %w", err)
 	}
-	
+
 	return migrationEngine, nil
 }
 

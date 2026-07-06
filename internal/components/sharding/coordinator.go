@@ -1,7 +1,7 @@
 /**
  * @file coordinator.go
  * @description Shard coordinator for orchestrating migrations across multiple shards
- * @author Claude Code
+ * @author Admilson B. F. Cossa
  * @date 2025-10-31
  * @path pkg/core/database/migrations/internal/components/sharding/coordinator.go
  */
@@ -481,9 +481,31 @@ func (c *ShardedMigrationCoordinator) GetOperationStatus(operationID string) (*c
 		return nil, fmt.Errorf("operation %s not found", operationID)
 	}
 
-	// Return a copy
-	opCopy := *op
-	return &opCopy, nil
+	// Return a snapshot copy. The struct embeds a sync.RWMutex, so a shallow
+	// (*op) copy would copy the lock (a vet copylocks violation and a real
+	// concurrency hazard). Copy the value fields explicitly, deep-copy the
+	// Results map under the operation's lock, and leave the snapshot's mutex
+	// as a fresh zero value that guards only the returned copy.
+	op.ResultsMu.RLock()
+	results := make(map[string]*shardResult, len(op.Results))
+	for k, v := range op.Results {
+		results[k] = v
+	}
+	op.ResultsMu.RUnlock()
+
+	opCopy := &coordinatorOperation{
+		ID:              op.ID,
+		Type:            op.Type,
+		MigrationID:     op.MigrationID,
+		StartedAt:       op.StartedAt,
+		TotalShards:     op.TotalShards,
+		CompletedShards: op.CompletedShards,
+		FailedShards:    op.FailedShards,
+		Status:          op.Status,
+		Cancel:          op.Cancel,
+		Results:         results,
+	}
+	return opCopy, nil
 }
 
 // registerOperation registers an active operation

@@ -1,15 +1,24 @@
 /**
  * @file types_test.go
  * @description Tests for core sharding types and configuration
- * @author Claude Code
+ * @author Admilson B. F. Cossa
  * @date 2025-10-31
  */
 
 package sharding
 
 import (
+	"errors"
 	"testing"
 	"time"
+)
+
+// Test-local sentinel errors used by the validation helpers below. The
+// production sharding package does not export dedicated validation error
+// values; these helpers exercise the validation logic the tests care about.
+var (
+	errInvalidShard   = errors.New("invalid shard")
+	errTenantNotFound = errors.New("tenant not found")
 )
 
 func TestShardType(t *testing.T) {
@@ -40,7 +49,7 @@ func TestShardStatus(t *testing.T) {
 	}{
 		{"Active", ShardStatusActive, "active"},
 		{"Inactive", ShardStatusInactive, "inactive"},
-		{"Draining", ShardStatusDraining, "draining"},
+		{"Maintenance", ShardStatusMaintenance, "maintenance"},
 		{"Rebalancing", ShardStatusRebalancing, "rebalancing"},
 		{"Failed", ShardStatusFailed, "failed"},
 	}
@@ -173,10 +182,10 @@ func TestShardValidation(t *testing.T) {
 
 func validateShard(shard *Shard) error {
 	if shard.ID == "" {
-		return ErrInvalidShard
+		return errInvalidShard
 	}
 	if shard.DatabaseDSN == "" {
-		return ErrInvalidShard
+		return errInvalidShard
 	}
 	return nil
 }
@@ -231,10 +240,10 @@ func TestTenantValidation(t *testing.T) {
 
 func validateTenant(tenant *Tenant) error {
 	if tenant.ID == "" {
-		return ErrTenantNotFound
+		return errTenantNotFound
 	}
 	if tenant.Name == "" {
-		return ErrTenantNotFound
+		return errTenantNotFound
 	}
 	return nil
 }
@@ -244,8 +253,8 @@ func TestShardHealth(t *testing.T) {
 		ShardID:      "shard-1",
 		Healthy:      true,
 		ResponseTime: 50 * time.Millisecond,
-		LastCheck:    time.Now(),
-		ErrorCount:   0,
+		CheckedAt:    time.Now(),
+		Metrics:      make(map[string]float64),
 	}
 
 	if health.ShardID != "shard-1" {
@@ -263,27 +272,27 @@ func TestShardHealth(t *testing.T) {
 
 func TestShardMetrics(t *testing.T) {
 	metrics := &ShardMetrics{
-		ShardID:             "shard-1",
-		TotalMigrations:     10,
-		SuccessfulMigrations: 9,
-		FailedMigrations:    1,
-		AverageDuration:     100 * time.Millisecond,
-		LastMigration:       time.Now(),
+		ShardID:                "shard-1",
+		MigrationsApplied:      9,
+		MigrationsFailed:       1,
+		AverageMigrationTimeMs: 100,
+		Timestamp:              time.Now(),
 	}
 
 	if metrics.ShardID != "shard-1" {
 		t.Errorf("expected shard ID 'shard-1', got '%s'", metrics.ShardID)
 	}
 
-	if metrics.TotalMigrations != 10 {
-		t.Errorf("expected 10 total migrations, got %d", metrics.TotalMigrations)
+	totalMigrations := metrics.MigrationsApplied + metrics.MigrationsFailed
+	if totalMigrations != 10 {
+		t.Errorf("expected 10 total migrations, got %d", totalMigrations)
 	}
 
-	if metrics.SuccessfulMigrations != 9 {
-		t.Errorf("expected 9 successful migrations, got %d", metrics.SuccessfulMigrations)
+	if metrics.MigrationsApplied != 9 {
+		t.Errorf("expected 9 applied migrations, got %d", metrics.MigrationsApplied)
 	}
 
-	successRate := float64(metrics.SuccessfulMigrations) / float64(metrics.TotalMigrations)
+	successRate := float64(metrics.MigrationsApplied) / float64(totalMigrations)
 	expectedRate := 0.9
 
 	if successRate != expectedRate {
