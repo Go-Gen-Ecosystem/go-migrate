@@ -75,7 +75,7 @@ func (c *StateValidateCommand) Execute(ctx context.Context, args []string, opts 
 		output.WriteString("✗ Schema validation failed\n\n")
 		output.WriteString("Errors:\n")
 		for _, err := range result.Errors {
-			output.WriteString(fmt.Sprintf("  • %s\n", err))
+			output.WriteString(fmt.Sprintf("  • %v\n", err))
 		}
 		output.WriteString("\n")
 	}
@@ -83,7 +83,7 @@ func (c *StateValidateCommand) Execute(ctx context.Context, args []string, opts 
 	if len(result.Warnings) > 0 {
 		output.WriteString("Warnings:\n")
 		for _, warning := range result.Warnings {
-			output.WriteString(fmt.Sprintf("  ⚠ %s\n", warning))
+			output.WriteString(fmt.Sprintf("  ⚠ %v\n", warning))
 		}
 	}
 

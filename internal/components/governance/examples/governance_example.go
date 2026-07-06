@@ -361,7 +361,8 @@ func ExampleCustomPolicy() {
 
 // ExampleEndToEndWorkflow demonstrates a complete end-to-end workflow
 func ExampleEndToEndWorkflow() {
-	fmt.Println("=== End-to-End Migration Governance Workflow ===\n")
+	fmt.Println("=== End-to-End Migration Governance Workflow ===")
+
 
 	// 1. Setup
 	fmt.Println("1. Setting up governance...")
