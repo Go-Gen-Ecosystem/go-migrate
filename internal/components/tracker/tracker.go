@@ -22,7 +22,11 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
-// MigrationTracker interface defines methods for tracking migration state
+// MigrationTracker interface defines methods for tracking migration state.
+//
+//nolint:interfacebloat // Cohesive migration-state store contract (record,
+// query, changelog and schema-table setup) implemented as one transactional
+// unit by DatabaseMigrationTracker.
 type MigrationTracker interface {
 	RecordMigration(ctx context.Context, migration *types.Migration) error
 	RemoveMigration(ctx context.Context, migrationID string) error

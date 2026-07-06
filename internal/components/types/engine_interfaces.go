@@ -15,8 +15,13 @@ import (
 
 // Note: MigrationEngine is now a concrete struct in the engine package
 
-// EngineBackend defines the Bridge implementor interface for DB-specific operations
-// This decouples engine orchestration from database-specific implementations
+// EngineBackend defines the Bridge implementor interface for DB-specific
+// operations. This decouples engine orchestration from database-specific
+// implementations.
+//
+//nolint:interfacebloat // Cohesive Bridge contract for one DB backend
+// (lock/apply/rollback/status/capabilities); splitting would fragment a single
+// backend's responsibility across artificial seams.
 type EngineBackend interface {
 	// Lock management
 	AcquireLock(ctx context.Context) error
@@ -36,23 +41,11 @@ type EngineBackend interface {
 	SupportsRollback() bool
 }
 
-// ComponentsFactory defines the Abstract Factory interface for creating component families
-// Each database type has its own factory that produces cohesive component sets
-type ComponentsFactory interface {
-	// Core components
-	NewBackend(cfg Config) (EngineBackend, error)
-	NewExecutor(cfg Config) (MigrationExecutor, error)
-	NewRollbackExecutor(cfg Config) (RollbackExecutor, error)
-	NewTracker(cfg Config) (MigrationTracker, error)
-	NewLockManager(cfg Config) (LockManager, error)
-	NewValidator(cfg Config) (MigrationValidator, error)
-
-	// Factory information
-	GetSupportedDialect() string
-	GetComponentVersion() string
-}
-
-// MigrationEngineInterface defines the interface for migration engines
+// MigrationEngineInterface defines the interface for migration engines.
+//
+//nolint:interfacebloat // Cohesive engine lifecycle+operations contract
+// (initialize/status/migrate/rollback/validate/info/close); these are the
+// engine's public verbs and belong together as one responsibility.
 type MigrationEngineInterface interface {
 	Status(ctx context.Context) (*MigrationStatus, error)
 	Migrate(ctx context.Context, target string, dryRun bool) error
@@ -61,34 +54,6 @@ type MigrationEngineInterface interface {
 	Info(ctx context.Context) (*MigrationInfo, error)
 	Close() error
 	Initialize(ctx context.Context) error
-}
-
-// MigrationEngineFactory defines the main factory interface for creating engines
-type MigrationEngineFactory interface {
-	CreateEngine(dbType string, config Config) (MigrationEngineInterface, error)
-	RegisterBuilder(dbType string, builder EngineBuilder)
-	GetSupportedTypes() []string
-	IsSupported(dbType string) bool
-}
-
-// EngineBuilder defines the Builder interface for constructing migration engines
-type EngineBuilder interface {
-	WithConfig(config Config) EngineBuilder
-	WithBackend(backend EngineBackend) EngineBuilder
-	WithExecutor(executor MigrationExecutor) EngineBuilder
-	WithTracker(tracker MigrationTracker) EngineBuilder
-	WithLockManager(lockMgr LockManager) EngineBuilder
-	WithValidator(validator MigrationValidator) EngineBuilder
-	WithResolver(resolver DependencyResolver) EngineBuilder
-	Build() (MigrationEngineInterface, error)
-}
-
-// RollbackExecutor defines the interface for rollback operations
-type RollbackExecutor interface {
-	CanRollback(ctx context.Context, migration MigrationScript) bool
-	GenerateRollback(ctx context.Context, migration MigrationScript) (string, error)
-	ExecuteRollback(ctx context.Context, migration MigrationScript) error
-	ValidateRollback(ctx context.Context, migration MigrationScript) error
 }
 
 // LockManager defines the interface for managing migration locks

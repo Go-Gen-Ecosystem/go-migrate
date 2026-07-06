@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // DefaultLockWaitTimeout is the fallback applied when a caller requests a lock
@@ -124,8 +126,9 @@ func NewDatabaseLockManagerWithDryRun(db *gorm.DB, tableName string, dryRun bool
 	// Only auto-migrate lock table if not in dry run mode
 	if !dryRun {
 		if err := manager.initializeTable(); err != nil {
-			// Log the error but don't fail - the table will be created on first use
-			fmt.Printf("Warning: failed to initialize lock table: %v\n", err)
+			// Log and continue - the table will be created on first use.
+			logging.GetComponentLogger("lock").Warn(
+				"failed to initialize lock table; it will be created on first use", "error", err)
 		}
 	}
 

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // SQLServerLockManager implements LockManager for SQL Server databases
@@ -118,8 +120,9 @@ func (l *SQLServerLockManager) ReleaseLock(ctx context.Context, lock *MigrationL
 	// Remove lock record
 	err := l.db.WithContext(ctx).Table(l.tableName).Where("id = ?", lock.ID).Delete(&LockRecord{}).Error
 	if err != nil {
-		// Continue with application lock release even if record deletion fails
-		fmt.Printf("Warning: failed to delete lock record: %v\n", err)
+		// Continue with application lock release even if record deletion fails.
+		logging.GetComponentLogger("lock").Warn(
+			"failed to delete SQL Server lock record; continuing with lock release", "error", err)
 	}
 
 	// Release application lock

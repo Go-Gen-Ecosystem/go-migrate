@@ -12,6 +12,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // MySQLLockManager implements LockManager for MySQL databases
@@ -89,8 +91,9 @@ func (l *MySQLLockManager) ReleaseLock() error {
 	query := fmt.Sprintf(`DELETE FROM %s WHERE lock_name = 'migration_lock'`, l.tableName)
 	_, err := l.db.Exec(query)
 	if err != nil {
-		// Continue with named lock release even if record deletion fails
-		fmt.Printf("Warning: failed to delete lock record: %v\n", err)
+		// Continue with named lock release even if record deletion fails.
+		logging.GetComponentLogger("lock").Warn(
+			"failed to delete MySQL lock record; continuing with lock release", "error", err)
 	}
 
 	// Release named lock

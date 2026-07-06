@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 	"gorm.io/gorm"
 )
 
@@ -476,35 +477,29 @@ func (m *DefaultPluginManager) ListPlugins() []string {
 	return names
 }
 
-// DefaultLogger implements simple logging
-type DefaultLogger struct{}
+// DefaultLogger adapts the shared structured logger to the StandaloneLogger
+// contract, so the standalone tool logs through internal/logging like the rest
+// of the module instead of printing to stdout.
+type DefaultLogger struct {
+	log logging.Logger
+}
 
-// NewDefaultLogger creates a new default logger
+// NewDefaultLogger creates a structured logger for the standalone tool.
 func NewDefaultLogger() *DefaultLogger {
-	return &DefaultLogger{}
+	return &DefaultLogger{log: logging.GetComponentLogger("standalone")}
 }
 
-// Debug logs debug message
-func (l *DefaultLogger) Debug(msg string, fields ...interface{}) {
-}
+// Debug logs a debug message.
+func (l *DefaultLogger) Debug(msg string, fields ...interface{}) { l.log.Debug(msg, fields...) }
 
-// Info logs info message
-func (l *DefaultLogger) Info(msg string, fields ...interface{}) {
-	fmt.Printf("[INFO] %s %v\n", msg, fields)
-}
+// Info logs an info message.
+func (l *DefaultLogger) Info(msg string, fields ...interface{}) { l.log.Info(msg, fields...) }
 
-// Warn logs warning message
-func (l *DefaultLogger) Warn(msg string, fields ...interface{}) {
-	fmt.Printf("[WARN] %s %v\n", msg, fields)
-}
+// Warn logs a warning message.
+func (l *DefaultLogger) Warn(msg string, fields ...interface{}) { l.log.Warn(msg, fields...) }
 
-// Error logs error message
-func (l *DefaultLogger) Error(msg string, fields ...interface{}) {
-	fmt.Printf("[ERROR] %s %v\n", msg, fields)
-}
+// Error logs an error message.
+func (l *DefaultLogger) Error(msg string, fields ...interface{}) { l.log.Error(msg, fields...) }
 
-// Fatal logs fatal message and exits
-func (l *DefaultLogger) Fatal(msg string, fields ...interface{}) {
-	fmt.Printf("[FATAL] %s %v\n", msg, fields)
-	os.Exit(1)
-}
+// Fatal logs a fatal message and exits the process.
+func (l *DefaultLogger) Fatal(msg string, fields ...interface{}) { l.log.Fatal(msg, fields...) }

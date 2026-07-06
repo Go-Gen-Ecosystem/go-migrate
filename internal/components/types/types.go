@@ -43,7 +43,11 @@ type MigrationTool interface {
 	Close() error
 }
 
-// StandaloneMigrationTool provides additional methods for standalone migration tools
+// StandaloneMigrationTool provides additional methods for standalone migration tools.
+//
+//nolint:interfacebloat // Cohesive standalone-tool facade: the embedded
+// MigrationTool verbs plus config/environment/plugin management form the tool's
+// single public surface, used together by the CLI.
 type StandaloneMigrationTool interface {
 	MigrationTool
 
@@ -69,7 +73,12 @@ type StandaloneMigrationTool interface {
 	GetPlugins() []PluginConfig
 }
 
-// MigrationTracker defines the interface for tracking migration state
+// MigrationTracker defines the interface for tracking migration state.
+//
+//nolint:interfacebloat // Cohesive migration-state store: history queries,
+// success/failure recording, applied-version checks and schema-table setup form
+// one transactional responsibility (as in Flyway/Liquibase trackers); splitting
+// them would fracture that boundary.
 type MigrationTracker interface {
 	GetExecutedMigrations(ctx context.Context) ([]MigrationRecord, error)
 	GetFailedMigrations(ctx context.Context) ([]MigrationRecord, error)
@@ -1033,7 +1042,10 @@ type PluginManager interface {
 	ListPlugins() []string
 }
 
-// MigrationPlugin interface for migration plugins
+// MigrationPlugin interface for migration plugins.
+//
+//nolint:interfacebloat // Cohesive plugin lifecycle contract
+// (identity/init/hooks/teardown); a plugin implements the whole set as one unit.
 type MigrationPlugin interface {
 	Name() string
 	Version() string

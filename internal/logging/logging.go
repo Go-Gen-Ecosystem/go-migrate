@@ -49,6 +49,10 @@ func (l LogLevel) String() string {
 
 // Logger is the structured logging contract used across go-migrate. Field
 // arguments are variadic key/value pairs (msg, "key1", val1, "key2", val2, ...).
+//
+//nolint:interfacebloat // Cohesive logging contract: the leveled, formatted and
+// contextual methods are one responsibility (structured logging) and match the
+// conventional logger surface callers expect.
 type Logger interface {
 	Debug(msg string, fields ...interface{})
 	Info(msg string, fields ...interface{})
