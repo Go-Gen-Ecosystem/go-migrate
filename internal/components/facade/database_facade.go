@@ -59,6 +59,45 @@ type DatabaseMetadata struct {
 	TimeZone        string
 }
 
+// QueryResult holds the result of a read query executed by the facade.
+type QueryResult struct {
+	Columns       []string        `json:"columns"`
+	ColumnTypes   []string        `json:"column_types"`
+	Data          [][]interface{} `json:"data"`
+	RowCount      int             `json:"row_count"`
+	ExecutionTime time.Duration   `json:"execution_time"`
+	Query         string          `json:"query"`
+}
+
+// StatementResult holds the result of a mutating statement executed by the facade.
+type StatementResult struct {
+	RowsAffected  int64         `json:"rows_affected"`
+	LastInsertID  int64         `json:"last_insert_id"`
+	ExecutionTime time.Duration `json:"execution_time"`
+	Statement     string        `json:"statement"`
+}
+
+// TransactionOptions defines options for beginning a facade transaction.
+type TransactionOptions struct {
+	IsolationLevel string        `json:"isolation_level"`
+	ReadOnly       bool          `json:"read_only"`
+	Timeout        time.Duration `json:"timeout"`
+}
+
+// DatabaseInfo describes the connected database as seen by the facade.
+type DatabaseInfo struct {
+	Name           string `json:"name"`
+	Driver         string `json:"driver"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Version        string `json:"version"`
+	Charset        string `json:"charset"`
+	Collation      string `json:"collation"`
+	TimeZone       string `json:"time_zone"`
+	MaxConnections int    `json:"max_connections"`
+	CurrentSchema  string `json:"current_schema"`
+}
+
 // NewDatabaseFacade creates a new database facade instance
 func NewDatabaseFacade(config *DatabaseConfig) (*DefaultDatabaseFacade, error) {
 	if config == nil {

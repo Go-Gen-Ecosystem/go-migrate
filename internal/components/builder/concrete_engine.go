@@ -31,6 +31,67 @@ type ConcreteMigrationEngine struct {
 	connected  bool
 }
 
+// scriptToMigration converts a MigrationScript (the engine's external contract type)
+// into the *Migration domain type expected by the validator, resolver, and executor.
+func scriptToMigration(s types.MigrationScript) *types.Migration {
+	return &types.Migration{
+		ID:           s.ID,
+		Version:      s.Version,
+		Description:  s.Description,
+		Type:         s.Type,
+		Script:       s.Content,
+		Checksum:     s.Checksum,
+		Dependencies: s.Dependencies,
+		Tags:         s.Tags,
+		Contexts:     s.Contexts,
+		Labels:       s.Labels,
+		Metadata:     s.Metadata,
+		CreatedAt:    s.CreatedAt,
+	}
+}
+
+// migrationToScript converts a *Migration domain type back into a MigrationScript,
+// which is the engine's external contract type used in result payloads.
+func migrationToScript(m *types.Migration) types.MigrationScript {
+	if m == nil {
+		return types.MigrationScript{}
+	}
+	return types.MigrationScript{
+		ID:           m.ID,
+		Version:      m.Version,
+		Description:  m.Description,
+		Type:         m.Type,
+		Content:      m.Script,
+		Checksum:     m.Checksum,
+		Dependencies: m.Dependencies,
+		Tags:         m.Tags,
+		Contexts:     m.Contexts,
+		Labels:       m.Labels,
+		Metadata:     m.Metadata,
+		CreatedAt:    m.CreatedAt,
+	}
+}
+
+// scriptsToMigrationValues converts a slice of MigrationScript into a slice of
+// Migration values, as required by the MigrationValidator interface.
+func scriptsToMigrationValues(scripts []types.MigrationScript) []types.Migration {
+	migrations := make([]types.Migration, 0, len(scripts))
+	for _, s := range scripts {
+		migrations = append(migrations, *scriptToMigration(s))
+	}
+	return migrations
+}
+
+// scriptsToMigrationPointers converts a slice of MigrationScript into a slice of
+// *Migration, as required by the DependencyResolver interface.
+func scriptsToMigrationPointers(scripts []types.MigrationScript) []*types.Migration {
+	migrations := make([]*types.Migration, 0, len(scripts))
+	for _, s := range scripts {
+		migrations = append(migrations, scriptToMigration(s))
+	}
+	return migrations
+}
+
 // Connect establishes a connection to the database
 func (e *ConcreteMigrationEngine) Connect(ctx context.Context) error {
 	if e.connected {
@@ -97,46 +158,40 @@ func (e *ConcreteMigrationEngine) Up(ctx context.Context, migrations []types.Mig
 		_ = e.lockMgr.ReleaseLock(ctx, lockID)
 	}()
 
-	// Validate migrations
-	validationResult, err := e.validator.Validate(ctx, migrations)
-	if err != nil {
+	// Validate migrations. The validator returns only an error; a non-nil error
+	// means the batch is invalid and execution must not proceed.
+	if err := e.validator.ValidateMigrations(scriptsToMigrationValues(migrations)); err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("validation failed: %v", err))
-		return result, err
+		return result, fmt.Errorf("migration validation failed: %w", err)
 	}
 
-	if !validationResult.Valid {
-		for _, validationError := range validationResult.ValidationErrors {
-			result.Errors = append(result.Errors, validationError.Message)
-		}
-		return result, fmt.Errorf("migration validation failed")
-	}
-
-	// Resolve dependencies
-	executionPlan, err := e.resolver.ResolveDependencies(ctx, migrations)
+	// Resolve dependencies. The resolver returns an ordered slice of *Migration.
+	ordered, err := e.resolver.ResolveDependencies(ctx, scriptsToMigrationPointers(migrations))
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("dependency resolution failed: %v", err))
 		return result, err
 	}
 
 	// Execute migrations
-	for _, migration := range executionPlan.Migrations {
-		if err := e.executeSingleMigration(ctx, migration, &result); err != nil {
+	for _, migration := range ordered {
+		script := migrationToScript(migration)
+		if err := e.executeSingleMigration(ctx, script, &result); err != nil {
 			result.FailedCount++
 			result.FailedScripts = append(result.FailedScripts, types.FailedMigrationScript{
-				Script:      migration,
+				Script:      script,
 				Error:       err.Error(),
 				ErrorCode:   "EXECUTION_FAILED",
 				FailureTime: time.Now(),
 				CanRetry:    true,
 			})
-			
+
 			// Stop on first failure unless configured otherwise
 			if !e.getBoolOption("continue_on_failure", false) {
 				break
 			}
 		} else {
 			result.ExecutedCount++
-			result.ExecutedScripts = append(result.ExecutedScripts, migration)
+			result.ExecutedScripts = append(result.ExecutedScripts, script)
 		}
 	}
 
@@ -163,23 +218,23 @@ func (e *ConcreteMigrationEngine) Down(ctx context.Context, version string) (typ
 		}
 	}
 
-	// Get current status
-	statusList, err := e.tracker.GetStatus(ctx)
+	// Get the migrations already applied to the database.
+	appliedMigrations, err := e.tracker.GetAppliedMigrations(ctx)
 	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("failed to get status: %v", err))
+		result.Errors = append(result.Errors, fmt.Sprintf("failed to get applied migrations: %v", err))
 		return result, err
 	}
 
 	// Find migrations to rollback
-	migrationsToRollback := e.findMigrationsToRollback(statusList, version)
-	
+	migrationsToRollback := e.findMigrationsToRollback(appliedMigrations, version)
+
 	// Execute rollbacks in reverse order
 	for i := len(migrationsToRollback) - 1; i >= 0; i-- {
-		migration := migrationsToRollback[i]
-		if err := e.executeRollback(ctx, migration, &result); err != nil {
+		script := migrationToScript(migrationsToRollback[i])
+		if err := e.executeRollback(ctx, script, &result); err != nil {
 			result.FailedCount++
 			result.FailedScripts = append(result.FailedScripts, types.FailedMigrationScript{
-				Script:      migration,
+				Script:      script,
 				Error:       err.Error(),
 				ErrorCode:   "ROLLBACK_FAILED",
 				FailureTime: time.Now(),
@@ -188,7 +243,7 @@ func (e *ConcreteMigrationEngine) Down(ctx context.Context, version string) (typ
 			break // Stop on rollback failure
 		} else {
 			result.ExecutedCount++
-			result.ExecutedScripts = append(result.ExecutedScripts, migration)
+			result.ExecutedScripts = append(result.ExecutedScripts, script)
 		}
 	}
 
@@ -219,34 +274,32 @@ func (e *ConcreteMigrationEngine) DryRun(ctx context.Context, migrations []types
 		ValidationErrors: make([]types.ValidationError, 0),
 	}
 
-	// Validate migrations
-	validationResult, err := e.validator.Validate(ctx, migrations)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("validation failed: %v", err))
-		return result, err
-	}
-
-	result.ValidationErrors = validationResult.ValidationErrors
-	result.Warnings = validationResult.Warnings
-
-	if !validationResult.Valid {
+	// Validate migrations. A non-nil error means the batch is invalid; surface it
+	// as a validation error and stop before planning execution.
+	if err := e.validator.ValidateMigrations(scriptsToMigrationValues(migrations)); err != nil {
+		result.ValidationErrors = append(result.ValidationErrors, types.ValidationError{
+			Field:   "migrations",
+			Message: err.Error(),
+			Cause:   err,
+		})
 		return result, nil
 	}
 
-	// Resolve dependencies
-	executionPlan, err := e.resolver.ResolveDependencies(ctx, migrations)
+	// Resolve dependencies. The resolver returns an ordered slice of *Migration.
+	ordered, err := e.resolver.ResolveDependencies(ctx, scriptsToMigrationPointers(migrations))
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("dependency resolution failed: %v", err))
 		return result, err
 	}
 
 	// Determine what would be executed
-	for _, migration := range executionPlan.Migrations {
+	for _, migration := range ordered {
+		script := migrationToScript(migration)
 		// Check if migration is already applied
-		if e.isMigrationApplied(ctx, migration) {
-			result.WouldSkip = append(result.WouldSkip, migration)
+		if e.isMigrationApplied(ctx, script) {
+			result.WouldSkip = append(result.WouldSkip, script)
 		} else {
-			result.WouldExecute = append(result.WouldExecute, migration)
+			result.WouldExecute = append(result.WouldExecute, script)
 		}
 	}
 
@@ -258,7 +311,25 @@ func (e *ConcreteMigrationEngine) DryRun(ctx context.Context, migrations []types
 
 // Validate validates migrations without executing them
 func (e *ConcreteMigrationEngine) Validate(ctx context.Context, migrations []types.MigrationScript) (types.ValidationResult, error) {
-	return e.validator.Validate(ctx, migrations)
+	result := types.ValidationResult{
+		ValidationErrors: make([]types.ValidationError, 0),
+		Warnings:         make([]string, 0),
+	}
+
+	if err := e.validator.ValidateMigrations(scriptsToMigrationValues(migrations)); err != nil {
+		result.Valid = false
+		result.ErrorCount = 1
+		result.ValidationErrors = append(result.ValidationErrors, types.ValidationError{
+			Field:   "migrations",
+			Message: err.Error(),
+			Cause:   err,
+		})
+		return result, nil
+	}
+
+	result.Valid = true
+	result.ValidatedCount = len(migrations)
+	return result, nil
 }
 
 // GetEngineType returns the engine type
@@ -269,19 +340,19 @@ func (e *ConcreteMigrationEngine) GetEngineType() string {
 // GetSupportedFeatures returns the supported features
 func (e *ConcreteMigrationEngine) GetSupportedFeatures() []string {
 	features := []string{"up", "down", "status", "dry-run", "validate"}
-	
+
 	if e.getBoolOption("supports_transactions", false) {
 		features = append(features, "transactions")
 	}
-	
+
 	if e.getBoolOption("supports_rollback", false) {
 		features = append(features, "rollback")
 	}
-	
+
 	if e.getBoolOption("supports_schemas", false) {
 		features = append(features, "schemas")
 	}
-	
+
 	return features
 }
 
@@ -300,7 +371,7 @@ func (e *ConcreteMigrationEngine) executeSingleMigration(ctx context.Context, mi
 	}
 
 	// Execute the migration
-	if err := e.executor.Execute(ctx, migration); err != nil {
+	if err := e.executor.Execute(ctx, scriptToMigration(migration)); err != nil {
 		return fmt.Errorf("failed to execute migration %s: %w", migration.ID, err)
 	}
 
@@ -327,36 +398,24 @@ func (e *ConcreteMigrationEngine) executeRollback(ctx context.Context, migration
 }
 
 func (e *ConcreteMigrationEngine) isMigrationApplied(ctx context.Context, migration types.MigrationScript) bool {
-	status, err := e.backend.ReadStatus(ctx)
+	applied, err := e.tracker.IsMigrationApplied(ctx, migration.ID)
 	if err != nil {
 		return false
 	}
-
-	for _, s := range status {
-		if s.ID == migration.ID && s.Status == "applied" {
-			return true
-		}
-	}
-
-	return false
+	return applied
 }
 
-func (e *ConcreteMigrationEngine) findMigrationsToRollback(statusList []types.MigrationStatus, targetVersion string) []types.MigrationScript {
+func (e *ConcreteMigrationEngine) findMigrationsToRollback(appliedMigrations []*types.Migration, targetVersion string) []*types.Migration {
 	// This is a simplified implementation
 	// In a real implementation, this would be more sophisticated
-	migrations := make([]types.MigrationScript, 0)
-	
-	for _, status := range statusList {
-		if status.Status == "applied" && status.Version > targetVersion {
-			// Convert status to migration script (simplified)
-			migration := types.MigrationScript{
-				ID:      status.ID,
-				Version: status.Version,
-			}
+	migrations := make([]*types.Migration, 0)
+
+	for _, migration := range appliedMigrations {
+		if migration != nil && migration.Version > targetVersion {
 			migrations = append(migrations, migration)
 		}
 	}
-	
+
 	return migrations
 }
 

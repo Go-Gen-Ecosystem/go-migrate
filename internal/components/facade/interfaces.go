@@ -288,6 +288,7 @@ type ValidateOptions struct {
 // ValidationResult result of validation operation
 type ValidationResult struct {
 	IsValid         bool              `json:"is_valid"`
+	Valid           bool              `json:"valid"`
 	Errors          []ValidationError `json:"errors"`
 	Warnings        []ValidationWarning `json:"warnings"`
 	CheckedCount    int               `json:"checked_count"`
@@ -416,20 +417,8 @@ type CLIConfig struct {
 	LogFile         string            `json:"log_file"`
 }
 
-// DatabaseConfig configuration for database connections
-type DatabaseConfig struct {
-	Driver          string            `json:"driver"`
-	Host            string            `json:"host"`
-	Port            int               `json:"port"`
-	Database        string            `json:"database"`
-	Username        string            `json:"username"`
-	Password        string            `json:"password"`
-	SSLMode         string            `json:"ssl_mode"`
-	Timeout         time.Duration     `json:"timeout"`
-	MaxConnections  int               `json:"max_connections"`
-	MaxIdleTime     time.Duration     `json:"max_idle_time"`
-	Parameters      map[string]string `json:"parameters"`
-}
+// DatabaseConfig is declared canonically in database_facade.go (richer field set
+// consumed by DefaultDatabaseFacade). See database_facade.go for the definition.
 
 // TableDefinition defines a database table structure
 type TableDefinition struct {
@@ -482,6 +471,8 @@ type ConstraintDefinition struct {
 type TableInfo struct {
 	Name            string            `json:"name"`
 	Schema          string            `json:"schema"`
+	Type            string            `json:"type"`
+	Comment         string            `json:"comment"`
 	RowCount        int64             `json:"row_count"`
 	Size            int64             `json:"size"`
 	Columns         []*ColumnInfo     `json:"columns"`
@@ -661,6 +652,7 @@ type ListSummary struct {
 // ValidationError represents a validation error
 type ValidationError struct {
 	Migration       string            `json:"migration"`
+	Key             string            `json:"key"`
 	Type            string            `json:"type"`
 	Message         string            `json:"message"`
 	Line            int               `json:"line"`

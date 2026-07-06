@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file components.go
  * @description DB2-specific components: lock manager, validator, and resolver

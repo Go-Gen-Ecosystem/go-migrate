@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file builder.go
  * @description Oracle-specific migration engine builder

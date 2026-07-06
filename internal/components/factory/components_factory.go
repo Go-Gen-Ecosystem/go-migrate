@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file components_factory.go
  * @description Database-specific components factory implementation

@@ -16,14 +16,18 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
-// FacadeFactory creates and manages all facade components
+// FacadeFactory creates and manages all facade components.
+//
+// The factory holds the concrete facade implementations it constructs. The
+// exported getters expose them via the corresponding facade interfaces so
+// callers keep depending on abstractions.
 type FacadeFactory struct {
 	config              *FactoryConfig
-	migrationFacade     MigrationFacade
-	cliFacade          CLIFacade
-	commandFacade      CommandFacade
-	databaseFacade     DatabaseFacade
-	configurationFacade ConfigurationFacade
+	migrationFacade     *DefaultMigrationFacade
+	cliFacade          *DefaultCLIFacade
+	commandFacade      *DefaultCommandFacade
+	databaseFacade     *DefaultDatabaseFacade
+	configurationFacade *DefaultConfigurationFacade
 	initialized        bool
 }
 
@@ -151,7 +155,7 @@ func (f *FacadeFactory) Initialize(ctx context.Context) error {
 }
 
 // GetMigrationFacade returns the migration facade instance
-func (f *FacadeFactory) GetMigrationFacade() (MigrationFacade, error) {
+func (f *FacadeFactory) GetMigrationFacade() (*DefaultMigrationFacade, error) {
 	if !f.initialized {
 		return nil, fmt.Errorf("factory not initialized")
 	}
@@ -164,7 +168,7 @@ func (f *FacadeFactory) GetMigrationFacade() (MigrationFacade, error) {
 }
 
 // GetCLIFacade returns the CLI facade instance
-func (f *FacadeFactory) GetCLIFacade() (CLIFacade, error) {
+func (f *FacadeFactory) GetCLIFacade() (*DefaultCLIFacade, error) {
 	if !f.initialized {
 		return nil, fmt.Errorf("factory not initialized")
 	}
@@ -177,7 +181,7 @@ func (f *FacadeFactory) GetCLIFacade() (CLIFacade, error) {
 }
 
 // GetCommandFacade returns the command facade instance
-func (f *FacadeFactory) GetCommandFacade() (CommandFacade, error) {
+func (f *FacadeFactory) GetCommandFacade() (*DefaultCommandFacade, error) {
 	if !f.initialized {
 		return nil, fmt.Errorf("factory not initialized")
 	}
@@ -190,7 +194,7 @@ func (f *FacadeFactory) GetCommandFacade() (CommandFacade, error) {
 }
 
 // GetDatabaseFacade returns the database facade instance
-func (f *FacadeFactory) GetDatabaseFacade() (DatabaseFacade, error) {
+func (f *FacadeFactory) GetDatabaseFacade() (*DefaultDatabaseFacade, error) {
 	if !f.initialized {
 		return nil, fmt.Errorf("factory not initialized")
 	}
@@ -203,7 +207,7 @@ func (f *FacadeFactory) GetDatabaseFacade() (DatabaseFacade, error) {
 }
 
 // GetConfigurationFacade returns the configuration facade instance
-func (f *FacadeFactory) GetConfigurationFacade() (ConfigurationFacade, error) {
+func (f *FacadeFactory) GetConfigurationFacade() (*DefaultConfigurationFacade, error) {
 	if !f.initialized {
 		return nil, fmt.Errorf("factory not initialized")
 	}
@@ -358,16 +362,13 @@ func (f *FacadeFactory) initializeCLIFacade(ctx context.Context) error {
 		return fmt.Errorf("migration facade is required for CLI facade")
 	}
 
-	facade, err := NewDefaultCLIFacade(f.config.CLIConfig, f.migrationFacade)
-	if err != nil {
-		return err
-	}
+	facade := NewDefaultCLIFacade(f.migrationFacade, f.config.CLIConfig)
 
 	f.cliFacade = facade
 	return nil
 }
 
-func (f *FacadeFactory) registerDefaultCommands(commandFacade CommandFacade) error {
+func (f *FacadeFactory) registerDefaultCommands(commandFacade *DefaultCommandFacade) error {
 	// Register migration commands
 	commands := []CommandExecutor{
 		&UpCommand{},
@@ -496,11 +497,11 @@ func DefaultPerformanceConfig() *PerformanceConfig {
 
 // MigrationSystem represents a complete migration system
 type MigrationSystem struct {
-	MigrationFacade     MigrationFacade
-	CLIFacade          CLIFacade
-	CommandFacade      CommandFacade
-	DatabaseFacade     DatabaseFacade
-	ConfigurationFacade ConfigurationFacade
+	MigrationFacade     *DefaultMigrationFacade
+	CLIFacade          *DefaultCLIFacade
+	CommandFacade      *DefaultCommandFacade
+	DatabaseFacade     *DefaultDatabaseFacade
+	ConfigurationFacade *DefaultConfigurationFacade
 	Factory            *FacadeFactory
 	logger             logging.ComponentLogger
 }
@@ -511,14 +512,19 @@ func (s *MigrationSystem) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("CLI facade not available")
 	}
 
-	result, err := s.CLIFacade.ExecuteCommand(ctx, args)
+	command, err := s.CLIFacade.ParseCommand(args)
+	if err != nil {
+		return fmt.Errorf("failed to parse command: %w", err)
+	}
+
+	result, err := s.CLIFacade.ExecuteCommand(ctx, command)
 	if err != nil {
 		return err
 	}
 
 	// Handle result output
 	if result.Output != "" {
-		s.logger.Info(ctx, "Command execution output", "output", result.Output, "success", result.Success)
+		s.logger.Info("Command execution output", "output", result.Output, "success", result.Success)
 	}
 
 	if !result.Success {
@@ -556,8 +562,8 @@ type SystemStatus struct {
 	Components        map[string]bool `json:"components"`
 }
 
-// Placeholder for DefaultCommandFacade
-func NewDefaultCommandFacade() CommandFacade {
+// NewDefaultCommandFacade constructs a command facade with an empty registry.
+func NewDefaultCommandFacade() *DefaultCommandFacade {
 	return &DefaultCommandFacade{
 		commands: make(map[string]CommandExecutor),
 	}

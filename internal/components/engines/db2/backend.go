@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file backend.go
  * @description DB2-specific backend implementation for database operations

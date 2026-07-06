@@ -383,15 +383,12 @@ func (vs *ValidationStage) GetName() string {
 }
 
 func (vs *ValidationStage) Process(ctx context.Context, migrations []types.MigrationScript) ([]types.MigrationScript, error) {
-	result, err := vs.validator.Validate(ctx, migrations)
-	if err != nil {
-		return nil, err
+	// The validator operates on Migration values and returns only an error; a
+	// non-nil error means the batch is invalid and processing must not proceed.
+	if err := vs.validator.ValidateMigrations(scriptsToMigrationValues(migrations)); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
 	}
-	
-	if !result.Valid {
-		return nil, fmt.Errorf("validation failed with %d errors", result.ErrorCount)
-	}
-	
+
 	return migrations, nil
 }
 
@@ -418,12 +415,19 @@ func (drs *DependencyResolutionStage) GetName() string {
 }
 
 func (drs *DependencyResolutionStage) Process(ctx context.Context, migrations []types.MigrationScript) ([]types.MigrationScript, error) {
-	plan, err := drs.resolver.ResolveDependencies(ctx, migrations)
+	// The resolver operates on *Migration and returns an ordered *Migration slice.
+	ordered, err := drs.resolver.ResolveDependencies(ctx, scriptsToMigrationPointers(migrations))
 	if err != nil {
 		return nil, err
 	}
-	
-	return plan.Migrations, nil
+
+	// Convert the ordered domain migrations back into the script contract type.
+	orderedScripts := make([]types.MigrationScript, 0, len(ordered))
+	for _, migration := range ordered {
+		orderedScripts = append(orderedScripts, migrationToScript(migration))
+	}
+
+	return orderedScripts, nil
 }
 
 func (drs *DependencyResolutionStage) CanParallel() bool {

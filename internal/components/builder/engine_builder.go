@@ -122,7 +122,7 @@ func (b *ConcreteMigrationEngineBuilder) WithStateBasedMigrator(migrator interfa
 }
 
 // Build constructs the migration engine with all configured components
-func (b *ConcreteMigrationEngineBuilder) Build() (*engine.MigrationEngine, error) {
+func (b *ConcreteMigrationEngineBuilder) Build() (types.MigrationEngine, error) {
 	// Validate required components
 	if err := b.validate(); err != nil {
 		return nil, fmt.Errorf("builder validation failed: %w", err)
@@ -163,7 +163,7 @@ func (b *ConcreteMigrationEngineBuilder) Build() (*engine.MigrationEngine, error
 
 // validate ensures all required components are provided
 func (b *ConcreteMigrationEngineBuilder) validate() error {
-	if b.config.DatabaseConfig.Driver == "" {
+	if b.config.Database.Driver == "" {
 		return fmt.Errorf("database driver is required")
 	}
 
@@ -320,16 +320,16 @@ func (bc *BuilderChain) AddBuilder(builder types.EngineBuilder) *BuilderChain {
 }
 
 // BuildAll builds all engines in the chain
-func (bc *BuilderChain) BuildAll() ([]*engine.MigrationEngine, error) {
-	engines := make([]*engine.MigrationEngine, 0, len(bc.builders))
-	
+func (bc *BuilderChain) BuildAll() ([]types.MigrationEngine, error) {
+	engines := make([]types.MigrationEngine, 0, len(bc.builders))
+
 	for i, builder := range bc.builders {
-		engine, err := builder.WithConfig(bc.config).Build()
+		builtEngine, err := builder.WithConfig(bc.config).Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build engine at index %d: %w", i, err)
 		}
-		engines = append(engines, engine)
+		engines = append(engines, builtEngine)
 	}
-	
+
 	return engines, nil
 }

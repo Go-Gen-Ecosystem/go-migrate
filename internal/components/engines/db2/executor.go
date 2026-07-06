@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file executor.go
  * @description DB2-specific migration executor implementation

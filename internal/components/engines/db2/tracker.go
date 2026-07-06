@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file tracker.go
  * @description DB2-specific migration tracker implementation

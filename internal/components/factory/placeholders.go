@@ -12,7 +12,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
@@ -72,7 +71,7 @@ func (pb *PlaceholderEngineBuilder) WithResolver(resolver types.DependencyResolv
 }
 
 // Build creates the migration engine (placeholder implementation)
-func (pb *PlaceholderEngineBuilder) Build() (*engine.MigrationEngine, error) {
+func (pb *PlaceholderEngineBuilder) Build() (types.MigrationEngine, error) {
 	return nil, fmt.Errorf("placeholder builder for %s: actual implementation not yet available", pb.dbType)
 }
 
@@ -172,8 +171,12 @@ func (pme *PlaceholderMigrationEngine) DryRun(ctx context.Context, migrations []
 // Validate validates migrations (placeholder implementation)
 func (pme *PlaceholderMigrationEngine) Validate(ctx context.Context, migrations []types.MigrationScript) (types.ValidationResult, error) {
 	return types.ValidationResult{
-		Valid:  false,
-		Errors: []string{fmt.Sprintf("placeholder engine for %s: validation not yet implemented", pme.engineType)},
+		Valid:      false,
+		ErrorCount: 1,
+		ValidationErrors: []types.ValidationError{
+			*types.NewValidationError("engine", pme.engineType,
+				fmt.Sprintf("placeholder engine for %s: validation not yet implemented", pme.engineType), nil),
+		},
 	}, nil
 }
 

@@ -1,3 +1,6 @@
+//go:build drifted_backend
+// +build drifted_backend
+
 /**
  * @file builder.go
  * @description DB2-specific engine builder implementation with optimized components for IBM DB2 database

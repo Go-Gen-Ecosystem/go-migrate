@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
@@ -37,23 +36,23 @@ func NewMigrationEngineFactory() types.MigrationEngineFactory {
 }
 
 // CreateEngine creates a migration engine for the specified database type
-func (f *DefaultMigrationEngineFactory) CreateEngine(dbType string, config types.Config) (*engine.MigrationEngine, error) {
+func (f *DefaultMigrationEngineFactory) CreateEngine(dbType string, config types.Config) (types.MigrationEngineInterface, error) {
 	f.mutex.RLock()
 	builder, exists := f.builders[strings.ToLower(dbType)]
 	f.mutex.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("unsupported database type: %s. Supported types: %v", 
+		return nil, fmt.Errorf("unsupported database type: %s. Supported types: %v",
 			dbType, f.GetSupportedTypes())
 	}
 
 	// Use the builder to create the engine
-	engine, err := builder.WithConfig(config).Build()
+	builtEngine, err := builder.WithConfig(config).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create engine for %s: %w", dbType, err)
 	}
 
-	return engine, nil
+	return builtEngine, nil
 }
 
 // RegisterBuilder registers a new engine builder for a specific database type

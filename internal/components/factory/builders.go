@@ -11,7 +11,6 @@ package factory
 import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/mongodb"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/mysql"
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/oracle"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/postgres"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/sqlite"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/sqlserver"
@@ -40,9 +39,13 @@ func NewSQLServerEngineBuilder() types.EngineBuilder {
 	return sqlserver.NewSQLServerEngineBuilder()
 }
 
-// NewOracleEngineBuilder creates a new Oracle engine builder
+// NewOracleEngineBuilder creates a new Oracle engine builder.
+//
+// The Oracle backend implementation is currently gated behind the
+// "drifted_backend" build tag pending reconciliation with the core engine
+// component interfaces, so a placeholder builder is returned by default.
 func NewOracleEngineBuilder() types.EngineBuilder {
-	return oracle.NewOracleEngineBuilder()
+	return &PlaceholderEngineBuilder{dbType: "oracle"}
 }
 
 // NewDB2EngineBuilder creates a new DB2 engine builder

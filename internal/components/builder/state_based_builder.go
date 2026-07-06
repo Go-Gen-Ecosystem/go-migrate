@@ -1,7 +1,7 @@
 /**
  * @file state_based_builder.go
  * @description Builder API for state-based migrations following the Builder pattern
- * @author Claude Code
+ * @author Admilson B. F. Cossa
  * @date 2025-01-01
  * @path pkg/core/database/migrations/internal/components/builder/state_based_builder.go
  */
@@ -16,17 +16,25 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/state"
 )
 
-// StateBasedMigrationBuilder provides fluent API for building state-based migrations
+// StateBasedMigrationBuilder provides fluent API for building state-based migrations.
+//
+// The concrete *state.DefaultStateBasedMigrator returned by the state package
+// constructs and owns its own parser, differ, generator, validator and extractor.
+// The custom-component setters on this builder are retained for API compatibility
+// and to surface intent, but the migrator itself is built from (db, config); the
+// dialect is tracked here on the builder because state.StateBasedConfig does not
+// carry a dialect field.
 type StateBasedMigrationBuilder struct {
-	config     *state.StateBasedConfig
-	db         *sql.DB
-	parser     state.SchemaParser
-	differ     state.SchemaDiffer
-	generator  state.MigrationGenerator
-	validator  state.SchemaValidator
-	extractor  state.SchemaExtractor
-	migrator   state.StateBasedMigrator
-	errors     []error
+	config    *state.StateBasedConfig
+	db        *sql.DB
+	dialect   string
+	parser    state.SchemaParser
+	differ    state.SchemaDiffer
+	generator state.MigrationGenerator
+	validator state.SchemaValidator
+	extractor state.SchemaExtractor
+	migrator  *state.DefaultStateBasedMigrator
+	errors    []error
 }
 
 // NewStateBasedMigrationBuilder creates a new builder instance
@@ -34,15 +42,15 @@ func NewStateBasedMigrationBuilder() *StateBasedMigrationBuilder {
 	return &StateBasedMigrationBuilder{
 		config: &state.StateBasedConfig{
 			Enabled:            true,
-			SchemaFormat:       state.SchemaFormatYAML,
+			SchemaFormat:       state.FormatYAML,
 			AutoGenerate:       false,
 			AutoApply:          false,
 			AllowDestructive:   false,
 			RequireReview:      true,
-			Dialect:            "postgres",
 			MigrationOutputDir: "migrations",
 		},
-		errors: make([]error, 0),
+		dialect: "postgres",
+		errors:  make([]error, 0),
 	}
 }
 
@@ -66,7 +74,7 @@ func (b *StateBasedMigrationBuilder) WithSchemaFormat(format state.SchemaFormat)
 
 // WithDialect sets the database dialect (postgres, mysql, sqlite)
 func (b *StateBasedMigrationBuilder) WithDialect(dialect string) *StateBasedMigrationBuilder {
-	b.config.Dialect = dialect
+	b.dialect = dialect
 	return b
 }
 
@@ -130,8 +138,13 @@ func (b *StateBasedMigrationBuilder) WithExtractor(extractor state.SchemaExtract
 	return b
 }
 
-// Build constructs the state-based migrator with all configured components
-func (b *StateBasedMigrationBuilder) Build() (state.StateBasedMigrator, error) {
+// Build constructs the state-based migrator with all configured components.
+//
+// It returns the concrete *state.DefaultStateBasedMigrator. The state package's
+// migrator owns and wires its internal components from (db, config), so the
+// builder's custom-component setters are validated/initialized for API symmetry
+// but are not injected into the migrator.
+func (b *StateBasedMigrationBuilder) Build() (*state.DefaultStateBasedMigrator, error) {
 	// Validate configuration
 	if err := b.validate(); err != nil {
 		return nil, fmt.Errorf("builder validation failed: %w", err)
@@ -140,16 +153,9 @@ func (b *StateBasedMigrationBuilder) Build() (state.StateBasedMigrator, error) {
 	// Initialize default components if not provided
 	b.initializeDefaults()
 
-	// Create the migrator
-	b.migrator = state.NewDefaultStateBasedMigrator(
-		b.config,
-		b.db,
-		b.parser,
-		b.differ,
-		b.generator,
-		b.validator,
-		b.extractor,
-	)
+	// Create the migrator. The constructor internally builds its own parser,
+	// differ, generator, validator and extractor from the database and config.
+	b.migrator = state.NewDefaultStateBasedMigrator(b.db, b.config)
 
 	return b.migrator, nil
 }
@@ -164,7 +170,7 @@ func (b *StateBasedMigrationBuilder) validate() error {
 		return fmt.Errorf("schema path is required")
 	}
 
-	if b.config.Dialect == "" {
+	if b.dialect == "" {
 		return fmt.Errorf("database dialect is required")
 	}
 
@@ -178,26 +184,21 @@ func (b *StateBasedMigrationBuilder) initializeDefaults() {
 	}
 
 	if b.differ == nil {
-		b.differ = state.NewDefaultSchemaDiffer()
+		b.differ = state.NewDefaultSchemaDiffer(b.config)
 	}
 
 	if b.generator == nil {
-		b.generator = state.NewDefaultMigrationGenerator(b.config.Dialect)
+		b.generator = state.NewDefaultMigrationGenerator(b.dialect)
 	}
 
 	if b.validator == nil {
-		validatorConfig := &state.ValidationConfig{
-			CheckSyntax:        true,
-			CheckSemantics:     true,
-			CheckNaming:        true,
-			CheckBestPractices: true,
-			StrictMode:         false,
-		}
-		b.validator = state.NewDefaultSchemaValidator(validatorConfig)
+		// A nil naming-convention set makes the validator fall back to its
+		// built-in defaults, which is the desired behaviour here.
+		b.validator = state.NewDefaultSchemaValidator(nil)
 	}
 
 	if b.extractor == nil {
-		switch b.config.Dialect {
+		switch b.dialect {
 		case "postgres", "postgresql":
 			b.extractor = state.NewPostgreSQLSchemaExtractor(b.db)
 		default:
@@ -209,7 +210,7 @@ func (b *StateBasedMigrationBuilder) initializeDefaults() {
 // StateBasedMigrationChain provides chainable operations for state-based migrations
 type StateBasedMigrationChain struct {
 	builder  *StateBasedMigrationBuilder
-	migrator state.StateBasedMigrator
+	migrator *state.DefaultStateBasedMigrator
 	ctx      context.Context
 }
 
@@ -255,7 +256,7 @@ func (c *StateBasedMigrationChain) Validate() (*state.SchemaValidationResult, er
 		c.migrator = migrator
 	}
 
-	return c.migrator.ValidateSchema(c.ctx, c.builder.config.SchemaPath)
+	return c.migrator.ValidateSchemaFile(c.ctx, c.builder.config.SchemaPath)
 }
 
 // Preview generates a preview of schema changes
@@ -308,5 +309,5 @@ func (c *StateBasedMigrationChain) Export(outputPath string, format state.Schema
 		c.migrator = migrator
 	}
 
-	return c.migrator.ExportSchema(c.ctx, outputPath, format)
+	return c.migrator.Export(c.ctx, outputPath, format)
 }

@@ -11,6 +11,7 @@ package facade
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,8 +21,8 @@ import (
 // DefaultMigrationFacade implements MigrationFacade interface
 type DefaultMigrationFacade struct {
 	config             *MigrationFacadeConfig
-	databaseFacade     DatabaseFacade
-	configFacade       ConfigurationFacade
+	databaseFacade     *DefaultDatabaseFacade
+	configFacade       *DefaultConfigurationFacade
 	migrationStore     MigrationStore
 	lockManager        LockManager
 	validator          MigrationValidator
@@ -201,7 +202,10 @@ func (f *DefaultMigrationFacade) Down(ctx context.Context, options *MigrationOpt
 			continue
 		}
 
-		executedMigration, err := f.executeMigration(ctx, migration, "down", options)
+		executedMigration, err := f.executeMigration(ctx, &Migration{
+			Version: migration.Version,
+			Name:    migration.Name,
+		}, "down", options)
 		result.Migrations = append(result.Migrations, executedMigration)
 
 		if err != nil {
@@ -523,8 +527,350 @@ func (f *DefaultMigrationFacade) Create(ctx context.Context, name string, option
 	return result, nil
 }
 
-// Additional methods would continue here...
-// Rollback, Seed, List, Validate, History, Lock, Unlock, IsLocked, Version
+// Rollback reverts previously applied migrations.
+func (f *DefaultMigrationFacade) Rollback(ctx context.Context, options *RollbackOptions) (*MigrationResult, error) {
+	startTime := time.Now()
+
+	if options == nil {
+		options = &RollbackOptions{Steps: 1}
+	}
+
+	// Acquire lock to prevent concurrent rollbacks.
+	if err := f.lockManager.AcquireLock(ctx, "migration_rollback", f.config.LockTimeout); err != nil {
+		return nil, fmt.Errorf("failed to acquire migration lock: %w", err)
+	}
+	defer f.lockManager.ReleaseLock(ctx, "migration_rollback")
+
+	// Collect applied migrations, most recent first.
+	applied, err := f.getAppliedMigrations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
+	}
+
+	sort.Slice(applied, func(i, j int) bool {
+		return applied[i].Version > applied[j].Version
+	})
+
+	steps := options.Steps
+	if steps <= 0 {
+		steps = len(applied)
+	}
+
+	result := &MigrationResult{
+		Success:    true,
+		Migrations: make([]*ExecutedMigration, 0, steps),
+		Errors:     make([]error, 0),
+		Warnings:   make([]string, 0),
+		Metadata:   make(map[string]interface{}),
+	}
+
+	for i, migration := range applied {
+		if i >= steps {
+			break
+		}
+		if options.Target != "" && migration.Version == options.Target {
+			break
+		}
+
+		executed, execErr := f.executeMigration(ctx, &Migration{
+			Version: migration.Version,
+			Name:    migration.Name,
+		}, "down", &MigrationOptions{DryRun: options.DryRun, Force: options.Force})
+		if execErr != nil {
+			result.Success = false
+			result.FailedCount++
+			result.Errors = append(result.Errors, fmt.Errorf("rollback of %s failed: %w", migration.Version, execErr))
+			if !options.Force {
+				break
+			}
+			continue
+		}
+
+		result.Migrations = append(result.Migrations, executed)
+		result.ExecutedCount++
+	}
+
+	result.ExecutionTime = time.Since(startTime)
+	result.Summary = f.generateExecutionSummary(result)
+
+	return result, nil
+}
+
+// Seed loads seed data files into the database.
+func (f *DefaultMigrationFacade) Seed(ctx context.Context, options *SeedOptions) (*SeedResult, error) {
+	startTime := time.Now()
+
+	if options == nil {
+		options = &SeedOptions{}
+	}
+
+	result := &SeedResult{
+		Success:       true,
+		ExecutedFiles: make([]string, 0, len(options.Files)),
+		SkippedFiles:  make([]string, 0),
+		FailedFiles:   make([]string, 0),
+		Errors:        make([]error, 0),
+	}
+
+	for _, file := range options.Files {
+		seedPath := file
+		if options.Directory != "" {
+			seedPath = filepath.Join(options.Directory, file)
+		}
+
+		content, err := f.readMigrationFile(seedPath)
+		if err != nil {
+			result.Success = false
+			result.FailedFiles = append(result.FailedFiles, file)
+			result.Errors = append(result.Errors, fmt.Errorf("failed to read seed file %s: %w", file, err))
+			continue
+		}
+
+		if _, err := f.databaseFacade.ExecuteStatement(ctx, content); err != nil {
+			result.Success = false
+			result.FailedFiles = append(result.FailedFiles, file)
+			result.Errors = append(result.Errors, fmt.Errorf("failed to execute seed file %s: %w", file, err))
+			continue
+		}
+
+		result.ExecutedFiles = append(result.ExecutedFiles, file)
+	}
+
+	result.ExecutionTime = time.Since(startTime)
+	if result.Success {
+		result.Summary = fmt.Sprintf("Successfully executed %d seed files", len(result.ExecutedFiles))
+	} else {
+		result.Summary = fmt.Sprintf("Seeding completed with errors: %d executed, %d failed", len(result.ExecutedFiles), len(result.FailedFiles))
+	}
+
+	return result, nil
+}
+
+// List returns information about migrations matching the supplied filters.
+func (f *DefaultMigrationFacade) List(ctx context.Context, options *ListOptions) (*ListResult, error) {
+	allMigrations, err := f.getAllMigrations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get migrations: %w", err)
+	}
+
+	appliedMigrations, err := f.getAppliedMigrations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
+	}
+
+	appliedMap := make(map[string]*AppliedMigration, len(appliedMigrations))
+	for _, applied := range appliedMigrations {
+		appliedMap[applied.Version] = applied
+	}
+
+	infos := make([]*MigrationInfo, 0, len(allMigrations))
+	appliedCount := 0
+	pendingCount := 0
+	failedCount := 0
+
+	for _, migration := range allMigrations {
+		info := &MigrationInfo{
+			Version:      migration.Version,
+			Name:         migration.Name,
+			FilePath:     migration.FilePath,
+			Size:         migration.Size,
+			Checksum:     migration.Checksum,
+			Dependencies: migration.Dependencies,
+			Tags:         migration.Tags,
+			Author:       migration.Author,
+			Description:  migration.Description,
+		}
+
+		if applied, exists := appliedMap[migration.Version]; exists {
+			if applied.Success {
+				info.Status = "applied"
+				info.AppliedAt = &applied.AppliedAt
+				info.ExecutionTime = &applied.ExecutionTime
+				appliedCount++
+			} else {
+				info.Status = "failed"
+				info.ErrorMessage = applied.ErrorMessage
+				failedCount++
+			}
+		} else {
+			info.Status = "pending"
+			pendingCount++
+		}
+
+		infos = append(infos, info)
+	}
+
+	if options != nil && options.Limit > 0 {
+		start := options.Offset
+		if start > len(infos) {
+			start = len(infos)
+		}
+		end := start + options.Limit
+		if end > len(infos) {
+			end = len(infos)
+		}
+		infos = infos[start:end]
+	}
+
+	result := &ListResult{
+		Migrations:    infos,
+		TotalCount:    len(allMigrations),
+		FilteredCount: len(infos),
+		Summary: &ListSummary{
+			TotalMigrations:   len(allMigrations),
+			AppliedMigrations: appliedCount,
+			PendingMigrations: pendingCount,
+			FailedMigrations:  failedCount,
+		},
+	}
+
+	return result, nil
+}
+
+// Validate checks the integrity and correctness of the known migrations.
+func (f *DefaultMigrationFacade) Validate(ctx context.Context, options *ValidateOptions) (*ValidationResult, error) {
+	allMigrations, err := f.getAllMigrations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get migrations: %w", err)
+	}
+
+	result := &ValidationResult{
+		IsValid:  true,
+		Valid:    true,
+		Errors:   make([]ValidationError, 0),
+		Warnings: make([]ValidationWarning, 0),
+		Details:  make(map[string]interface{}),
+	}
+
+	for _, migration := range allMigrations {
+		result.CheckedCount++
+
+		if validationErr := f.validator.ValidateMigration(ctx, migration); validationErr != nil {
+			result.IsValid = false
+			result.Valid = false
+			result.InvalidCount++
+			result.Errors = append(result.Errors, ValidationError{
+				Migration: migration.Version,
+				Type:      "validation",
+				Message:   validationErr.Error(),
+				Severity:  "error",
+			})
+			continue
+		}
+
+		result.ValidCount++
+	}
+
+	if result.IsValid {
+		result.Summary = fmt.Sprintf("All %d migrations are valid", result.CheckedCount)
+	} else {
+		result.Summary = fmt.Sprintf("Validation failed: %d valid, %d invalid", result.ValidCount, result.InvalidCount)
+	}
+
+	return result, nil
+}
+
+// History returns the recorded execution history of migrations.
+func (f *DefaultMigrationFacade) History(ctx context.Context, options *HistoryOptions) (*HistoryResult, error) {
+	appliedMigrations, err := f.getAppliedMigrations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
+	}
+
+	sort.Slice(appliedMigrations, func(i, j int) bool {
+		return appliedMigrations[i].AppliedAt.After(appliedMigrations[j].AppliedAt)
+	})
+
+	entries := make([]*HistoryEntry, 0, len(appliedMigrations))
+	successfulOps := 0
+	failedOps := 0
+
+	for _, applied := range appliedMigrations {
+		entry := &HistoryEntry{
+			Version:       applied.Version,
+			Name:          applied.Name,
+			Operation:     "apply",
+			ExecutedAt:    applied.AppliedAt,
+			ExecutionTime: applied.ExecutionTime,
+			Success:       applied.Success,
+			ErrorMessage:  applied.ErrorMessage,
+			Checksum:      applied.Checksum,
+		}
+		if applied.Success {
+			successfulOps++
+		} else {
+			failedOps++
+		}
+		entries = append(entries, entry)
+	}
+
+	if options != nil && options.Limit > 0 {
+		start := options.Offset
+		if start > len(entries) {
+			start = len(entries)
+		}
+		end := start + options.Limit
+		if end > len(entries) {
+			end = len(entries)
+		}
+		entries = entries[start:end]
+	}
+
+	result := &HistoryResult{
+		Entries:       entries,
+		TotalCount:    len(appliedMigrations),
+		FilteredCount: len(entries),
+		Summary: &HistorySummary{
+			TotalOperations: len(appliedMigrations),
+			SuccessfulOps:   successfulOps,
+			FailedOps:       failedOps,
+		},
+	}
+
+	return result, nil
+}
+
+// Lock acquires the global migration lock.
+func (f *DefaultMigrationFacade) Lock(ctx context.Context) error {
+	if err := f.lockManager.AcquireLock(ctx, "migration_global", f.config.LockTimeout); err != nil {
+		return fmt.Errorf("failed to acquire migration lock: %w", err)
+	}
+	return nil
+}
+
+// Unlock releases the global migration lock.
+func (f *DefaultMigrationFacade) Unlock(ctx context.Context) error {
+	if err := f.lockManager.ReleaseLock(ctx, "migration_global"); err != nil {
+		return fmt.Errorf("failed to release migration lock: %w", err)
+	}
+	return nil
+}
+
+// IsLocked reports whether the global migration lock is currently held.
+func (f *DefaultMigrationFacade) IsLocked(ctx context.Context) (bool, error) {
+	locked, err := f.lockManager.IsLocked(ctx, "migration_global")
+	if err != nil {
+		return false, fmt.Errorf("failed to check migration lock: %w", err)
+	}
+	return locked, nil
+}
+
+// Version returns version information for the migration system and database.
+func (f *DefaultMigrationFacade) Version(ctx context.Context) (*VersionInfo, error) {
+	info := &VersionInfo{
+		SchemaVersion: f.config.Environment,
+	}
+
+	if databaseVersion, err := f.databaseFacade.GetDatabaseVersion(ctx); err == nil {
+		info.DatabaseVersion = databaseVersion
+	}
+
+	if schemaVersion, err := f.getSchemaVersion(ctx); err == nil {
+		info.SchemaVersion = schemaVersion
+	}
+
+	return info, nil
+}
 
 // Private helper methods
 

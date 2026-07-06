@@ -446,8 +446,9 @@ func (f *DefaultConfigurationFacade) ValidateConfiguration() (*ValidationResult,
 
 	result := &ValidationResult{
 		Valid:    true,
+		IsValid:  true,
 		Errors:   make([]ValidationError, 0),
-		Warnings: make([]string, 0),
+		Warnings: make([]ValidationWarning, 0),
 	}
 
 	// Validate using registered validators
@@ -455,6 +456,7 @@ func (f *DefaultConfigurationFacade) ValidateConfiguration() (*ValidationResult,
 		if value, err := f.GetValue(key); err == nil {
 			if validationErr := validator.Validate(key, value); validationErr != nil {
 				result.Valid = false
+				result.IsValid = false
 				result.Errors = append(result.Errors, ValidationError{
 					Key:     key,
 					Message: validationErr.Error(),
@@ -465,6 +467,7 @@ func (f *DefaultConfigurationFacade) ValidateConfiguration() (*ValidationResult,
 			rules := validator.GetValidationRules()
 			if rule, exists := rules[key]; exists && rule.Required {
 				result.Valid = false
+				result.IsValid = false
 				result.Errors = append(result.Errors, ValidationError{
 					Key:     key,
 					Message: "required configuration key is missing",
@@ -553,7 +556,8 @@ func (f *DefaultConfigurationFacade) mergeConfigData(target, source map[string]i
 			key = strings.ToLower(key)
 		}
 
-		if existingValue, exists := target[key]; exists {
+		existingValue, exists := target[key]
+		if exists {
 			// If both values are maps, merge recursively
 			if existingMap, ok := existingValue.(map[string]interface{}); ok {
 				if sourceMap, ok := value.(map[string]interface{}); ok {
@@ -700,16 +704,25 @@ func DefaultConfigurationConfig() *ConfigurationConfig {
 }
 
 // Supporting types
-
-type ValidationError struct {
-	Key     string `json:"key"`
-	Message string `json:"message"`
-}
+// ValidationError is declared canonically in interfaces.go (union of validation
+// fields incl. Key and Migration). See interfaces.go for the definition.
 
 type ConfigSourceInfo struct {
 	Type         string    `json:"type"`
 	Path         string    `json:"path"`
 	LastModified time.Time `json:"last_modified"`
+}
+
+// ConfigurationInfo summarizes the current state of the configuration facade.
+type ConfigurationInfo struct {
+	Loaded             bool               `json:"loaded"`
+	LastModified       time.Time          `json:"last_modified"`
+	CurrentEnvironment string             `json:"current_environment"`
+	Environments       []string           `json:"environments"`
+	Sources            []ConfigSourceInfo `json:"sources"`
+	KeyCount           int                `json:"key_count"`
+	ValidatorCount     int                `json:"validator_count"`
+	WatcherCount       int                `json:"watcher_count"`
 }
 
 // Placeholder implementations for config sources

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
@@ -151,7 +150,7 @@ func (gr *GlobalFactoryRegistry) IsPluginRegistered(dbType string) bool {
 }
 
 // CreateEngineWithPlugin creates an engine using a plugin builder if available
-func (gr *GlobalFactoryRegistry) CreateEngineWithPlugin(dbType string, config types.Config) (*engine.MigrationEngine, error) {
+func (gr *GlobalFactoryRegistry) CreateEngineWithPlugin(dbType string, config types.Config) (types.MigrationEngineInterface, error) {
 	gr.mutex.RLock()
 	builder, exists := gr.pluginBuilders[dbType]
 	gr.mutex.RUnlock()
@@ -162,12 +161,12 @@ func (gr *GlobalFactoryRegistry) CreateEngineWithPlugin(dbType string, config ty
 	}
 
 	// Use the plugin builder
-	engine, err := builder.WithConfig(config).Build()
+	builtEngine, err := builder.WithConfig(config).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create engine using plugin for %s: %w", dbType, err)
 	}
 
-	return engine, nil
+	return builtEngine, nil
 }
 
 // FactoryInfo provides information about registered factories
@@ -219,7 +218,7 @@ func RegisterGlobalPluginComponentsFactory(dialect string, factory types.Compone
 }
 
 // CreateGlobalEngine creates an engine using the global factory registry
-func CreateGlobalEngine(dbType string, config types.Config) (*engine.MigrationEngine, error) {
+func CreateGlobalEngine(dbType string, config types.Config) (types.MigrationEngineInterface, error) {
 	return GetGlobalFactoryRegistry().CreateEngineWithPlugin(dbType, config)
 }
 
