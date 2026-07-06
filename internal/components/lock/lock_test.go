@@ -266,6 +266,44 @@ func TestFileLock_EmptyDirUsesTempDir(t *testing.T) {
 
 // ---------------- DatabaseLockManager (GORM/sqlite) ----------------
 
+// TestDatabaseLock_ZeroTimeoutAcquiresUncontendedLock guards against a footgun
+// where a non-positive wait timeout made the deadline equal to "now", so
+// acquisition failed before the first attempt even when the lock was free — the
+// exact case a caller who forgets to configure LockTimeout hits.
+func TestDatabaseLock_ZeroTimeoutAcquiresUncontendedLock(t *testing.T) {
+	ctx := context.Background()
+	db := newGormDB(t)
+	mgr := NewDatabaseLockManager(db, "")
+
+	lock, err := mgr.AcquireLock(ctx, "migrate", 0)
+	if err != nil {
+		t.Fatalf("zero timeout must fall back to a sane wait, got: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("expected an uncontended lock to be acquired with a zero timeout")
+	}
+	if err := mgr.ReleaseLock(ctx, lock); err != nil {
+		t.Fatalf("ReleaseLock: %v", err)
+	}
+}
+
+// TestInMemoryLock_ZeroTimeoutDoesNotExpireImmediately guards the in-memory
+// manager's variant of the same footgun: it uses the timeout as the lock TTL,
+// so a zero timeout would create an already-expired lock.
+func TestInMemoryLock_ZeroTimeoutDoesNotExpireImmediately(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewInMemoryLockManager()
+
+	if _, err := mgr.AcquireLock(ctx, "migrate", 0); err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	// A second acquire must be rejected: the first lock must not have expired
+	// the instant it was created.
+	if _, err := mgr.AcquireLock(ctx, "migrate", 0); err == nil {
+		t.Fatal("second acquire should fail; the zero-timeout lock expired immediately")
+	}
+}
+
 func TestDatabaseLock_AcquireReleaseCycle(t *testing.T) {
 	ctx := context.Background()
 	db := newGormDB(t)

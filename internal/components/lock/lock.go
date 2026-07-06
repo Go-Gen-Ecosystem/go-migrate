@@ -18,6 +18,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// DefaultLockWaitTimeout is the fallback applied when a caller requests a lock
+// with a zero (i.e. unconfigured) timeout. Without it, a zero timeout makes the
+// wait deadline equal to "now" (database manager) or the lock TTL zero
+// (in-memory manager), so acquisition fails or the lock expires the instant it
+// is created. A negative timeout is treated as deliberate ("already past") and
+// left untouched.
+const DefaultLockWaitTimeout = 5 * time.Minute
+
 // Constants for table names
 const (
 	DefaultMigrationLockTableName = "migration_locks"
@@ -132,6 +140,12 @@ func (l *DatabaseLockManager) initializeTable() error {
 // AcquireLock acquires a migration lock
 // AcquireLock acquires a migration lock with transactional safety
 func (l *DatabaseLockManager) AcquireLock(ctx context.Context, lockID string, timeout time.Duration) (*MigrationLock, error) {
+	// A zero (unconfigured) timeout would make the wait deadline equal to "now",
+	// so acquisition would fail before the first attempt even for an uncontended
+	// lock. Fall back to a sane bounded wait.
+	if timeout == 0 {
+		timeout = DefaultLockWaitTimeout
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -461,6 +475,13 @@ func NewInMemoryLockManager() *InMemoryLockManager {
 
 // AcquireLock acquires a migration lock
 func (l *InMemoryLockManager) AcquireLock(ctx context.Context, lockID string, timeout time.Duration) (*MigrationLock, error) {
+	// This manager uses the timeout as the lock's TTL; a zero (unconfigured)
+	// value would create an already-expired lock. Fall back to a sane default.
+	// A negative TTL is left as-is so callers can deliberately create an
+	// expired lock.
+	if timeout == 0 {
+		timeout = DefaultLockWaitTimeout
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
