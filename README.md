@@ -1,476 +1,130 @@
-# GoMigrate - Advanced Database Migration Tool
+<!--
+@author Admilson B. F. Cossa
+-->
+# go-migrate
 
-[![Go Version](https://img.shields.io/badge/Go-1.21+-blue.svg)](https://golang.org)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](https://github.com/your-org/gomigrate)
+A lightweight, standalone SQL database migration engine and CLI for Go —
+a Go-native alternative to Flyway/Liquibase for SQLite, MySQL and PostgreSQL.
 
-GoMigrate is a powerful, standalone database migration tool for Go applications that provides enterprise-grade database management capabilities. It supports multiple migration formats, automatic rollback generation, dependency resolution, and advanced features for modern database operations.
+[![Go Version](https://img.shields.io/badge/Go-1.26+-blue.svg)](https://go.dev)
 
-## 🚀 Features
+`go-migrate` applies, rolls back, validates and reports on versioned SQL
+migrations. It ships as both a **library** (embed it in your app) and a **CLI**
+(`gomigrate`), driven by a single config file. It has no runtime dependency on
+any larger framework.
 
-### Core Features
-- **Multiple Migration Types**: Support for both sequential versioned migrations and declarative changeset migrations
-- **Multiple Formats**: SQL, XML, YAML, and JSON migration files
-- **Automatic Rollback**: Intelligent rollback script generation for all supported formats
-- **Dependency Resolution**: Advanced dependency tracking and resolution
-- **Database Support**: MySQL, PostgreSQL, SQLite, SQL Server
-- **Standalone**: Works independently without requiring the full gogen framework
+## Features
 
-### Advanced Features
-- **Dry Run Mode**: Preview changes before execution
-- **Backup & Restore**: Automatic database backups before migrations
-- **Validation**: Comprehensive migration validation and syntax checking
-- **Locking**: Distributed locking to prevent concurrent migrations
-- **Monitoring**: Built-in monitoring and logging capabilities
-- **Plugin System**: Extensible architecture with plugin support
-- **Configuration Management**: Flexible configuration with environment support
+- **Versioned SQL migrations** with `up` / `down` sections in a single file.
+- **up / down / status / validate** operations, plus dry-run.
+- **Migration tracking** in a history table, so re-runs are idempotent.
+- **Migration locking** to prevent concurrent runs from colliding.
+- **Dependency resolution** and validation before anything is applied.
+- **SQLite, MySQL, PostgreSQL** via GORM drivers.
+- **YAML or JSON** configuration (chosen by file extension).
+- Library **and** CLI from the same core; structured logging throughout.
 
-## 📦 Installation
-
-### Binary Installation
-
-Download the latest binary from the [releases page](https://github.com/your-org/gomigrate/releases):
+## Install
 
 ```bash
-# Linux/macOS
-curl -L https://github.com/your-org/gomigrate/releases/latest/download/gomigrate-linux-amd64.tar.gz | tar xz
-sudo mv gomigrate /usr/local/bin/
+# CLI
+go install github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@latest
 
-# Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/your-org/gomigrate/releases/latest/download/gomigrate-windows-amd64.zip" -OutFile "gomigrate.zip"
-Expand-Archive gomigrate.zip
-Move-Item gomigrate\gomigrate.exe C:\Windows\System32\
+# Library
+go get github.com/go-gen-ecosystem/go-migrate
 ```
 
-### Build from Source
+## Quick start (CLI)
 
 ```bash
-git clone https://github.com/your-org/gomigrate.git
-cd gomigrate
-make build
-sudo cp build/gomigrate /usr/local/bin/
-```
-
-### Go Install
-
-```bash
-go install github.com/your-org/gomigrate/cmd@latest
-```
-
-## 🏁 Quick Start
-
-### 1. Initialize a New Project
-
-```bash
-# Initialize with SQLite (default)
+# 1. Scaffold a config and a migrations/ directory
 gomigrate init
 
-# Initialize with MySQL
-gomigrate init --driver mysql --database myapp --username user --password pass
-
-# Initialize with PostgreSQL
-gomigrate init --driver postgres --database myapp --host localhost --port 5432
+# 2. Write a migration: migrations/001_create_users.sql
 ```
-
-### 2. Create Your First Migration
-
-```bash
-# Create a versioned SQL migration
-gomigrate create --type versioned --format sql --name "create_users_table"
-
-# Create a changeset XML migration
-gomigrate create --type changeset --format xml --name "add_user_indexes" --author "developer"
-```
-
-### 3. Run Migrations
-
-```bash
-# Run all pending migrations
-gomigrate up
-
-# Run migrations with dry-run
-gomigrate up --dry-run
-
-# Migrate to specific version
-gomigrate up V2.1.0
-```
-
-### 4. Check Status
-
-```bash
-# Show migration status
-gomigrate status
-
-# Show detailed information
-gomigrate info
-```
-
-## 📝 Migration Types
-
-### Versioned Migrations
-
-Versioned migrations follow a sequential numbering scheme and are ideal for schema changes:
 
 ```sql
--- V1.0.0__create_users_table.sql
-CREATE TABLE users (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    username VARCHAR(255) NOT NULL UNIQUE,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- +migrate Up
+CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL);
+
+-- +migrate Down
+DROP TABLE users;
 ```
 
-### Changeset Migrations
-
-Changeset migrations provide more granular control and are ideal for complex deployments:
-
-#### XML Format
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<databaseChangeLog xmlns="http://www.gomigrate.org/xml/ns/dbchangelog">
-    <changeSet id="1" author="developer">
-        <createTable tableName="posts">
-            <column name="id" type="BIGINT" autoIncrement="true">
-                <constraints primaryKey="true" nullable="false"/>
-            </column>
-            <column name="title" type="VARCHAR(255)">
-                <constraints nullable="false"/>
-            </column>
-        </createTable>
-        <rollback>
-            <dropTable tableName="posts"/>
-        </rollback>
-    </changeSet>
-</databaseChangeLog>
+```bash
+gomigrate up                    # apply all pending migrations
+gomigrate status                # show applied / pending / failed counts
+gomigrate down --steps 1        # roll back the last migration
+gomigrate up --dry-run          # resolve + validate without applying
+gomigrate validate              # validate migration files
+gomigrate --config db.yaml up   # use a specific config file
 ```
 
-#### YAML Format
-```yaml
-databaseChangeLog:
-  - changeSet:
-      id: "2"
-      author: "developer"
-      changes:
-        - createIndex:
-            tableName: users
-            indexName: idx_users_email
-            columns:
-              - column:
-                  name: email
-```
+## Configuration
 
-#### JSON Format
-```json
-{
-  "databaseChangeLog": [
-    {
-      "changeSet": {
-        "id": "3",
-        "author": "developer",
-        "changes": [
-          {
-            "addColumn": {
-              "tableName": "users",
-              "columns": [
-                {
-                  "column": {
-                    "name": "last_login",
-                    "type": "TIMESTAMP"
-                  }
-                }
-              ]
-            }
-          }
-        ]
-      }
-    }
-  ]
-}
-```
-
-## ⚙️ Configuration
-
-GoMigrate uses a YAML configuration file (`.gomigrate.yaml`):
+`gomigrate` reads `.gomigrate.yaml` by default (override with `--config`).
+`.yaml`/`.yml` files are parsed as YAML; anything else as JSON.
 
 ```yaml
 database:
-  driver: mysql
-  host: localhost
-  port: 3306
-  database: myapp
-  username: user
-  password: pass
-  ssl_mode: disable
-  
+  driver: sqlite            # sqlite | mysql | postgres
+  dsn: app.db               # driver DSN (file path, or a MySQL/Postgres DSN)
 migration:
   migrations_path: migrations
-  table_name: schema_migrations
-  lock_table: schema_migrations_lock
-  enable_locking: true
-  timeout: 300
-  
-features:
-  auto_rollback: true
-  backup_enabled: true
-  validation_enabled: true
-  dependency_resolution: true
-  
-logging:
-  level: info
-  format: text
-  output: stdout
-  
-environments:
-  development:
-    database:
-      database: myapp_dev
-  production:
-    database:
-      database: myapp_prod
-      ssl_mode: require
+  table_name: migration_history
+  lock_table_name: migration_locks
+  lock_timeout: 30s
+  stop_on_error: true
+  max_rollback_depth: 10
 ```
 
-## 🔧 Commands
-
-### Core Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `init` | Initialize new project | `gomigrate init --driver mysql` |
-| `create` | Create new migration | `gomigrate create --name "add_users"` |
-| `up` | Run migrations | `gomigrate up` |
-| `down` | Rollback migrations | `gomigrate down V1.0.0` |
-| `status` | Show migration status | `gomigrate status` |
-| `validate` | Validate migrations | `gomigrate validate` |
-
-### Advanced Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `info` | Show detailed info | `gomigrate info V1.0.0` |
-| `reset` | Reset migration state | `gomigrate reset --force` |
-| `repair` | Repair migration state | `gomigrate repair` |
-| `baseline` | Baseline existing DB | `gomigrate baseline V1.0.0` |
-
-### Configuration Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `config show` | Show current config | `gomigrate config show` |
-| `config set` | Set config value | `gomigrate config set database.host localhost` |
-
-### Plugin Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `plugin list` | List available plugins | `gomigrate plugin list` |
-| `plugin install` | Install plugin | `gomigrate plugin install backup-plugin` |
-
-## 🔌 Plugins
-
-GoMigrate supports a plugin system for extending functionality:
-
-### Available Plugins
-
-- **backup-plugin**: Automatic database backups
-- **notification-plugin**: Slack/email notifications
-- **monitoring-plugin**: Metrics and monitoring
-- **audit-plugin**: Detailed audit logging
-
-### Creating Custom Plugins
+## Library usage
 
 ```go
-package main
+import migrations "github.com/go-gen-ecosystem/go-migrate"
 
-import (
-    "github.com/your-org/gomigrate/pkg/plugin"
-)
-
-type MyPlugin struct{}
-
-func (p *MyPlugin) Name() string {
-    return "my-plugin"
+tool, err := migrations.NewStandaloneMigrationToolFromPath("db.yaml")
+if err != nil {
+    return err
 }
+defer tool.Close()
 
-func (p *MyPlugin) Execute(ctx context.Context, event plugin.Event) error {
-    // Plugin logic here
-    return nil
+// "" applies all pending migrations; false = not a dry run.
+if err := tool.Migrate(ctx, "", false); err != nil {
+    return err
 }
-
-func main() {
-    plugin.Serve(&MyPlugin{})
-}
+status, err := tool.Status(ctx)
 ```
 
-## 🧪 Testing
+The lower-level `migrations.NewMigrationTool(config *Config)` is available when
+you want to build the config in code rather than load it from a file.
 
-### Running Tests
+## Migration files
+
+A migration is a single `.sql` file whose name sorts by version, e.g.
+`001_create_users.sql` or `20260101120000_add_index.sql`. Use `-- +migrate Up`
+and `-- +migrate Down` markers to separate the forward and rollback statements;
+the `Down` section powers `gomigrate down`.
+
+## Development
 
 ```bash
-# Run all tests
-make test
-
-# Run tests with coverage
-make test-coverage
-
-# Run benchmarks
-make benchmark
+go build ./...
+go test ./... -race          # unit + integration (SQLite in-memory / temp files)
+golangci-lint run            # zero issues expected
 ```
 
-### Integration Tests
+The public library builds standalone (`GOWORK=off go build ./...`). CI runs on
+Linux and Windows.
 
-```bash
-# Run integration tests with different databases
-make test-integration-mysql
-make test-integration-postgres
-make test-integration-sqlite
-```
+## Scope
 
-## 🚀 Deployment
+v1 ships a focused SQL migration core. Advanced subsystems — schema drift
+detection, declarative (state-based) migrations, XML/YAML/JSON changelog formats
+with auto-generated rollbacks, per-dialect engines, checksum auditing and a
+health subsystem — are built but parked under `_parked/` and slated for v1.1.
+See [`_parked/README.md`](_parked/README.md).
 
-### Docker
+## License
 
-```dockerfile
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-COPY gomigrate /usr/local/bin/
-ENTRYPOINT ["gomigrate"]
-```
-
-```bash
-# Build Docker image
-make docker-build
-
-# Run with Docker
-docker run --rm -v $(pwd):/workspace gomigrate:latest status
-```
-
-### CI/CD Integration
-
-#### GitHub Actions
-
-```yaml
-name: Database Migration
-on:
-  push:
-    branches: [main]
-
-jobs:
-  migrate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Run Migrations
-        run: |
-          curl -L https://github.com/your-org/gomigrate/releases/latest/download/gomigrate-linux-amd64.tar.gz | tar xz
-          ./gomigrate up --environment production
-```
-
-#### GitLab CI
-
-```yaml
-migrate:
-  stage: deploy
-  script:
-    - wget https://github.com/your-org/gomigrate/releases/latest/download/gomigrate-linux-amd64.tar.gz
-    - tar xz < gomigrate-linux-amd64.tar.gz
-    - ./gomigrate up --environment production
-```
-
-## 📊 Monitoring and Observability
-
-### Metrics
-
-GoMigrate exposes Prometheus metrics:
-
-- `gomigrate_migrations_total`: Total number of migrations
-- `gomigrate_migration_duration_seconds`: Migration execution time
-- `gomigrate_migration_errors_total`: Number of migration errors
-
-### Logging
-
-Structured logging with configurable levels and formats:
-
-```bash
-# JSON logging
-gomigrate up --log-format json --log-level debug
-
-# Text logging with timestamps
-gomigrate up --log-format text --log-level info
-```
-
-## 🔒 Security
-
-### Best Practices
-
-1. **Credential Management**: Use environment variables or secure vaults
-2. **Network Security**: Enable SSL/TLS for database connections
-3. **Access Control**: Implement proper database user permissions
-4. **Audit Logging**: Enable comprehensive audit trails
-
-### Security Features
-
-- Encrypted configuration files
-- Secure credential storage
-- SSL/TLS support for all databases
-- Role-based access control
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-### Development Setup
-
-```bash
-# Clone repository
-git clone https://github.com/your-org/gomigrate.git
-cd gomigrate
-
-# Setup development environment
-make dev-setup
-
-# Run tests
-make test
-
-# Build
-make build
-```
-
-### Code Standards
-
-- Follow Go best practices
-- Write comprehensive tests
-- Document all public APIs
-- Use conventional commits
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- **Documentation**: [https://gomigrate.dev](https://gomigrate.dev)
-- **Issues**: [GitHub Issues](https://github.com/your-org/gomigrate/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/gomigrate/discussions)
-- **Slack**: [#gomigrate](https://slack.gomigrate.dev)
-
-## 🗺️ Roadmap
-
-- [ ] GraphQL schema migrations
-- [ ] Multi-tenant support
-- [ ] Advanced rollback strategies
-- [ ] Cloud provider integrations
-- [ ] Web UI for migration management
-- [ ] Advanced dependency resolution
-- [ ] Performance optimizations
-
-## 🙏 Acknowledgments
-
-- Inspired by modern database migration tools and best practices
-- Built with [Cobra](https://github.com/spf13/cobra) and [GORM](https://gorm.io/)
-- Thanks to all contributors and the Go community
-
----
-
-**GoMigrate** - Making database migrations simple, powerful, and reliable.
+See [LICENSE](LICENSE).
