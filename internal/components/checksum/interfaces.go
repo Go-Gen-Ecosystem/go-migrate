@@ -219,20 +219,20 @@ type ChecksumEvent struct {
 // ChecksumEventHandler handles checksum events
 type ChecksumEventHandler interface {
 	HandleEvent(ctx context.Context, event *ChecksumEvent) error
-	Subscribe(eventType string, handler func(*ChecksumEvent) error) error
+	Subscribe(eventType string, handler func(*ChecksumEvent)) error
 	Unsubscribe(eventType string) error
 	GetEventHistory(recordID string) ([]*ChecksumEvent, error)
 }
 
 // ChecksumMetrics provides metrics for checksum operations
 type ChecksumMetrics interface {
-	RecordGeneration(algorithm ChecksumAlgorithm, duration time.Duration, size int64) error
-	RecordValidation(algorithm ChecksumAlgorithm, status ChecksumStatus, duration time.Duration) error
-	RecordStorageOperation(operation string, duration time.Duration, success bool) error
-	GetGenerationMetrics() (*GenerationMetrics, error)
-	GetValidationMetrics() (*ValidationMetrics, error)
-	GetStorageMetrics() (*StorageMetrics, error)
-	Reset() error
+	RecordGeneration(algorithm ChecksumAlgorithm, duration time.Duration, size int64)
+	RecordValidation(algorithm ChecksumAlgorithm, status ChecksumStatus, duration time.Duration)
+	RecordStorageOperation(operation string, duration time.Duration, success bool)
+	GetGenerationMetrics() *GenerationMetrics
+	GetValidationMetrics() *ValidationMetrics
+	GetStorageMetrics() *StorageMetrics
+	Reset()
 }
 
 // GenerationMetrics provides metrics for checksum generation
@@ -285,25 +285,31 @@ type AuditEntry struct {
 	Level       AuditLogLevel          `json:"level"`
 	IPAddress   string                 `json:"ip_address,omitempty"`
 	UserAgent   string                 `json:"user_agent,omitempty"`
+	Error       string                 `json:"error,omitempty"`
 }
 
 // AuditFilter represents filtering criteria for audit queries
 type AuditFilter struct {
-	Operation   *string    `json:"operation,omitempty"`
-	RecordID    *string    `json:"record_id,omitempty"`
-	UserID      *string    `json:"user_id,omitempty"`
-	StartTime   *time.Time `json:"start_time,omitempty"`
-	EndTime     *time.Time `json:"end_time,omitempty"`
-	Limit       int        `json:"limit,omitempty"`
-	Offset      int        `json:"offset,omitempty"`
+	Operation string    `json:"operation,omitempty"`
+	RecordID  string    `json:"record_id,omitempty"`
+	UserID    string    `json:"user_id,omitempty"`
+	StartTime time.Time `json:"start_time,omitempty"`
+	EndTime   time.Time `json:"end_time,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+	Offset    int       `json:"offset,omitempty"`
 }
 
 // AuditStatistics provides statistics about audit operations
 type AuditStatistics struct {
-	TotalEntries        int                `json:"total_entries"`
-	EntriesByOperation  map[string]int     `json:"entries_by_operation"`
-	EntriesByUser       map[string]int     `json:"entries_by_user"`
-	OldestEntry         *time.Time         `json:"oldest_entry,omitempty"`
-	NewestEntry         *time.Time         `json:"newest_entry,omitempty"`
-	AverageEntriesPerDay float64           `json:"average_entries_per_day"`
+	TotalEntries         int              `json:"total_entries"`
+	EntriesByOperation   map[string]int   `json:"entries_by_operation"`
+	EntriesByUser        map[string]int   `json:"entries_by_user"`
+	EntriesPerLevel      map[string]int64 `json:"entries_per_level"`
+	OldestEntry          *time.Time       `json:"oldest_entry,omitempty"`
+	NewestEntry          *time.Time       `json:"newest_entry,omitempty"`
+	AverageEntriesPerDay float64          `json:"average_entries_per_day"`
+	AverageEntrySize     float64          `json:"average_entry_size"`
+	BufferFlushCount     int64            `json:"buffer_flush_count"`
+	ErrorCount           int64            `json:"error_count"`
+	LastFlushTime        time.Time        `json:"last_flush_time"`
 }

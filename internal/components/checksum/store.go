@@ -367,7 +367,8 @@ func (s *DatabaseChecksumStore) Initialize(ctx context.Context) error {
 		)
 	`
 
-	return s.backend.Execute(ctx, createTableSQL)
+	_, err := s.backend.Execute(ctx, createTableSQL)
+	return err
 }
 
 // Store stores a checksum record in the database
@@ -404,9 +405,10 @@ func (s *DatabaseChecksumStore) Store(ctx context.Context, record *ChecksumRecor
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	return s.backend.Execute(ctx, insertSQL,
+	_, err = s.backend.Execute(ctx, insertSQL,
 		record.ID, record.Type, record.Algorithm, record.Value, record.Source,
 		string(metadataJSON), record.CreatedAt, record.UpdatedAt, record.Version, string(tagsJSON))
+	return err
 }
 
 // Retrieve retrieves a checksum record by ID from the database
@@ -484,9 +486,10 @@ func (s *DatabaseChecksumStore) Update(ctx context.Context, record *ChecksumReco
 		WHERE id = ?
 	`
 
-	return s.backend.Execute(ctx, updateSQL,
+	_, err = s.backend.Execute(ctx, updateSQL,
 		record.Type, record.Algorithm, record.Value, record.Source,
 		string(metadataJSON), record.UpdatedAt, record.Version, string(tagsJSON), record.ID)
+	return err
 }
 
 // Delete deletes a checksum record from the database
@@ -496,7 +499,8 @@ func (s *DatabaseChecksumStore) Delete(ctx context.Context, id string) error {
 	}
 
 	deleteSQL := `DELETE FROM ` + s.tableName + ` WHERE id = ?`
-	return s.backend.Execute(ctx, deleteSQL, id)
+	_, err := s.backend.Execute(ctx, deleteSQL, id)
+	return err
 }
 
 // List lists checksum records with filtering from the database
@@ -660,15 +664,18 @@ func (s *DatabaseChecksumStore) GetStatistics(ctx context.Context) (*ChecksumSta
 // Cleanup removes old records from the database
 func (s *DatabaseChecksumStore) Cleanup(ctx context.Context, olderThan time.Time) (int, error) {
 	deleteSQL := `DELETE FROM ` + s.tableName + ` WHERE created_at < ?`
-	
+
 	result, err := s.backend.Execute(ctx, deleteSQL, olderThan)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup records: %w", err)
 	}
 
-	// This is a simplified implementation
-	// In a real implementation, you would get the affected rows count from the result
-	return 0, nil
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to determine affected rows during cleanup: %w", err)
+	}
+
+	return int(affected), nil
 }
 
 // scanRecord scans a database row into a ChecksumRecord
@@ -709,6 +716,27 @@ func (s *DatabaseChecksumStore) scanRecord(scanner interface{}) (*ChecksumRecord
 	return record, nil
 }
 
+// StoreConfig configures the construction of a checksum store.
+type StoreConfig struct {
+	EnableCaching      bool                    `json:"enable_caching"`
+	DatabaseConnection *sql.DB                 `json:"-"`
+	Backend            backend.DatabaseBackend `json:"-"`
+	TableName          string                  `json:"table_name"`
+}
+
+// toChecksumConfig translates the store configuration into the runtime
+// ChecksumConfig consumed by the store implementations.
+func (c *StoreConfig) toChecksumConfig() *ChecksumConfig {
+	if c == nil {
+		return &ChecksumConfig{DefaultAlgorithm: AlgorithmSHA256}
+	}
+
+	return &ChecksumConfig{
+		DefaultAlgorithm: AlgorithmSHA256,
+		EnableCaching:    c.EnableCaching,
+	}
+}
+
 // StoreFactory creates different types of checksum stores
 type StoreFactory struct{}
 
@@ -718,34 +746,41 @@ func NewStoreFactory() *StoreFactory {
 }
 
 // CreateStore creates a checksum store based on the specified type
-func (f *StoreFactory) CreateStore(storeType string, config *ChecksumConfig, options map[string]interface{}) (ChecksumStore, error) {
+func (f *StoreFactory) CreateStore(storeType StoreType, config *StoreConfig) (ChecksumStore, error) {
+	if config == nil {
+		config = &StoreConfig{}
+	}
+
+	checksumConfig := config.toChecksumConfig()
+
 	switch storeType {
-	case "memory":
-		return NewMemoryChecksumStore(config), nil
-	case "database":
-		backend, ok := options["backend"].(backend.DatabaseBackend)
-		if !ok {
+	case StoreTypeMemory:
+		return NewMemoryChecksumStore(checksumConfig), nil
+	case StoreTypeDatabase:
+		if config.Backend == nil {
 			return nil, fmt.Errorf("database backend is required for database store")
 		}
-		return NewDatabaseChecksumStore(backend, config), nil
+		store := NewDatabaseChecksumStore(config.Backend, checksumConfig)
+		if config.TableName != "" {
+			store.tableName = config.TableName
+		}
+		return store, nil
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeType)
 	}
 }
 
 // GetSupportedStoreTypes returns supported store types
-func (f *StoreFactory) GetSupportedStoreTypes() []string {
-	return []string{"memory", "database"}
+func (f *StoreFactory) GetSupportedStoreTypes() []StoreType {
+	return []StoreType{StoreTypeMemory, StoreTypeDatabase}
 }
 
-// GetDefaultOptions returns default options for a store type
-func (f *StoreFactory) GetDefaultOptions(storeType string) map[string]interface{} {
+// GetDefaultConfig returns default configuration for a store type
+func (f *StoreFactory) GetDefaultConfig(storeType StoreType) *StoreConfig {
 	switch storeType {
-	case "database":
-		return map[string]interface{}{
-			"table_name": "checksum_records",
-		}
+	case StoreTypeDatabase:
+		return &StoreConfig{TableName: "checksum_records"}
 	default:
-		return map[string]interface{}{}
+		return &StoreConfig{}
 	}
 }

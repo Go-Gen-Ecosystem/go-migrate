@@ -10,6 +10,7 @@ package types
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -358,6 +359,7 @@ type ChangeSet struct {
 }
 
 type Changelog struct {
+	XMLName           xml.Name    `json:"-" yaml:"-" xml:"databaseChangeLog"`
 	Xmlns             string      `json:"xmlns,omitempty" yaml:"xmlns,omitempty" xml:"xmlns,attr,omitempty"`
 	XmlnsXsi          string      `json:"xmlnsXsi,omitempty" yaml:"xmlnsXsi,omitempty" xml:"xmlns:xsi,attr,omitempty"`
 	XsiLocation       string      `json:"xsiLocation,omitempty" yaml:"xsiLocation,omitempty" xml:"xsi:schemaLocation,attr,omitempty"`
@@ -598,6 +600,7 @@ type Change struct {
 	Type       string                 `json:"type"`
 	Attributes map[string]interface{} `json:"attributes"`
 	Content    string                 `json:"content,omitempty"`
+	SQL        string                 `json:"sql,omitempty" yaml:"sql,omitempty" xml:",chardata"`
 }
 
 // FileMigrationLoader represents a file-based migration loader
@@ -774,6 +777,7 @@ type MigrationStatus struct {
 	SchemaVersion     string            `json:"schema_version"`
 	IsLocked          bool              `json:"is_locked"`
 	LastMigration     *MigrationRecord  `json:"last_migration,omitempty"`
+	AppliedMigrations []MigrationRecord `json:"applied_migrations"`
 	PendingMigrations []MigrationRecord `json:"pending_migrations"`
 	FailedMigrations  []MigrationRecord `json:"failed_migrations"`
 }
@@ -798,6 +802,7 @@ type MigrationRecord struct {
 	Type          string    `json:"type"`
 	Script        string    `json:"script"`
 	Checksum      string    `json:"checksum"`
+	Author        string    `json:"author,omitempty"`
 	ExecutedAt    time.Time `json:"executed_at,omitempty"`
 	ExecutionTime int64     `json:"execution_time,omitempty"`
 	Success       bool      `json:"success"`

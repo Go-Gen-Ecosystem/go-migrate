@@ -243,15 +243,15 @@ func (g *DefaultChecksumGenerator) serializeMigration(migration *types.Migration
 	// Include migration metadata
 	parts = append(parts, fmt.Sprintf("id:%s", migration.ID))
 	parts = append(parts, fmt.Sprintf("version:%s", migration.Version))
-	parts = append(parts, fmt.Sprintf("name:%s", migration.Name))
+	parts = append(parts, fmt.Sprintf("name:%s", migration.FileName))
 	parts = append(parts, fmt.Sprintf("description:%s", migration.Description))
 
 	// Include SQL content
-	if migration.UpSQL != "" {
-		parts = append(parts, fmt.Sprintf("up_sql:%s", migration.UpSQL))
+	if migration.Script != "" {
+		parts = append(parts, fmt.Sprintf("up_sql:%s", migration.Script))
 	}
-	if migration.DownSQL != "" {
-		parts = append(parts, fmt.Sprintf("down_sql:%s", migration.DownSQL))
+	if migration.RollbackSQL != "" {
+		parts = append(parts, fmt.Sprintf("down_sql:%s", migration.RollbackSQL))
 	}
 
 	// Include dependencies
@@ -424,6 +424,13 @@ func (g *ParallelChecksumGenerator) GenerateMultiple(data []byte, algorithms []C
 	return results, nil
 }
 
+// GeneratorConfig configures the construction of a checksum generator.
+type GeneratorConfig struct {
+	DefaultAlgorithm ChecksumAlgorithm `json:"default_algorithm"`
+	BufferSize       int               `json:"buffer_size"`
+	Workers          int               `json:"workers"`
+}
+
 // GeneratorFactory creates different types of checksum generators
 type GeneratorFactory struct{}
 
@@ -433,20 +440,24 @@ func NewGeneratorFactory() *GeneratorFactory {
 }
 
 // CreateGenerator creates a checksum generator based on the specified type
-func (f *GeneratorFactory) CreateGenerator(generatorType string, config map[string]interface{}) (ChecksumGenerator, error) {
+func (f *GeneratorFactory) CreateGenerator(generatorType GeneratorType, config *GeneratorConfig) (ChecksumGenerator, error) {
+	if config == nil {
+		config = &GeneratorConfig{}
+	}
+
 	switch generatorType {
-	case "default":
+	case GeneratorTypeDefault:
 		return NewDefaultChecksumGenerator(), nil
-	case "fast":
-		bufferSize := 64 * 1024 // Default buffer size
-		if size, ok := config["buffer_size"].(int); ok {
-			bufferSize = size
+	case GeneratorTypeFast:
+		bufferSize := config.BufferSize
+		if bufferSize <= 0 {
+			bufferSize = 64 * 1024 // Default buffer size
 		}
 		return NewFastChecksumGenerator(bufferSize), nil
-	case "parallel":
-		maxWorkers := 4 // Default workers
-		if workers, ok := config["max_workers"].(int); ok {
-			maxWorkers = workers
+	case GeneratorTypeParallel:
+		maxWorkers := config.Workers
+		if maxWorkers <= 0 {
+			maxWorkers = 4 // Default workers
 		}
 		return NewParallelChecksumGenerator(maxWorkers), nil
 	default:
@@ -455,22 +466,18 @@ func (f *GeneratorFactory) CreateGenerator(generatorType string, config map[stri
 }
 
 // GetSupportedGeneratorTypes returns supported generator types
-func (f *GeneratorFactory) GetSupportedGeneratorTypes() []string {
-	return []string{"default", "fast", "parallel"}
+func (f *GeneratorFactory) GetSupportedGeneratorTypes() []GeneratorType {
+	return []GeneratorType{GeneratorTypeDefault, GeneratorTypeFast, GeneratorTypeParallel}
 }
 
 // GetDefaultConfig returns default configuration for a generator type
-func (f *GeneratorFactory) GetDefaultConfig(generatorType string) map[string]interface{} {
+func (f *GeneratorFactory) GetDefaultConfig(generatorType GeneratorType) *GeneratorConfig {
 	switch generatorType {
-	case "fast":
-		return map[string]interface{}{
-			"buffer_size": 64 * 1024,
-		}
-	case "parallel":
-		return map[string]interface{}{
-			"max_workers": 4,
-		}
+	case GeneratorTypeFast:
+		return &GeneratorConfig{BufferSize: 64 * 1024}
+	case GeneratorTypeParallel:
+		return &GeneratorConfig{Workers: 4}
 	default:
-		return map[string]interface{}{}
+		return &GeneratorConfig{}
 	}
 }

@@ -12,7 +12,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/backend"
 )
 
 // ChecksumComponentFactory creates and configures all checksum components
@@ -38,6 +41,7 @@ type FactoryConfig struct {
 	// Store settings
 	StoreType           StoreType
 	DatabaseConnection  *sql.DB
+	Backend             backend.DatabaseBackend
 	TableName           string
 	EnableStoreCache    bool
 
@@ -155,11 +159,12 @@ func (f *ChecksumComponentFactory) CreateStore() (ChecksumStore, error) {
 			EnableCaching: f.config.EnableStoreCache,
 		})
 	case StoreTypeDatabase:
-		if f.config.DatabaseConnection == nil {
-			return nil, fmt.Errorf("database connection is required for database store")
+		if f.config.Backend == nil {
+			return nil, fmt.Errorf("database backend is required for database store")
 		}
 		return storeFactory.CreateStore(StoreTypeDatabase, &StoreConfig{
 			DatabaseConnection: f.config.DatabaseConnection,
+			Backend:            f.config.Backend,
 			TableName:          f.config.TableName,
 			EnableCaching:      f.config.EnableStoreCache,
 		})
@@ -450,12 +455,20 @@ func (n *NoOpAuditor) GetAuditTrail(ctx context.Context, recordID string) ([]*Au
 	return []*AuditEntry{}, nil
 }
 
+func (n *NoOpAuditor) GetAuditLog(ctx context.Context, filter *AuditFilter) ([]*AuditEntry, error) {
+	return []*AuditEntry{}, nil
+}
+
 func (n *NoOpAuditor) GetAuditStatistics(ctx context.Context) (*AuditStatistics, error) {
 	return &AuditStatistics{}, nil
 }
 
 func (n *NoOpAuditor) CleanupOldEntries(ctx context.Context) error {
 	return nil
+}
+
+func (n *NoOpAuditor) ArchiveOldEntries(ctx context.Context, olderThan time.Time) (int, error) {
+	return 0, nil
 }
 
 // NoOpMetrics is a no-op implementation of ChecksumMetrics
@@ -482,6 +495,10 @@ func (n *NoOpEventHandler) Subscribe(eventType string, handler func(*ChecksumEve
 
 func (n *NoOpEventHandler) Unsubscribe(eventType string) error {
 	return nil
+}
+
+func (n *NoOpEventHandler) GetEventHistory(recordID string) ([]*ChecksumEvent, error) {
+	return []*ChecksumEvent{}, nil
 }
 
 // DefaultChecksumMetrics provides a basic implementation of ChecksumMetrics
@@ -532,31 +549,56 @@ func (m *DefaultChecksumMetrics) Reset() {
 // DefaultEventHandler provides a basic implementation of ChecksumEventHandler
 type DefaultEventHandler struct {
 	bufferSize int
+	mutex      sync.RWMutex
 	handlers   map[string][]func(*ChecksumEvent)
+	history    map[string][]*ChecksumEvent
 }
 
 func NewDefaultEventHandler(bufferSize int) *DefaultEventHandler {
 	return &DefaultEventHandler{
 		bufferSize: bufferSize,
 		handlers:   make(map[string][]func(*ChecksumEvent)),
+		history:    make(map[string][]*ChecksumEvent),
 	}
 }
 
 func (h *DefaultEventHandler) HandleEvent(ctx context.Context, event *ChecksumEvent) error {
-	if handlers, exists := h.handlers[event.Type]; exists {
-		for _, handler := range handlers {
-			go handler(event)
-		}
+	h.mutex.Lock()
+	handlers := append([]func(*ChecksumEvent){}, h.handlers[event.Type]...)
+	if event.RecordID != "" {
+		h.history[event.RecordID] = append(h.history[event.RecordID], event)
+	}
+	h.mutex.Unlock()
+
+	for _, handler := range handlers {
+		go handler(event)
 	}
 	return nil
 }
 
 func (h *DefaultEventHandler) Subscribe(eventType string, handler func(*ChecksumEvent)) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
 	h.handlers[eventType] = append(h.handlers[eventType], handler)
 	return nil
 }
 
 func (h *DefaultEventHandler) Unsubscribe(eventType string) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
 	delete(h.handlers, eventType)
 	return nil
+}
+
+// GetEventHistory returns the events recorded for the supplied record ID.
+func (h *DefaultEventHandler) GetEventHistory(recordID string) ([]*ChecksumEvent, error) {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
+	events := h.history[recordID]
+	result := make([]*ChecksumEvent, len(events))
+	copy(result, events)
+	return result, nil
 }

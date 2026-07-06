@@ -9,7 +9,6 @@
 package resolver
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -409,9 +408,9 @@ func (r *DefaultGraphResolver) FindParallelExecutionGroups(graph *AdvancedDepend
 func (r *DefaultGraphResolver) calculateNodeWeight(migration *types.Migration) int {
 	switch r.config.WeightCalculationMethod {
 	case "sql_complexity":
-		return r.calculateSQLComplexity(migration.SQL)
+		return r.calculateSQLComplexity(migration.Script)
 	case "sql_length":
-		return len(migration.SQL)
+		return len(migration.Script)
 	case "dependency_count":
 		return len(migration.Dependencies)
 	default:
@@ -448,13 +447,13 @@ func (r *DefaultGraphResolver) calculateSQLComplexity(sql string) int {
 
 func (r *DefaultGraphResolver) estimateMigrationTime(migration *types.Migration) int {
 	baseTime := r.config.DefaultMigrationTime
-	complexity := r.calculateSQLComplexity(migration.SQL)
+	complexity := r.calculateSQLComplexity(migration.Script)
 	return baseTime * complexity
 }
 
 func (r *DefaultGraphResolver) calculatePriority(migration *types.Migration) int {
 	// Higher priority for structural changes
-	sql := strings.ToUpper(migration.SQL)
+	sql := strings.ToUpper(migration.Script)
 	if strings.Contains(sql, "CREATE TABLE") {
 		return 10
 	}
@@ -471,7 +470,7 @@ func (r *DefaultGraphResolver) calculatePriority(migration *types.Migration) int
 }
 
 func (r *DefaultGraphResolver) canRunInParallel(migration *types.Migration) bool {
-	sql := strings.ToUpper(migration.SQL)
+	sql := strings.ToUpper(migration.Script)
 	// Avoid parallel execution for potentially conflicting operations
 	conflictingOps := []string{"ALTER TABLE", "DROP TABLE", "CREATE TRIGGER", "DROP TRIGGER"}
 	for _, op := range conflictingOps {
@@ -712,8 +711,8 @@ func (r *DefaultGraphResolver) hasConflict(nodeID1, nodeID2 string, graph *Advan
 	}
 
 	// Check for table conflicts (simplified)
-	sql1 := strings.ToUpper(node1.Migration.SQL)
-	sql2 := strings.ToUpper(node2.Migration.SQL)
+	sql1 := strings.ToUpper(node1.Migration.Script)
+	sql2 := strings.ToUpper(node2.Migration.Script)
 
 	// Extract table names (simplified pattern matching)
 	tables1 := r.extractTableNames(sql1)

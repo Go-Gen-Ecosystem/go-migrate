@@ -254,7 +254,7 @@ func (v *TimeConstraintValidator) GetType() ConstraintType {
 
 func (v *TimeConstraintValidator) Validate(ctx context.Context, constraint *Constraint, migration *types.Migration, config *ConstraintResolverConfig) (*ConstraintViolation, error) {
 	// Validate migration timing constraints
-	if migration.Timestamp.IsZero() {
+	if migration.CreatedAt.IsZero() {
 		return &ConstraintViolation{
 			Constraint: constraint,
 			Migration:  migration,
@@ -269,7 +269,7 @@ func (v *TimeConstraintValidator) Validate(ctx context.Context, constraint *Cons
 
 	// Check if migration is too old or too new
 	now := time.Now()
-	if migration.Timestamp.After(now.Add(24 * time.Hour)) {
+	if migration.CreatedAt.After(now.Add(24 * time.Hour)) {
 		return &ConstraintViolation{
 			Constraint: constraint,
 			Migration:  migration,
@@ -361,7 +361,7 @@ func (v *ConflictConstraintValidator) Validate(ctx context.Context, constraint *
 	conflictPatterns, ok := constraint.Parameters["conflict_patterns"].([]string)
 	if ok {
 		for _, pattern := range conflictPatterns {
-			if matched, _ := regexp.MatchString(pattern, migration.SQL); matched {
+			if matched, _ := regexp.MatchString(pattern, migration.Script); matched {
 				return &ConstraintViolation{
 					Constraint: constraint,
 					Migration:  migration,
@@ -390,11 +390,11 @@ func (v *ResourceConstraintValidator) GetType() ConstraintType {
 func (v *ResourceConstraintValidator) Validate(ctx context.Context, constraint *Constraint, migration *types.Migration, config *ConstraintResolverConfig) (*ConstraintViolation, error) {
 	// Validate resource usage constraints
 	maxSize, ok := constraint.Parameters["max_sql_size"].(int)
-	if ok && len(migration.SQL) > maxSize {
+	if ok && len(migration.Script) > maxSize {
 		return &ConstraintViolation{
 			Constraint: constraint,
 			Migration:  migration,
-			Message:    fmt.Sprintf("Migration SQL size (%d) exceeds maximum allowed (%d)", len(migration.SQL), maxSize),
+			Message:    fmt.Sprintf("Migration SQL size (%d) exceeds maximum allowed (%d)", len(migration.Script), maxSize),
 			Severity:   SeverityWarning,
 			Suggestions: []string{
 				"Break large migration into smaller parts",

@@ -92,10 +92,10 @@ type SchemaValidator interface {
 	ValidateConstraint(ctx context.Context, constraint *Constraint) (*SchemaValidationResult, error)
 
 	// CheckNamingConventions validates naming conventions
-	CheckNamingConventions(ctx context.Context, schema *DatabaseSchema) []string
+	CheckNamingConventions(ctx context.Context, schema *DatabaseSchema) []ValidationWarning
 
 	// CheckBestPractices validates database best practices
-	CheckBestPractices(ctx context.Context, schema *DatabaseSchema) []string
+	CheckBestPractices(ctx context.Context, schema *DatabaseSchema) []ValidationWarning
 }
 
 // StateBasedMigrator orchestrates state-based migration workflow

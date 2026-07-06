@@ -155,10 +155,33 @@ func (v *DefaultChecksumValidator) ValidateMigration(ctx context.Context, migrat
 		return nil, fmt.Errorf("failed to generate migration checksum: %w", err)
 	}
 
-	// Create mock data for validation
-	migrationData := v.serializeMigrationForValidation(migration)
-	
-	return v.Validate(ctx, record, migrationData)
+	// Compare the freshly generated checksum against the stored record.
+	result := &ChecksumValidationResult{
+		Record:         record,
+		ExpectedValue:  record.Value,
+		ActualValue:    migrationChecksum,
+		ValidationTime: time.Now(),
+	}
+
+	if migrationChecksum == record.Value {
+		result.Status = StatusValid
+		result.Message = "Migration checksum validation successful"
+	} else {
+		result.Status = StatusInvalid
+		result.Message = fmt.Sprintf("Migration checksum mismatch: expected %s, got %s", record.Value, migrationChecksum)
+		result.Suggestions = v.generateSuggestions(record, migrationChecksum)
+	}
+
+	// Record metrics and audit the validation outcome.
+	v.recordMetrics(record.Algorithm, result.Status, 0)
+	v.logAuditEntry(ctx, "validate_migration", record.ID, map[string]interface{}{
+		"algorithm":      record.Algorithm,
+		"status":         result.Status,
+		"expected_value": record.Value,
+		"actual_value":   migrationChecksum,
+	})
+
+	return result, nil
 }
 
 // ValidateFile validates a file's checksum
@@ -296,13 +319,6 @@ func (v *DefaultChecksumValidator) generateSuggestions(record *ChecksumRecord, a
 	}
 
 	return suggestions
-}
-
-// serializeMigrationForValidation serializes migration for validation
-func (v *DefaultChecksumValidator) serializeMigrationForValidation(migration *types.Migration) []byte {
-	// This should match the serialization logic in the generator
-	generator := v.generator.(*DefaultChecksumGenerator)
-	return generator.serializeMigration(migration)
 }
 
 // getCacheKey generates a cache key for validation results
@@ -446,6 +462,29 @@ func (v *ParallelChecksumValidator) ValidateBatch(ctx context.Context, records [
 	return validResults, nil
 }
 
+// ValidatorConfig configures the construction of a checksum validator.
+type ValidatorConfig struct {
+	EnableCaching bool          `json:"enable_caching"`
+	CacheSize     int           `json:"cache_size"`
+	CacheTTL      time.Duration `json:"cache_ttl"`
+	Workers       int           `json:"workers"`
+}
+
+// toChecksumConfig translates the validator configuration into the runtime
+// ChecksumConfig consumed by the validator implementations.
+func (c *ValidatorConfig) toChecksumConfig() *ChecksumConfig {
+	if c == nil {
+		return &ChecksumConfig{DefaultAlgorithm: AlgorithmSHA256}
+	}
+
+	return &ChecksumConfig{
+		DefaultAlgorithm: AlgorithmSHA256,
+		EnableCaching:    c.EnableCaching,
+		CacheSize:        c.CacheSize,
+		CacheTTL:         c.CacheTTL,
+	}
+}
+
 // ValidatorFactory creates different types of checksum validators
 type ValidatorFactory struct{}
 
@@ -454,35 +493,39 @@ func NewValidatorFactory() *ValidatorFactory {
 	return &ValidatorFactory{}
 }
 
-// CreateValidator creates a checksum validator based on the specified type
-func (f *ValidatorFactory) CreateValidator(validatorType string, generator ChecksumGenerator, store ChecksumStore, config *ChecksumConfig, options map[string]interface{}) (ChecksumValidator, error) {
+// CreateValidator creates a checksum validator based on the specified type.
+// The validator is provisioned with a default generator and an in-memory store
+// derived from the supplied configuration, producing a self-contained validator.
+func (f *ValidatorFactory) CreateValidator(validatorType ValidatorType, config *ValidatorConfig) (ChecksumValidator, error) {
+	checksumConfig := config.toChecksumConfig()
+	generator := NewDefaultChecksumGenerator()
+	store := NewMemoryChecksumStore(checksumConfig)
+
 	switch validatorType {
-	case "default":
-		return NewDefaultChecksumValidator(generator, store, config), nil
-	case "parallel":
+	case ValidatorTypeDefault:
+		return NewDefaultChecksumValidator(generator, store, checksumConfig), nil
+	case ValidatorTypeParallel:
 		maxWorkers := 4 // Default workers
-		if workers, ok := options["max_workers"].(int); ok {
-			maxWorkers = workers
+		if config != nil && config.Workers > 0 {
+			maxWorkers = config.Workers
 		}
-		return NewParallelChecksumValidator(generator, store, config, maxWorkers), nil
+		return NewParallelChecksumValidator(generator, store, checksumConfig, maxWorkers), nil
 	default:
 		return nil, fmt.Errorf("unknown validator type: %s", validatorType)
 	}
 }
 
 // GetSupportedValidatorTypes returns supported validator types
-func (f *ValidatorFactory) GetSupportedValidatorTypes() []string {
-	return []string{"default", "parallel"}
+func (f *ValidatorFactory) GetSupportedValidatorTypes() []ValidatorType {
+	return []ValidatorType{ValidatorTypeDefault, ValidatorTypeParallel}
 }
 
-// GetDefaultOptions returns default options for a validator type
-func (f *ValidatorFactory) GetDefaultOptions(validatorType string) map[string]interface{} {
+// GetDefaultConfig returns default configuration for a validator type
+func (f *ValidatorFactory) GetDefaultConfig(validatorType ValidatorType) *ValidatorConfig {
 	switch validatorType {
-	case "parallel":
-		return map[string]interface{}{
-			"max_workers": 4,
-		}
+	case ValidatorTypeParallel:
+		return &ValidatorConfig{Workers: 4}
 	default:
-		return map[string]interface{}{}
+		return &ValidatorConfig{}
 	}
 }

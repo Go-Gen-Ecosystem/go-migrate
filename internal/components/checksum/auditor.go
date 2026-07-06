@@ -178,6 +178,15 @@ func (a *DefaultChecksumAuditor) GetAuditTrail(ctx context.Context, recordID str
 	return a.store.List(ctx, filter)
 }
 
+// GetAuditLog retrieves audit entries matching the supplied filter.
+func (a *DefaultChecksumAuditor) GetAuditLog(ctx context.Context, filter *AuditFilter) ([]*AuditEntry, error) {
+	if filter == nil {
+		filter = &AuditFilter{}
+	}
+
+	return a.store.List(ctx, filter)
+}
+
 // GetAuditStatistics retrieves audit statistics
 func (a *DefaultChecksumAuditor) GetAuditStatistics(ctx context.Context) (*AuditStatistics, error) {
 	// Get store statistics
@@ -213,6 +222,25 @@ func (a *DefaultChecksumAuditor) GetAuditStatistics(ctx context.Context) (*Audit
 func (a *DefaultChecksumAuditor) CleanupOldEntries(ctx context.Context) error {
 	cutoff := time.Now().Add(-a.config.RetentionPeriod)
 	return a.store.Cleanup(ctx, cutoff)
+}
+
+// ArchiveOldEntries removes audit entries older than the supplied cutoff and
+// returns the number of entries that were archived. The matching entries are
+// first counted via the store's filtered listing and then purged through the
+// store's cleanup routine.
+func (a *DefaultChecksumAuditor) ArchiveOldEntries(ctx context.Context, olderThan time.Time) (int, error) {
+	entries, err := a.store.List(ctx, &AuditFilter{EndTime: olderThan})
+	if err != nil {
+		return 0, fmt.Errorf("failed to list entries for archival: %w", err)
+	}
+
+	count := len(entries)
+
+	if err := a.store.Cleanup(ctx, olderThan); err != nil {
+		return 0, fmt.Errorf("failed to archive entries older than %s: %w", olderThan, err)
+	}
+
+	return count, nil
 }
 
 // logEntry logs an audit entry
