@@ -1,0 +1,779 @@
+{
+  "_comment": [
+    "Example Changeset Migration: Tags and Tagging System",
+    "@file changeset_tags.json",
+    "@description Creates tags table and post_tags junction table for tagging system",
+    "@author Admilson B. F. Cossa",
+    "@date 2025-01-28",
+    "@path pkg/core/database/migrations/examples/migrations/changeset_tags.json"
+  ],
+  "databaseChangeLog": [
+    {
+      "changeSet": {
+        "id": "1",
+        "author": "admilson.cossa",
+        "comment": "Create tags table for content tagging",
+        "preConditions": [
+          {
+            "onFail": "MARK_RAN"
+          },
+          {
+            "not": {
+              "tableExists": {
+                "tableName": "tags"
+              }
+            }
+          }
+        ],
+        "changes": [
+          {
+            "createTable": {
+              "tableName": "tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "id",
+                    "type": "BIGINT",
+                    "autoIncrement": true,
+                    "constraints": {
+                      "primaryKey": true,
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "name",
+                    "type": "VARCHAR(100)",
+                    "constraints": {
+                      "nullable": false,
+                      "unique": true
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "slug",
+                    "type": "VARCHAR(100)",
+                    "constraints": {
+                      "nullable": false,
+                      "unique": true
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "description",
+                    "type": "TEXT",
+                    "constraints": {
+                      "nullable": true
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "color",
+                    "type": "VARCHAR(7)",
+                    "defaultValue": "#007bff",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "icon",
+                    "type": "VARCHAR(50)",
+                    "constraints": {
+                      "nullable": true
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "usage_count",
+                    "type": "BIGINT",
+                    "defaultValue": "0",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_featured",
+                    "type": "BOOLEAN",
+                    "defaultValueBoolean": false,
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_active",
+                    "type": "BOOLEAN",
+                    "defaultValueBoolean": true,
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "created_by",
+                    "type": "BIGINT",
+                    "constraints": {
+                      "nullable": true
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "created_at",
+                    "type": "TIMESTAMP",
+                    "defaultValueComputed": "CURRENT_TIMESTAMP",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "updated_at",
+                    "type": "TIMESTAMP",
+                    "defaultValueComputed": "CURRENT_TIMESTAMP",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "addForeignKeyConstraint": {
+              "baseTableName": "tags",
+              "baseColumnNames": "created_by",
+              "constraintName": "fk_tags_creator",
+              "referencedTableName": "users",
+              "referencedColumnNames": "id",
+              "onDelete": "SET NULL"
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "tags",
+              "indexName": "idx_tags_name",
+              "columns": [
+                {
+                  "column": {
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "tags",
+              "indexName": "idx_tags_slug",
+              "columns": [
+                {
+                  "column": {
+                    "name": "slug"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "tags",
+              "indexName": "idx_tags_usage_count",
+              "columns": [
+                {
+                  "column": {
+                    "name": "usage_count"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "tags",
+              "indexName": "idx_tags_featured",
+              "columns": [
+                {
+                  "column": {
+                    "name": "is_featured"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "tags",
+              "indexName": "idx_tags_active",
+              "columns": [
+                {
+                  "column": {
+                    "name": "is_active"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "rollback": [
+          {
+            "dropTable": {
+              "tableName": "tags"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "changeSet": {
+        "id": "2",
+        "author": "admilson.cossa",
+        "comment": "Create post_tags junction table for many-to-many relationship",
+        "preConditions": [
+          {
+            "onFail": "MARK_RAN"
+          },
+          {
+            "not": {
+              "tableExists": {
+                "tableName": "post_tags"
+              }
+            }
+          },
+          {
+            "tableExists": {
+              "tableName": "posts"
+            }
+          },
+          {
+            "tableExists": {
+              "tableName": "tags"
+            }
+          }
+        ],
+        "changes": [
+          {
+            "createTable": {
+              "tableName": "post_tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "id",
+                    "type": "BIGINT",
+                    "autoIncrement": true,
+                    "constraints": {
+                      "primaryKey": true,
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "post_id",
+                    "type": "BIGINT",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "tag_id",
+                    "type": "BIGINT",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "tagged_by",
+                    "type": "BIGINT",
+                    "constraints": {
+                      "nullable": true
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "relevance_score",
+                    "type": "DECIMAL(3,2)",
+                    "defaultValue": "1.00",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_auto_tagged",
+                    "type": "BOOLEAN",
+                    "defaultValueBoolean": false,
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                },
+                {
+                  "column": {
+                    "name": "created_at",
+                    "type": "TIMESTAMP",
+                    "defaultValueComputed": "CURRENT_TIMESTAMP",
+                    "constraints": {
+                      "nullable": false
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "addForeignKeyConstraint": {
+              "baseTableName": "post_tags",
+              "baseColumnNames": "post_id",
+              "constraintName": "fk_post_tags_post",
+              "referencedTableName": "posts",
+              "referencedColumnNames": "id",
+              "onDelete": "CASCADE"
+            }
+          },
+          {
+            "addForeignKeyConstraint": {
+              "baseTableName": "post_tags",
+              "baseColumnNames": "tag_id",
+              "constraintName": "fk_post_tags_tag",
+              "referencedTableName": "tags",
+              "referencedColumnNames": "id",
+              "onDelete": "CASCADE"
+            }
+          },
+          {
+            "addForeignKeyConstraint": {
+              "baseTableName": "post_tags",
+              "baseColumnNames": "tagged_by",
+              "constraintName": "fk_post_tags_user",
+              "referencedTableName": "users",
+              "referencedColumnNames": "id",
+              "onDelete": "SET NULL"
+            }
+          },
+          {
+            "addUniqueConstraint": {
+              "tableName": "post_tags",
+              "columnNames": "post_id, tag_id",
+              "constraintName": "uk_post_tags_post_tag"
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "post_tags",
+              "indexName": "idx_post_tags_post",
+              "columns": [
+                {
+                  "column": {
+                    "name": "post_id"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "post_tags",
+              "indexName": "idx_post_tags_tag",
+              "columns": [
+                {
+                  "column": {
+                    "name": "tag_id"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "post_tags",
+              "indexName": "idx_post_tags_relevance",
+              "columns": [
+                {
+                  "column": {
+                    "name": "relevance_score"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "createIndex": {
+              "tableName": "post_tags",
+              "indexName": "idx_post_tags_auto",
+              "columns": [
+                {
+                  "column": {
+                    "name": "is_auto_tagged"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "rollback": [
+          {
+            "dropTable": {
+              "tableName": "post_tags"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "changeSet": {
+        "id": "3",
+        "author": "admilson.cossa",
+        "comment": "Add check constraints for tags validation",
+        "changes": [
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags ADD CONSTRAINT chk_tags_usage_count CHECK (usage_count >= 0)"
+            }
+          },
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags ADD CONSTRAINT chk_tags_color_format CHECK (color REGEXP '^#[0-9A-Fa-f]{6}$')"
+            }
+          },
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags ADD CONSTRAINT chk_tags_name_length CHECK (LENGTH(name) >= 1 AND LENGTH(name) <= 100)"
+            }
+          },
+          {
+            "sql": {
+              "sql": "ALTER TABLE post_tags ADD CONSTRAINT chk_post_tags_relevance CHECK (relevance_score >= 0.00 AND relevance_score <= 1.00)"
+            }
+          }
+        ],
+        "rollback": [
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags DROP CONSTRAINT chk_tags_usage_count"
+            }
+          },
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags DROP CONSTRAINT chk_tags_color_format"
+            }
+          },
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags DROP CONSTRAINT chk_tags_name_length"
+            }
+          },
+          {
+            "sql": {
+              "sql": "ALTER TABLE post_tags DROP CONSTRAINT chk_post_tags_relevance"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "changeSet": {
+        "id": "4",
+        "author": "admilson.cossa",
+        "comment": "Create triggers for updating tag usage counts",
+        "dbms": "mysql",
+        "changes": [
+          {
+            "sql": {
+              "sql": "CREATE TRIGGER tr_post_tags_insert AFTER INSERT ON post_tags FOR EACH ROW BEGIN UPDATE tags SET usage_count = usage_count + 1 WHERE id = NEW.tag_id; END"
+            }
+          },
+          {
+            "sql": {
+              "sql": "CREATE TRIGGER tr_post_tags_delete AFTER DELETE ON post_tags FOR EACH ROW BEGIN UPDATE tags SET usage_count = usage_count - 1 WHERE id = OLD.tag_id; END"
+            }
+          }
+        ],
+        "rollback": [
+          {
+            "sql": {
+              "sql": "DROP TRIGGER IF EXISTS tr_post_tags_insert"
+            }
+          },
+          {
+            "sql": {
+              "sql": "DROP TRIGGER IF EXISTS tr_post_tags_delete"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "changeSet": {
+        "id": "5",
+        "author": "admilson.cossa",
+        "comment": "Insert default tags for common categories",
+        "changes": [
+          {
+            "insert": {
+              "tableName": "tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "name",
+                    "value": "Programming"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "slug",
+                    "value": "programming"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "description",
+                    "value": "Programming and software development"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "color",
+                    "value": "#007bff"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "icon",
+                    "value": "code"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_featured",
+                    "valueBoolean": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "insert": {
+              "tableName": "tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "name",
+                    "value": "Web Development"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "slug",
+                    "value": "web-development"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "description",
+                    "value": "Web development and frontend/backend technologies"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "color",
+                    "value": "#28a745"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "icon",
+                    "value": "globe"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_featured",
+                    "valueBoolean": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "insert": {
+              "tableName": "tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "name",
+                    "value": "Database"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "slug",
+                    "value": "database"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "description",
+                    "value": "Database design, optimization, and management"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "color",
+                    "value": "#dc3545"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "icon",
+                    "value": "database"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_featured",
+                    "valueBoolean": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "insert": {
+              "tableName": "tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "name",
+                    "value": "DevOps"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "slug",
+                    "value": "devops"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "description",
+                    "value": "DevOps, CI/CD, and infrastructure automation"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "color",
+                    "value": "#ffc107"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "icon",
+                    "value": "cogs"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_featured",
+                    "valueBoolean": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "insert": {
+              "tableName": "tags",
+              "columns": [
+                {
+                  "column": {
+                    "name": "name",
+                    "value": "Machine Learning"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "slug",
+                    "value": "machine-learning"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "description",
+                    "value": "Machine learning, AI, and data science"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "color",
+                    "value": "#6f42c1"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "icon",
+                    "value": "brain"
+                  }
+                },
+                {
+                  "column": {
+                    "name": "is_featured",
+                    "valueBoolean": true
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "rollback": [
+          {
+            "delete": {
+              "tableName": "tags",
+              "where": "slug IN ('programming', 'web-development', 'database', 'devops', 'machine-learning')"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "changeSet": {
+        "id": "6",
+        "author": "admilson.cossa",
+        "comment": "Create full-text search index for tags",
+        "dbms": "mysql",
+        "changes": [
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags ADD FULLTEXT(name, description)"
+            }
+          }
+        ],
+        "rollback": [
+          {
+            "sql": {
+              "sql": "ALTER TABLE tags DROP INDEX name"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

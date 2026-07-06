@@ -1,0 +1,188 @@
+# GoMigrate Configuration Example
+# @file config.yaml
+# @description Example configuration for the standalone migration tool
+# @author Admilson B. F. Cossa
+# @date 2025-01-28
+# @path pkg/core/database/migrations/examples/config.yaml
+
+# Database configuration
+database:
+  # Database driver (mysql, postgres, sqlite, sqlserver)
+  driver: mysql
+  
+  # Connection details
+  host: localhost
+  port: 3306
+  database: myapp
+  username: user
+  password: ${DB_PASSWORD} # Use environment variable
+  
+  # Connection options
+  ssl_mode: disable
+  charset: utf8mb4
+  timezone: UTC
+  max_open_connections: 25
+  max_idle_connections: 5
+  connection_max_lifetime: 300s
+
+# Migration settings
+migration:
+  # Path to migration files
+  migrations_path: migrations
+  
+  # Migration table names
+  table_name: schema_migrations
+  lock_table: schema_migrations_lock
+  changelog_table: schema_changelog
+  
+  # Migration behavior
+  enable_locking: true
+  timeout: 300
+  validate_on_migrate: true
+  clean_on_validation_error: false
+  baseline_on_migrate: false
+  
+  # Supported file extensions
+  file_extensions:
+    - sql
+    - xml
+    - yaml
+    - yml
+    - json
+
+# Feature flags
+features:
+  # Automatic rollback generation
+  auto_rollback: true
+  
+  # Database backup before migrations
+  backup_enabled: true
+  backup_path: backups
+  
+  # Migration validation
+  validation_enabled: true
+  strict_validation: false
+  
+  # Dependency resolution for changesets
+  dependency_resolution: true
+  
+  # Precondition checking
+  precondition_check: true
+  
+  # Changelog tracking
+  changelog_enabled: true
+
+# Logging configuration
+logging:
+  # Log level (debug, info, warn, error)
+  level: info
+  
+  # Log format (text, json)
+  format: text
+  
+  # Log output (stdout, stderr, file path)
+  output: stdout
+  
+  # File logging options (when output is a file path)
+  file_options:
+    max_size: 100MB
+    max_backups: 5
+    max_age: 30
+    compress: true
+
+# Plugin configuration
+plugins:
+  # Enable plugin system
+  enabled: true
+  
+  # Plugin directory
+  directory: plugins
+  
+  # Available plugins
+  available:
+    - name: backup-plugin
+      enabled: true
+      config:
+        retention_days: 30
+        compression: true
+    
+    - name: notification-plugin
+      enabled: false
+      config:
+        slack_webhook: ${SLACK_WEBHOOK}
+        email_smtp: smtp.example.com
+    
+    - name: monitoring-plugin
+      enabled: true
+      config:
+        metrics_port: 9090
+        health_check_port: 8080
+
+# Environment-specific configurations
+environments:
+  development:
+    database:
+      database: myapp_dev
+      host: localhost
+      ssl_mode: disable
+    logging:
+      level: debug
+    features:
+      backup_enabled: false
+      strict_validation: false
+  
+  staging:
+    database:
+      database: myapp_staging
+      host: staging-db.example.com
+      ssl_mode: require
+    logging:
+      level: info
+    features:
+      backup_enabled: true
+      strict_validation: true
+  
+  production:
+    database:
+      database: myapp_prod
+      host: prod-db.example.com
+      ssl_mode: require
+      max_open_connections: 50
+      max_idle_connections: 10
+    logging:
+      level: warn
+      format: json
+      output: /var/log/gomigrate.log
+    features:
+      backup_enabled: true
+      strict_validation: true
+      changelog_enabled: true
+
+# Advanced settings
+advanced:
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    initial_delay: 1s
+    max_delay: 30s
+    backoff_multiplier: 2.0
+  
+  # Performance tuning
+  performance:
+    batch_size: 1000
+    parallel_execution: false
+    memory_limit: 512MB
+  
+  # Security settings
+  security:
+    encrypt_config: false
+    require_ssl: false
+    certificate_path: ""
+    private_key_path: ""
+  
+  # Monitoring and observability
+  monitoring:
+    enable_metrics: true
+    metrics_endpoint: /metrics
+    health_endpoint: /health
+    profiling_enabled: false

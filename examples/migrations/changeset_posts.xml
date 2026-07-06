@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Example Changeset Migration: Posts and Categories
+@file changeset_posts.xml
+@description Creates posts and categories tables with relationships
+@author Admilson B. F. Cossa
+@date 2025-01-28
+@path pkg/core/database/migrations/examples/migrations/changeset_posts.xml
+-->
+
+<databaseChangeLog
+    xmlns="http://www.gomigrate.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.gomigrate.org/xml/ns/dbchangelog
+    http://www.gomigrate.org/xml/ns/dbchangelog/dbchangelog-1.0.xsd">
+
+    <!-- Create categories table -->
+    <changeSet id="1" author="admilson.cossa">
+        <comment>Create categories table for organizing posts</comment>
+        
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="categories"/>
+            </not>
+        </preConditions>
+        
+        <createTable tableName="categories">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="slug" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="parent_id" type="BIGINT">
+                <constraints nullable="true"/>
+            </column>
+            <column name="sort_order" type="INT" defaultValue="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        
+        <!-- Self-referencing foreign key for parent categories -->
+        <addForeignKeyConstraint
+            baseTableName="categories"
+            baseColumnNames="parent_id"
+            constraintName="fk_categories_parent"
+            referencedTableName="categories"
+            referencedColumnNames="id"
+            onDelete="SET NULL"/>
+        
+        <!-- Indexes for performance -->
+        <createIndex tableName="categories" indexName="idx_categories_slug">
+            <column name="slug"/>
+        </createIndex>
+        
+        <createIndex tableName="categories" indexName="idx_categories_parent">
+            <column name="parent_id"/>
+        </createIndex>
+        
+        <createIndex tableName="categories" indexName="idx_categories_active">
+            <column name="is_active"/>
+        </createIndex>
+        
+        <rollback>
+            <dropTable tableName="categories"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Create posts table -->
+    <changeSet id="2" author="admilson.cossa">
+        <comment>Create posts table for blog content</comment>
+        
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="posts"/>
+            </not>
+            <tableExists tableName="users"/>
+            <tableExists tableName="categories"/>
+        </preConditions>
+        
+        <createTable tableName="posts">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="category_id" type="BIGINT">
+                <constraints nullable="true"/>
+            </column>
+            <column name="title" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="slug" type="VARCHAR(500)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="excerpt" type="TEXT"/>
+            <column name="content" type="LONGTEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="featured_image" type="VARCHAR(500)"/>
+            <column name="status" type="VARCHAR(20)" defaultValue="draft">
+                <constraints nullable="false"/>
+            </column>
+            <column name="published_at" type="TIMESTAMP"/>
+            <column name="view_count" type="BIGINT" defaultValue="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="like_count" type="BIGINT" defaultValue="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="comment_count" type="BIGINT" defaultValue="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="meta_title" type="VARCHAR(255)"/>
+            <column name="meta_description" type="VARCHAR(500)"/>
+            <column name="meta_keywords" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="deleted_at" type="TIMESTAMP"/>
+        </createTable>
+        
+        <!-- Foreign key constraints -->
+        <addForeignKeyConstraint
+            baseTableName="posts"
+            baseColumnNames="user_id"
+            constraintName="fk_posts_user"
+            referencedTableName="users"
+            referencedColumnNames="id"
+            onDelete="CASCADE"/>
+            
+        <addForeignKeyConstraint
+            baseTableName="posts"
+            baseColumnNames="category_id"
+            constraintName="fk_posts_category"
+            referencedTableName="categories"
+            referencedColumnNames="id"
+            onDelete="SET NULL"/>
+        
+        <!-- Indexes for performance -->
+        <createIndex tableName="posts" indexName="idx_posts_user">
+            <column name="user_id"/>
+        </createIndex>
+        
+        <createIndex tableName="posts" indexName="idx_posts_category">
+            <column name="category_id"/>
+        </createIndex>
+        
+        <createIndex tableName="posts" indexName="idx_posts_slug">
+            <column name="slug"/>
+        </createIndex>
+        
+        <createIndex tableName="posts" indexName="idx_posts_status">
+            <column name="status"/>
+        </createIndex>
+        
+        <createIndex tableName="posts" indexName="idx_posts_published">
+            <column name="published_at"/>
+        </createIndex>
+        
+        <createIndex tableName="posts" indexName="idx_posts_created">
+            <column name="created_at"/>
+        </createIndex>
+        
+        <!-- Composite indexes -->
+        <createIndex tableName="posts" indexName="idx_posts_status_published">
+            <column name="status"/>
+            <column name="published_at"/>
+        </createIndex>
+        
+        <createIndex tableName="posts" indexName="idx_posts_user_status">
+            <column name="user_id"/>
+            <column name="status"/>
+        </createIndex>
+        
+        <rollback>
+            <dropTable tableName="posts"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Add check constraints -->
+    <changeSet id="3" author="admilson.cossa">
+        <comment>Add check constraints for data validation</comment>
+        
+        <!-- Post status constraint -->
+        <sql>
+            ALTER TABLE posts ADD CONSTRAINT chk_posts_status 
+            CHECK (status IN ('draft', 'published', 'archived', 'deleted'))
+        </sql>
+        
+        <!-- View count constraint -->
+        <sql>
+            ALTER TABLE posts ADD CONSTRAINT chk_posts_view_count 
+            CHECK (view_count >= 0)
+        </sql>
+        
+        <!-- Like count constraint -->
+        <sql>
+            ALTER TABLE posts ADD CONSTRAINT chk_posts_like_count 
+            CHECK (like_count >= 0)
+        </sql>
+        
+        <!-- Comment count constraint -->
+        <sql>
+            ALTER TABLE posts ADD CONSTRAINT chk_posts_comment_count 
+            CHECK (comment_count >= 0)
+        </sql>
+        
+        <rollback>
+            <sql>ALTER TABLE posts DROP CONSTRAINT chk_posts_status</sql>
+            <sql>ALTER TABLE posts DROP CONSTRAINT chk_posts_view_count</sql>
+            <sql>ALTER TABLE posts DROP CONSTRAINT chk_posts_like_count</sql>
+            <sql>ALTER TABLE posts DROP CONSTRAINT chk_posts_comment_count</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Create full-text search indexes -->
+    <changeSet id="4" author="admilson.cossa" dbms="mysql">
+        <comment>Create full-text search indexes for MySQL</comment>
+        
+        <sql>
+            ALTER TABLE posts ADD FULLTEXT(title, excerpt, content)
+        </sql>
+        
+        <sql>
+            ALTER TABLE categories ADD FULLTEXT(name, description)
+        </sql>
+        
+        <rollback>
+            <sql>ALTER TABLE posts DROP INDEX title</sql>
+            <sql>ALTER TABLE categories DROP INDEX name</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Insert default categories -->
+    <changeSet id="5" author="admilson.cossa">
+        <comment>Insert default categories</comment>
+        
+        <insert tableName="categories">
+            <column name="name" value="Technology"/>
+            <column name="slug" value="technology"/>
+            <column name="description" value="Technology related posts"/>
+            <column name="sort_order" value="1"/>
+        </insert>
+        
+        <insert tableName="categories">
+            <column name="name" value="Business"/>
+            <column name="slug" value="business"/>
+            <column name="description" value="Business and entrepreneurship"/>
+            <column name="sort_order" value="2"/>
+        </insert>
+        
+        <insert tableName="categories">
+            <column name="name" value="Lifestyle"/>
+            <column name="slug" value="lifestyle"/>
+            <column name="description" value="Lifestyle and personal development"/>
+            <column name="sort_order" value="3"/>
+        </insert>
+        
+        <rollback>
+            <delete tableName="categories">
+                <where>slug IN ('technology', 'business', 'lifestyle')</where>
+            </delete>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

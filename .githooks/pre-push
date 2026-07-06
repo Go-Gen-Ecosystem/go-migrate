@@ -1,0 +1,25 @@
+#!/bin/sh
+# Shared pre-push gate for all go-gen-ecosystem modules.
+# Install per repo: git config core.hooksPath .githooks
+#
+# @author Admilson B. F. Cossa
+set -e
+
+echo "pre-push: gofmt check"
+unformatted=$(gofmt -l . 2>/dev/null | grep -v vendor/ || true)
+if [ -n "$unformatted" ]; then
+  echo "pre-push: gofmt needed on:"
+  echo "$unformatted"
+  exit 1
+fi
+
+echo "pre-push: go vet"
+go vet ./...
+
+echo "pre-push: golangci-lint"
+golangci-lint run
+
+echo "pre-push: go test"
+go test ./... -count=1
+
+echo "pre-push: all gates passed"

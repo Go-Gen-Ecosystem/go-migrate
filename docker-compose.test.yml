@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: migrations-postgres-test
+    environment:
+      POSTGRES_DB: migrations_test
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+      - ./tests/integration/fixtures/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d migrations_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - migrations-test
+
+  mysql-test:
+    image: mysql:8.0
+    container_name: migrations-mysql-test
+    environment:
+      MYSQL_DATABASE: migrations_test
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: test_password
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_ALLOW_EMPTY_PASSWORD: "no"
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+      - ./tests/integration/fixtures/mysql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "test_user", "-ptest_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - migrations-test
+
+  # SQLite doesn't need a container as it's file-based
+  # We'll use a shared volume for SQLite test databases
+  sqlite-test:
+    image: alpine:latest
+    container_name: migrations-sqlite-test
+    volumes:
+      - sqlite_test_data:/data
+    command: ["tail", "-f", "/dev/null"]
+    networks:
+      - migrations-test
+
+volumes:
+  postgres_test_data:
+    driver: local
+  mysql_test_data:
+    driver: local
+  sqlite_test_data:
+    driver: local
+
+networks:
+  migrations-test:
+    driver: bridge
