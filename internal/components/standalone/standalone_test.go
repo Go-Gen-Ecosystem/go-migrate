@@ -90,7 +90,7 @@ func TestStandaloneTool_MigrateWithOptions_RunsPipelineEndToEnd(t *testing.T) {
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
 	require.NotNil(t, tool)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	// Before migration: the one migration on disk is discovered as pending.
 	preStatus, err := tool.Status(ctx)
@@ -120,7 +120,7 @@ func TestStandaloneTool_Migrate_InterfaceMethod(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	// The MigrationTool-interface Migrate delegates to MigrateWithOptions and
 	// runs the pipeline against the real database without error.
@@ -142,7 +142,7 @@ func TestStandaloneTool_DryRunDoesNotApply(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	require.NoError(t, tool.MigrateWithOptions(ctx, MigrateOptions{DryRun: true}))
 
@@ -163,7 +163,7 @@ func TestStandaloneTool_Validate(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	// Validate loads the real migration from disk and runs the composite
 	// validator against it; a well-formed migration validates cleanly.
@@ -181,7 +181,7 @@ func TestStandaloneTool_Rollback_NoAppliedIsNoOp(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	// With nothing applied, rolling back one step is a clean no-op.
 	require.NoError(t, tool.Rollback(ctx, 1))
@@ -197,7 +197,7 @@ func TestStandaloneTool_LoadAndSaveConfig(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	// Reload the same config through the tool's LoadConfig method.
 	require.NoError(t, tool.LoadConfig(configPath))
@@ -219,7 +219,7 @@ func TestStandaloneTool_Info(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	info, err := tool.Info(context.Background())
 	require.NoError(t, err)
@@ -238,7 +238,7 @@ func TestStandaloneTool_ConfigAccessors(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	cfg := tool.GetConfig()
 	require.NotNil(t, cfg)
@@ -275,7 +275,7 @@ func TestStandaloneTool_LoadsWithEnabledPlugin(t *testing.T) {
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
 	require.NotNil(t, tool)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 	require.Len(t, tool.GetPlugins(), 2)
 }
 
@@ -298,7 +298,7 @@ func TestStandaloneTool_AutoBackupPathRuns(t *testing.T) {
 
 	tool, err := NewStandaloneMigrationToolFromPath(configPath)
 	require.NoError(t, err)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 
 	// AutoBackup enabled + non-dry-run exercises the createBackup path.
 	require.NoError(t, tool.MigrateWithOptions(ctx, MigrateOptions{DryRun: false}))
@@ -310,7 +310,7 @@ func TestStandaloneTool_FromPath_MissingConfigUsesDefaults(t *testing.T) {
 	tool, err := NewStandaloneMigrationToolFromPath(filepath.Join(t.TempDir(), "absent.json"))
 	require.NoError(t, err)
 	require.NotNil(t, tool)
-	defer tool.Close()
+	defer func() { _ = tool.Close() }()
 	assert.Equal(t, "sqlite", tool.GetConfig().Database.Driver)
 }
 

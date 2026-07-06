@@ -36,24 +36,24 @@ type DetailedExecutionPlan struct {
 
 // OperationAnalysis contains analysis of a single SQL operation
 type OperationAnalysis struct {
-	Type          string        // CREATE, ALTER, DROP, INSERT, UPDATE, DELETE
-	Target        string        // Table/Index/Column name
-	SQL           string        // Original SQL
+	Type          string // CREATE, ALTER, DROP, INSERT, UPDATE, DELETE
+	Target        string // Table/Index/Column name
+	SQL           string // Original SQL
 	EstimatedTime time.Duration
-	Risk          string        // LOW, MEDIUM, HIGH
+	Risk          string // LOW, MEDIUM, HIGH
 	Reversible    bool
-	Impact        string        // Description of impact
+	Impact        string // Description of impact
 }
 
 // PlanSummary summarizes the execution plan
 type PlanSummary struct {
-	TotalOperations  int
+	TotalOperations   int
 	EstimatedDuration time.Duration
-	OverallRisk      string
-	TablesAffected   []string
-	IndexesCreated   int
-	IndexesDropped   int
-	DataModified     bool
+	OverallRisk       string
+	TablesAffected    []string
+	IndexesCreated    int
+	IndexesDropped    int
+	DataModified      bool
 }
 
 // RiskAssessment describes potential risks
@@ -169,19 +169,21 @@ func (a *DryRunAnalyzer) analyzeStatement(stmt *ParsedStatement) OperationAnalys
 	// Estimate execution time based on operation type
 	switch strings.ToUpper(stmt.Type) {
 	case "DDL":
-		if strings.Contains(strings.ToUpper(stmt.Action), "CREATE INDEX") {
+		upperAction := strings.ToUpper(stmt.Action)
+		switch {
+		case strings.Contains(upperAction, "CREATE INDEX"):
 			op.EstimatedTime = time.Second * 30 // Index creation can be slow
 			op.Risk = "MEDIUM"
 			op.Impact = "Creates index, may lock table briefly"
-		} else if strings.Contains(strings.ToUpper(stmt.Action), "ALTER TABLE") {
+		case strings.Contains(upperAction, "ALTER TABLE"):
 			op.EstimatedTime = time.Second * 60 // ALTER can be very slow
 			op.Risk = "HIGH"
 			op.Impact = "Modifies table structure, may lock table for duration"
-		} else if strings.Contains(strings.ToUpper(stmt.Action), "CREATE TABLE") {
+		case strings.Contains(upperAction, "CREATE TABLE"):
 			op.EstimatedTime = time.Millisecond * 100
 			op.Risk = "LOW"
 			op.Impact = "Creates new table"
-		} else if strings.Contains(strings.ToUpper(stmt.Action), "DROP") {
+		case strings.Contains(upperAction, "DROP"):
 			op.EstimatedTime = time.Millisecond * 500
 			op.Risk = "CRITICAL"
 			op.Impact = "DESTRUCTIVE: Removes database object permanently"
@@ -310,34 +312,34 @@ func (a *DryRunAnalyzer) calculateOverallRisk(risks []RiskAssessment) string {
 func (a *DryRunAnalyzer) FormatDetailedPlan(plan *DetailedExecutionPlan) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("=== DRY RUN ANALYSIS: %s ===\n\n", plan.MigrationID))
+	fmt.Fprintf(&sb, "=== DRY RUN ANALYSIS: %s ===\n\n", plan.MigrationID)
 
 	// Summary
 	sb.WriteString("SUMMARY:\n")
-	sb.WriteString(fmt.Sprintf("  Total Operations: %d\n", plan.Summary.TotalOperations))
-	sb.WriteString(fmt.Sprintf("  Estimated Duration: %v\n", plan.Summary.EstimatedDuration))
-	sb.WriteString(fmt.Sprintf("  Overall Risk: %s\n", plan.Summary.OverallRisk))
-	sb.WriteString(fmt.Sprintf("  Tables Affected: %v\n", plan.Summary.TablesAffected))
-	sb.WriteString(fmt.Sprintf("  Indexes Created: %d\n", plan.Summary.IndexesCreated))
-	sb.WriteString(fmt.Sprintf("  Indexes Dropped: %d\n", plan.Summary.IndexesDropped))
-	sb.WriteString(fmt.Sprintf("  Data Modified: %v\n\n", plan.Summary.DataModified))
+	fmt.Fprintf(&sb, "  Total Operations: %d\n", plan.Summary.TotalOperations)
+	fmt.Fprintf(&sb, "  Estimated Duration: %v\n", plan.Summary.EstimatedDuration)
+	fmt.Fprintf(&sb, "  Overall Risk: %s\n", plan.Summary.OverallRisk)
+	fmt.Fprintf(&sb, "  Tables Affected: %v\n", plan.Summary.TablesAffected)
+	fmt.Fprintf(&sb, "  Indexes Created: %d\n", plan.Summary.IndexesCreated)
+	fmt.Fprintf(&sb, "  Indexes Dropped: %d\n", plan.Summary.IndexesDropped)
+	fmt.Fprintf(&sb, "  Data Modified: %v\n\n", plan.Summary.DataModified)
 
 	// Operations
 	sb.WriteString("OPERATIONS:\n")
 	for i, op := range plan.Operations {
-		sb.WriteString(fmt.Sprintf("  %d. [%s] %s %s\n", i+1, op.Risk, op.Type, op.Target))
-		sb.WriteString(fmt.Sprintf("     SQL: %s\n", truncateSQL(op.SQL, 100)))
-		sb.WriteString(fmt.Sprintf("     Impact: %s\n", op.Impact))
-		sb.WriteString(fmt.Sprintf("     Estimated Time: %v\n", op.EstimatedTime))
-		sb.WriteString(fmt.Sprintf("     Reversible: %v\n\n", op.Reversible))
+		fmt.Fprintf(&sb, "  %d. [%s] %s %s\n", i+1, op.Risk, op.Type, op.Target)
+		fmt.Fprintf(&sb, "     SQL: %s\n", truncateSQL(op.SQL, 100))
+		fmt.Fprintf(&sb, "     Impact: %s\n", op.Impact)
+		fmt.Fprintf(&sb, "     Estimated Time: %v\n", op.EstimatedTime)
+		fmt.Fprintf(&sb, "     Reversible: %v\n\n", op.Reversible)
 	}
 
 	// Risks
 	if len(plan.Risks) > 0 {
 		sb.WriteString("RISKS:\n")
 		for i, risk := range plan.Risks {
-			sb.WriteString(fmt.Sprintf("  %d. [%s] %s: %s\n", i+1, risk.Level, risk.Category, risk.Description))
-			sb.WriteString(fmt.Sprintf("     Mitigation: %s\n\n", risk.Mitigation))
+			fmt.Fprintf(&sb, "  %d. [%s] %s: %s\n", i+1, risk.Level, risk.Category, risk.Description)
+			fmt.Fprintf(&sb, "     Mitigation: %s\n\n", risk.Mitigation)
 		}
 	}
 
@@ -345,7 +347,7 @@ func (a *DryRunAnalyzer) FormatDetailedPlan(plan *DetailedExecutionPlan) string 
 	if len(plan.Warnings) > 0 {
 		sb.WriteString("WARNINGS:\n")
 		for i, warning := range plan.Warnings {
-			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, warning))
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, warning)
 		}
 		sb.WriteString("\n")
 	}
@@ -354,7 +356,7 @@ func (a *DryRunAnalyzer) FormatDetailedPlan(plan *DetailedExecutionPlan) string 
 	if len(plan.Errors) > 0 {
 		sb.WriteString("ERRORS:\n")
 		for i, err := range plan.Errors {
-			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, err))
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, err)
 		}
 		sb.WriteString("\n")
 	}

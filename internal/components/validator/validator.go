@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/constants"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 	"gorm.io/gorm"
 )
 
@@ -45,7 +45,7 @@ type SecurityMigrationValidator struct {
 
 // DependencyMigrationValidator validates migration dependencies
 type DependencyMigrationValidator struct {
-	tracker types.MigrationTracker
+	tracker      types.MigrationTracker
 	migrationMap map[string]*types.Migration // Cache for loaded migrations
 }
 
@@ -115,12 +115,14 @@ func (a *MigrationValidatorAdapter) ValidateDependencies(ctx context.Context, mi
 // ValidationSeverity and environment constants are imported from constants package
 type ValidationSeverity = constants.ValidationSeverity
 
+// Severity level aliases re-exported from the constants package.
 const (
 	SeverityError   = constants.SeverityError
 	SeverityWarning = constants.SeverityWarning
 	SeverityInfo    = constants.SeverityInfo
 )
 
+// Environment aliases re-exported from the constants package.
 const (
 	EnvironmentProduction  = constants.EnvironmentProduction
 	EnvironmentStaging     = constants.EnvironmentStaging
@@ -344,7 +346,7 @@ func (v *SyntaxMigrationValidator) validateDatabaseSyntax(ctx context.Context, c
 	statements := v.splitStatements(content)
 
 	// Get database dialect to handle database-specific limitations
-	dialect := v.db.Dialector.Name()
+	dialect := v.db.Name()
 
 	for _, stmt := range statements {
 		stmt = strings.TrimSpace(stmt)
@@ -368,7 +370,7 @@ func (v *SyntaxMigrationValidator) validateDatabaseSyntax(ctx context.Context, c
 
 		// Try to explain the statement
 		explainSQL := fmt.Sprintf("EXPLAIN %s", stmt)
-		
+
 		// Execute the EXPLAIN and capture any results
 		var result []map[string]interface{}
 		tx := v.db.WithContext(ctx).Raw(explainSQL).Scan(&result)
@@ -632,7 +634,7 @@ func (v *SecurityMigrationValidator) ValidateDependencies(ctx context.Context, m
 // NewDependencyMigrationValidator creates a new dependency validator
 func NewDependencyMigrationValidator(tracker types.MigrationTracker) *DependencyMigrationValidator {
 	return &DependencyMigrationValidator{
-		tracker: tracker,
+		tracker:      tracker,
 		migrationMap: make(map[string]*types.Migration),
 	}
 }
@@ -682,31 +684,6 @@ func (v *DependencyMigrationValidator) checkCircularDependenciesWithMap(ctx cont
 	return v.dfsCircularCheckWithMap(ctx, migration.ID, visited, recursionStack)
 }
 
-// dfsCircularCheck performs depth-first search to detect circular dependencies
-func (v *DependencyMigrationValidator) dfsCircularCheck(ctx context.Context, migrationID string, visited, recursionStack map[string]bool) error {
-	visited[migrationID] = true
-	recursionStack[migrationID] = true
-
-	// Get migration dependencies
-	migration, err := v.tracker.GetMigration(ctx, migrationID)
-	if err != nil {
-		return err
-	}
-
-	for _, depID := range migration.Dependencies {
-		if !visited[depID] {
-			if err := v.dfsCircularCheck(ctx, depID, visited, recursionStack); err != nil {
-				return err
-			}
-		} else if recursionStack[depID] {
-			return fmt.Errorf("circular dependency: %s -> %s", migrationID, depID)
-		}
-	}
-
-	recursionStack[migrationID] = false
-	return nil
-}
-
 // dfsCircularCheckSingle performs circular dependency check for a single migration
 // without requiring database lookups for dependencies
 func (v *DependencyMigrationValidator) dfsCircularCheckSingle(ctx context.Context, migration *types.Migration, visited, recursionStack map[string]bool) error {
@@ -720,13 +697,13 @@ func (v *DependencyMigrationValidator) dfsCircularCheckSingle(ctx context.Contex
 		if recursionStack[depID] {
 			return fmt.Errorf("circular dependency: %s -> %s", migration.ID, depID)
 		}
-		
+
 		// Check if the dependency is applied (this is safe to check)
 		applied, err := v.tracker.IsMigrationApplied(ctx, depID)
 		if err != nil {
 			return fmt.Errorf("failed to check dependency %s: %w", depID, err)
 		}
-		
+
 		// If dependency is not applied, we can't validate the full chain
 		// but we can at least ensure it's not a direct circular reference
 		if !applied {
@@ -790,7 +767,7 @@ func (v *DependencyMigrationValidator) CheckCircularDependencies(migrations []ty
 	for i := range migrations {
 		v.migrationMap[migrations[i].ID] = &migrations[i]
 	}
-	
+
 	// Build a dependency graph and check for cycles
 	for _, migration := range migrations {
 		if err := v.checkCircularDependenciesWithMap(context.Background(), &migration); err != nil {
@@ -847,10 +824,7 @@ func (v *DependencyMigrationValidator) ValidateDependencies(ctx context.Context,
 // NewPerformanceMigrationValidator creates a new performance migration validator
 func NewPerformanceMigrationValidator(db *gorm.DB, config *types.Config) *PerformanceMigrationValidator {
 	// Use strict mode from config if available, otherwise default to false (lenient)
-	strict := false
-	if config != nil && config.Migration.StrictMode {
-		strict = true
-	}
+	strict := config != nil && config.Migration.StrictMode
 	return &PerformanceMigrationValidator{
 		db:     db,
 		config: config,
@@ -1230,30 +1204,35 @@ func (v *SyntaxMigrationValidator) splitStatements(content string) []string {
 	var current strings.Builder
 	var inSingleQuote, inDoubleQuote bool
 	var inLineComment, inBlockComment bool
-	
+
 	lines := strings.Split(content, "\n")
-	
+
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
-		
+
 		// Skip empty lines and migration directives
 		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "-- +migrate") {
 			continue
 		}
-		
+
 		// Handle line comments
 		if strings.HasPrefix(trimmedLine, "--") {
 			continue
 		}
-		
-		// Process character by character to handle quotes and comments properly
-		for i, char := range line {
+
+		// Process character by character to handle quotes and comments properly.
+		// An explicit index loop is used (instead of range) so lookahead skips
+		// via i++ actually advance past the second byte of two-byte tokens such
+		// as "*/" and "/*".
+		runes := []rune(line)
+		for i := 0; i < len(runes); i++ {
+			char := runes[i]
 			switch {
 			case inLineComment:
-				// Skip rest of line if in line comment
-				break
+				// Skip the rest of the line once a line comment has started.
+				i = len(runes)
 			case inBlockComment:
-				if char == '*' && i+1 < len(line) && rune(line[i+1]) == '/' {
+				if char == '*' && i+1 < len(runes) && runes[i+1] == '/' {
 					inBlockComment = false
 					i++ // skip the '/'
 				}
@@ -1263,10 +1242,10 @@ func (v *SyntaxMigrationValidator) splitStatements(content string) []string {
 			case char == '"' && !inSingleQuote:
 				inDoubleQuote = !inDoubleQuote
 				current.WriteRune(char)
-			case char == '-' && i+1 < len(line) && rune(line[i+1]) == '-' && !inSingleQuote && !inDoubleQuote:
+			case char == '-' && i+1 < len(runes) && runes[i+1] == '-' && !inSingleQuote && !inDoubleQuote:
 				inLineComment = true
-				break // Skip rest of line
-			case char == '/' && i+1 < len(line) && rune(line[i+1]) == '*' && !inSingleQuote && !inDoubleQuote:
+				i = len(runes) // Skip rest of line
+			case char == '/' && i+1 < len(runes) && runes[i+1] == '*' && !inSingleQuote && !inDoubleQuote:
 				inBlockComment = true
 				i++ // skip the '*'
 			case char == ';' && !inSingleQuote && !inDoubleQuote:
@@ -1280,16 +1259,16 @@ func (v *SyntaxMigrationValidator) splitStatements(content string) []string {
 				current.WriteRune(char)
 			}
 		}
-		
+
 		// Reset line comment flag at end of line
 		inLineComment = false
-		
+
 		// Add newline if we're building a statement
 		if current.Len() > 0 {
 			current.WriteRune('\n')
 		}
 	}
-	
+
 	// Add any remaining statement
 	if current.Len() > 0 {
 		stmt := strings.TrimSpace(current.String())
@@ -1297,14 +1276,14 @@ func (v *SyntaxMigrationValidator) splitStatements(content string) []string {
 			statements = append(statements, stmt)
 		}
 	}
-	
+
 	return statements
 }
 
 // isNonExplainableStatement checks if a statement can be explained
 func (v *SyntaxMigrationValidator) isNonExplainableStatement(stmt string) bool {
 	upperStmt := strings.ToUpper(strings.TrimSpace(stmt))
-	
+
 	// Only skip statements that truly cannot be explained
 	// Most DDL statements (CREATE, ALTER, DROP) can be explained
 	nonExplainable := []string{
@@ -1330,7 +1309,7 @@ func (v *SyntaxMigrationValidator) isNonExplainableStatement(stmt string) bool {
 // isStatementLine checks if a line contains a SQL statement
 func (v *SyntaxMigrationValidator) isDDLStatement(stmt string) bool {
 	upperStmt := strings.ToUpper(strings.TrimSpace(stmt))
-	
+
 	ddlKeywords := []string{
 		"CREATE",
 		"ALTER",
@@ -1350,22 +1329,20 @@ func (v *SyntaxMigrationValidator) validateSQLiteDDLSyntax(stmt string) error {
 	// Basic syntax validation for SQLite DDL statements
 	stmt = strings.TrimSpace(stmt)
 	upperStmt := strings.ToUpper(stmt)
-	
-	// Check for basic syntax issues
-	if !strings.HasSuffix(stmt, ";") && !strings.HasSuffix(stmt, ")") {
-		// Allow statements without semicolon as they might be part of a larger statement
-	}
-	
+
+	// Statements without a trailing semicolon or ")" are allowed here because
+	// they may be part of a larger multi-statement block.
+
 	// Check for balanced parentheses
 	if err := v.checkBalancedParentheses(stmt); err != nil {
 		return err
 	}
-	
+
 	// Check for balanced quotes
 	if err := v.checkBalancedQuotes(stmt); err != nil {
 		return err
 	}
-	
+
 	// Basic keyword validation
 	validDDLPatterns := []string{
 		"CREATE TABLE",
@@ -1375,7 +1352,7 @@ func (v *SyntaxMigrationValidator) validateSQLiteDDLSyntax(stmt string) error {
 		"DROP TABLE",
 		"DROP INDEX",
 	}
-	
+
 	isValid := false
 	for _, pattern := range validDDLPatterns {
 		if strings.HasPrefix(upperStmt, pattern) {
@@ -1383,11 +1360,11 @@ func (v *SyntaxMigrationValidator) validateSQLiteDDLSyntax(stmt string) error {
 			break
 		}
 	}
-	
+
 	if !isValid {
 		return fmt.Errorf("unsupported DDL statement")
 	}
-	
+
 	return nil
 }
 
@@ -1506,7 +1483,7 @@ func (v *CompositeMigrationValidator) ValidateMigrationsCtx(ctx context.Context,
 // ValidateSchema validates the database schema
 func (v *CompositeMigrationValidator) ValidateSchema(ctx context.Context) error {
 	v.logger.WithContext(ctx).Info("Starting schema validation")
-	
+
 	// Check what tables exist before AutoMigrate
 	var tablesBefore []string
 	if err := v.db.Raw("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tablesBefore).Error; err == nil {
@@ -1515,13 +1492,13 @@ func (v *CompositeMigrationValidator) ValidateSchema(ctx context.Context) error 
 			"count":  len(tablesBefore),
 		})
 	}
-	
+
 	// Check if migration tables exist and are properly structured
 	if err := v.db.WithContext(ctx).AutoMigrate(&types.Migration{}, &lock.MigrationLock{}, &types.ChangelogEntryRecord{}); err != nil {
 		v.logger.WithContext(ctx).Error("Schema validation failed during AutoMigrate", err)
 		return fmt.Errorf("schema validation failed: %w", err)
 	}
-	
+
 	// Check what tables exist after AutoMigrate
 	var tablesAfter []string
 	if err := v.db.Raw("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tablesAfter).Error; err == nil {
@@ -1530,7 +1507,7 @@ func (v *CompositeMigrationValidator) ValidateSchema(ctx context.Context) error 
 			"count":  len(tablesAfter),
 		})
 	}
-	
+
 	v.logger.WithContext(ctx).Info("Schema validation completed successfully")
 
 	// Validate table structure

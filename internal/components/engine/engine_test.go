@@ -93,7 +93,7 @@ func TestNewMigrationEngineWithFactory_WiresComponents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMigrationEngineWithFactory: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if !eng.initialized {
 		t.Error("factory engine should be initialized")
 	}
@@ -109,7 +109,7 @@ func TestInitialize_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("first Initialize: %v", err)
@@ -130,7 +130,7 @@ func TestStatus_EmptyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// Status auto-initializes.
 	status, err := eng.Status(ctx)
@@ -162,7 +162,7 @@ func TestStatus_WithPendingMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	status, err := eng.Status(ctx)
 	if err != nil {
@@ -191,7 +191,7 @@ func TestStatus_ReflectsAppliedMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestStatusWithDryRun_DoesNotCreateTrackingTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestMigrate_DryRunAcquiresNoLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestMigrate_ValidMigrationsPipelineSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// Migrate runs the full pipeline (schema table, lock, load, filter, resolve,
 	// validate) and releases the lock afterwards.
@@ -336,7 +336,7 @@ func TestMigrate_AppliesAndRecordsMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	if err := eng.Migrate(ctx, "", false); err != nil {
 		t.Fatalf("Migrate: %v", err)
@@ -383,7 +383,7 @@ func TestMigrate_TargetFiltersToVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// Targeting version 001 must complete without error (target filtering path).
 	if err := eng.Migrate(ctx, "001", false); err != nil {
@@ -405,7 +405,7 @@ func TestMigrate_InvalidSQLFailsValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	err = eng.Migrate(ctx, "", false)
 	if err == nil {
@@ -432,7 +432,7 @@ func TestRollback_ExecutesRollbackSQLAndRemovesRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestRollback_ZeroStepsIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// steps <= 0 returns early with no error, even before touching the tracker.
 	if err := eng.Rollback(ctx, 0); err != nil {
@@ -500,7 +500,7 @@ func TestRollback_DryRunDoesNotRemoveRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestRollback_RespectsMaxRollbackDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestValidate_LoadsAndValidatesMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	if err := eng.Validate(ctx); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -615,7 +615,7 @@ func TestInfo_ReportsConfiguredMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	info, err := eng.Info(ctx)
 	if err != nil {
@@ -666,7 +666,7 @@ func TestRollbackManagerAccessors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	if eng.GetRollbackManager() != nil {
 		t.Error("expected nil rollback manager by default")

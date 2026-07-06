@@ -34,7 +34,7 @@ func TestProbeRollback(t *testing.T) {
 	if err := eng.Initialize(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// Create a real table and seed an applied migration record whose rollback drops it.
 	if err := eng.db.Exec("CREATE TABLE gadgets (id INTEGER PRIMARY KEY);").Error; err != nil {

@@ -78,12 +78,12 @@ const (
 
 // Migration Error Codes
 const (
-	ErrorCodeValidation     = "MIGRATION_VALIDATION_ERROR"
-	ErrorCodeExecution      = "MIGRATION_EXECUTION_ERROR"
-	ErrorCodeRollback       = "MIGRATION_ROLLBACK_ERROR"
-	ErrorCodeLock           = "MIGRATION_LOCK_ERROR"
-	ErrorCodeDependency     = "MIGRATION_DEPENDENCY_ERROR"
-	ErrCodeInvalidRequest   = "INVALID_REQUEST_ERROR"
+	ErrorCodeValidation   = "MIGRATION_VALIDATION_ERROR"
+	ErrorCodeExecution    = "MIGRATION_EXECUTION_ERROR"
+	ErrorCodeRollback     = "MIGRATION_ROLLBACK_ERROR"
+	ErrorCodeLock         = "MIGRATION_LOCK_ERROR"
+	ErrorCodeDependency   = "MIGRATION_DEPENDENCY_ERROR"
+	ErrCodeInvalidRequest = "INVALID_REQUEST_ERROR"
 )
 
 // Validation Rule Names
@@ -408,19 +408,19 @@ const (
 
 // Performance Thresholds
 const (
-	MaxMigrationSizeBytes    = 10 * 1024 * 1024 // 10MB
-	SlowQueryThreshold       = 1 * time.Second
-	LongMigrationThreshold   = 10 * time.Minute
-	MaxIndexNameLength       = 63 // PostgreSQL limit
-	MaxTableNameLength       = 64 // MySQL limit
+	MaxMigrationSizeBytes  = 10 * 1024 * 1024 // 10MB
+	SlowQueryThreshold     = 1 * time.Second
+	LongMigrationThreshold = 10 * time.Minute
+	MaxIndexNameLength     = 63 // PostgreSQL limit
+	MaxTableNameLength     = 64 // MySQL limit
 )
 
 // Retry Configuration
 const (
-	DefaultMaxRetries     = 3
-	DefaultRetryDelay     = 1 * time.Second
-	DefaultRetryBackoff   = 2.0 // exponential backoff multiplier
-	DefaultRetryMaxDelay  = 30 * time.Second
+	DefaultMaxRetries    = 3
+	DefaultRetryDelay    = 1 * time.Second
+	DefaultRetryBackoff  = 2.0 // exponential backoff multiplier
+	DefaultRetryMaxDelay = 30 * time.Second
 )
 
 // Logging Levels
@@ -466,11 +466,11 @@ const (
 
 // Precondition Types
 const (
-	PreconditionTypeTableExists      = "tableExists"
-	PreconditionTypeColumnExists     = "columnExists"
-	PreconditionTypeIndexExists      = "indexExists"
-	PreconditionTypeViewExists       = "viewExists"
-	PreconditionTypeSQLCheck         = "sqlCheck"
+	PreconditionTypeTableExists       = "tableExists"
+	PreconditionTypeColumnExists      = "columnExists"
+	PreconditionTypeIndexExists       = "indexExists"
+	PreconditionTypeViewExists        = "viewExists"
+	PreconditionTypeSQLCheck          = "sqlCheck"
 	PreconditionTypeChangeSetExecuted = "changeSetExecuted"
 )
 
@@ -524,10 +524,10 @@ const (
 
 // Date/Time Formats
 const (
-	TimestampFormat      = "2006-01-02 15:04:05"
-	DateFormat           = "2006-01-02"
-	FilenameTimeFormat   = "20060102_150405"
-	VersionTimeFormat    = "20060102150405"
+	TimestampFormat    = "2006-01-02 15:04:05"
+	DateFormat         = "2006-01-02"
+	FilenameTimeFormat = "20060102_150405"
+	VersionTimeFormat  = "20060102150405"
 )
 
 // Separator Characters
@@ -540,20 +540,20 @@ const (
 
 // File Permissions
 const (
-	FilePermissionDefault   = 0644
+	FilePermissionDefault      = 0644
 	DirectoryPermissionDefault = 0755
 )
 
 // Buffer Sizes
 const (
-	DefaultBufferSize       = 4096
-	LargeBufferSize         = 65536
+	DefaultBufferSize = 4096
+	LargeBufferSize   = 65536
 )
 
 // Cache Settings
 const (
-	DefaultCacheTTL         = 5 * time.Minute
-	DefaultCacheMaxSize     = 1000
+	DefaultCacheTTL     = 5 * time.Minute
+	DefaultCacheMaxSize = 1000
 )
 
 // Metrics and Monitoring
@@ -568,7 +568,7 @@ const (
 
 // XML Namespace Constants
 const (
-	XMLNamespaceGoMigrate     = "http://www.gomigrate.org/xml/ns/dbchangelog"
-	XMLNamespaceXSI           = "http://www.w3.org/2001/XMLSchema-instance"
+	XMLNamespaceGoMigrate      = "http://www.gomigrate.org/xml/ns/dbchangelog"
+	XMLNamespaceXSI            = "http://www.w3.org/2001/XMLSchema-instance"
 	XMLSchemaLocationGoMigrate = "http://www.gomigrate.org/xml/ns/dbchangelog http://www.gomigrate.org/xml/ns/dbchangelog/dbchangelog-1.0.xsd"
 )

@@ -10,10 +10,10 @@ package migrations
 
 // Migration States
 const (
-	MigrationStatePending   = "pending"
-	MigrationStateRunning   = "running"
-	MigrationStateCompleted = "completed"
-	MigrationStateFailed    = "failed"
+	MigrationStatePending    = "pending"
+	MigrationStateRunning    = "running"
+	MigrationStateCompleted  = "completed"
+	MigrationStateFailed     = "failed"
 	MigrationStateRolledBack = "rolled_back"
 )
 

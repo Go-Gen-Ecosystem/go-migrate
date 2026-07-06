@@ -15,9 +15,11 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
-// SQLiteLockManager implements LockManager for SQLite databases with dual-locking strategy
+// SQLiteLockManager implements Manager for SQLite databases with dual-locking strategy
 // Combines database-level locking with file-based locking for improved reliability
 type SQLiteLockManager struct {
 	db           *sql.DB
@@ -35,7 +37,7 @@ type SQLiteLockManager struct {
 func NewSQLiteLockManager(db *sql.DB, tableName string) *SQLiteLockManager {
 	// Create file lock path based on database file location
 	fileLockPath := filepath.Join(os.TempDir(), fmt.Sprintf("sqlite_migration_%s.lock", tableName))
-	
+
 	return &SQLiteLockManager{
 		db:           db,
 		tableName:    tableName,
@@ -70,8 +72,11 @@ func (l *SQLiteLockManager) AcquireLock() error {
 
 	// Step 2: Acquire database lock
 	if err := l.acquireDatabaseLock(); err != nil {
-		// Release file lock if database lock fails
-		l.releaseFileLock()
+		// Release file lock if database lock fails (best effort rollback).
+		if relErr := l.releaseFileLock(); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release SQLite file lock after database lock error", "error", relErr)
+		}
 		return fmt.Errorf("failed to acquire database lock: %w", err)
 	}
 
@@ -82,7 +87,7 @@ func (l *SQLiteLockManager) AcquireLock() error {
 // acquireFileLock attempts to acquire a file-based lock with timeout
 func (l *SQLiteLockManager) acquireFileLock() error {
 	timeout := time.Now().Add(l.lockTimeout)
-	
+
 	for time.Now().Before(timeout) {
 		// Try to create exclusive lock file
 		file, err := os.OpenFile(l.fileLockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -90,8 +95,9 @@ func (l *SQLiteLockManager) acquireFileLock() error {
 			if os.IsExist(err) {
 				// Lock file exists, check if it's stale
 				if l.isLockStale() {
-					// Remove stale lock and retry
-					os.Remove(l.fileLockPath)
+					// Remove stale lock and retry (best effort; the create
+					// attempt on the next iteration will surface any failure).
+					_ = os.Remove(l.fileLockPath)
 					continue
 				}
 				// Wait and retry
@@ -100,15 +106,21 @@ func (l *SQLiteLockManager) acquireFileLock() error {
 			}
 			return fmt.Errorf("failed to create lock file: %w", err)
 		}
-		
-		// Write process info to lock file
-		fmt.Fprintf(file, "pid:%d\ntime:%s\nlockID:%s\n", 
-			os.Getpid(), time.Now().Format(time.RFC3339), l.lockID)
-		
+
+		// Write process info to lock file for diagnostics. A write failure here
+		// signals a broken file handle, so tear down and report it rather than
+		// hold a lock backed by an unusable file.
+		if _, werr := fmt.Fprintf(file, "pid:%d\ntime:%s\nlockID:%s\n",
+			os.Getpid(), time.Now().Format(time.RFC3339), l.lockID); werr != nil {
+			_ = file.Close()
+			_ = os.Remove(l.fileLockPath)
+			return fmt.Errorf("failed to write lock file metadata: %w", werr)
+		}
+
 		l.fileLock = file
 		return nil
 	}
-	
+
 	return fmt.Errorf("timeout waiting for file lock after %v", l.lockTimeout)
 }
 
@@ -153,7 +165,7 @@ func (l *SQLiteLockManager) isLockStale() bool {
 	if err != nil {
 		return true // File doesn't exist, consider stale
 	}
-	
+
 	// Consider lock stale if older than 5 minutes
 	return time.Since(info.ModTime()) > 5*time.Minute
 }
@@ -202,22 +214,27 @@ func (l *SQLiteLockManager) releaseDatabaseLock() error {
 // releaseFileLock releases the file-based lock
 func (l *SQLiteLockManager) releaseFileLock() error {
 	if l.fileLock != nil {
-		l.fileLock.Close()
+		if err := l.fileLock.Close(); err != nil {
+			// Continue to remove the file even if closing the handle failed;
+			// log so the close error is not lost.
+			logging.GetComponentLogger("lock").Warn(
+				"failed to close SQLite lock file handle", "error", err)
+		}
 		l.fileLock = nil
 	}
-	
+
 	// Remove lock file
 	if err := os.Remove(l.fileLockPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove lock file: %w", err)
 	}
-	
+
 	return nil
 }
 
 // IsLocked checks if a migration lock is currently held
 func (l *SQLiteLockManager) IsLocked() (bool, error) {
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE lock_name = 'migration_lock'`, l.tableName)
-	
+
 	var count int
 	err := l.db.QueryRow(query).Scan(&count)
 	if err != nil {
@@ -249,19 +266,18 @@ func (l *SQLiteLockManager) ensureLockTable() error {
 // isConstraintError checks if the error is a constraint violation
 func isConstraintError(err error) bool {
 	// SQLite constraint errors typically contain "UNIQUE constraint failed"
-	return err != nil && (
-		containsString(err.Error(), "UNIQUE constraint failed") ||
+	return err != nil && (containsString(err.Error(), "UNIQUE constraint failed") ||
 		containsString(err.Error(), "constraint failed"))
 }
 
 // containsString checks if a string contains a substring (case-insensitive)
 func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && 
-		   (s == substr || 
-		    (len(s) > len(substr) && 
-		     (s[:len(substr)] == substr || 
-		      s[len(s)-len(substr):] == substr ||
-		      containsSubstring(s, substr))))
+	return len(s) >= len(substr) &&
+		(s == substr ||
+			(len(s) > len(substr) &&
+				(s[:len(substr)] == substr ||
+					s[len(s)-len(substr):] == substr ||
+					containsSubstring(s, substr))))
 }
 
 // containsSubstring is a helper function for substring checking

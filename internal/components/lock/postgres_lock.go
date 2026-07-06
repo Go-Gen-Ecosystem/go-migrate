@@ -16,7 +16,7 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
-// PostgresLockManager implements LockManager for PostgreSQL databases
+// PostgresLockManager implements Manager for PostgreSQL databases
 // Uses PostgreSQL advisory locks for better performance and reliability
 type PostgresLockManager struct {
 	db        *sql.DB
@@ -26,7 +26,7 @@ type PostgresLockManager struct {
 }
 
 // NewPostgresLockManager creates a new Postgres lock manager
-// Note: This is a legacy implementation that doesn't match the current LockManager interface
+// Note: This is a legacy implementation that doesn't match the current Manager interface
 // Use NewDatabaseLockManager instead for consistent behavior
 func NewPostgresLockManager(db *sql.DB, tableName string) *PostgresLockManager {
 	return &PostgresLockManager{
@@ -52,8 +52,11 @@ func (l *PostgresLockManager) AcquireLock() error {
 
 	// Also create a record in the lock table for visibility
 	if err := l.ensureLockTable(); err != nil {
-		// Release advisory lock if table creation fails
-		l.releaseAdvisoryLock()
+		// Release advisory lock if table creation fails (best effort rollback).
+		if relErr := l.releaseAdvisoryLock(); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release Postgres advisory lock after table setup error", "error", relErr)
+		}
 		return fmt.Errorf("failed to ensure lock table: %w", err)
 	}
 
@@ -69,8 +72,11 @@ func (l *PostgresLockManager) AcquireLock() error {
 
 	_, err = l.db.Exec(query, fmt.Sprintf("%d", l.lockID), time.Now(), "migration_engine")
 	if err != nil {
-		// Release advisory lock if record insertion fails
-		l.releaseAdvisoryLock()
+		// Release advisory lock if record insertion fails (best effort rollback).
+		if relErr := l.releaseAdvisoryLock(); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release Postgres advisory lock after record insert error", "error", relErr)
+		}
 		return fmt.Errorf("failed to insert lock record: %w", err)
 	}
 
@@ -112,8 +118,11 @@ func (l *PostgresLockManager) IsLocked() (bool, error) {
 	}
 
 	if advisoryLocked {
-		// We acquired it, so it wasn't locked - release it immediately
-		l.releaseAdvisoryLock()
+		// We acquired it during the probe, so it wasn't locked - release it
+		// immediately. A failure here would leak the probe lock, so surface it.
+		if relErr := l.releaseAdvisoryLock(); relErr != nil {
+			return false, fmt.Errorf("failed to release advisory lock acquired during probe: %w", relErr)
+		}
 		return false, nil
 	}
 

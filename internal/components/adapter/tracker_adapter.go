@@ -211,7 +211,7 @@ func (a *TrackerAdapter) IsMigrationApplied(ctx context.Context, id string) (boo
 	if a.dryRun {
 		return false, nil
 	}
-	
+
 	return a.tracker.IsMigrationApplied(ctx, id)
 }
 

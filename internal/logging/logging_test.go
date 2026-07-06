@@ -16,11 +16,11 @@ import (
 
 func TestLogLevel_String(t *testing.T) {
 	cases := map[LogLevel]string{
-		LevelDebug: "DEBUG",
-		LevelInfo:  "INFO",
-		LevelWarn:  "WARN",
-		LevelError: "ERROR",
-		LevelFatal: "FATAL",
+		LevelDebug:   "DEBUG",
+		LevelInfo:    "INFO",
+		LevelWarn:    "WARN",
+		LevelError:   "ERROR",
+		LevelFatal:   "FATAL",
 		LogLevel(99): "INFO",
 	}
 	for lvl, want := range cases {

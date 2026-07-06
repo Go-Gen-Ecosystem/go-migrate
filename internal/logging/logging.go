@@ -49,10 +49,10 @@ func (l LogLevel) String() string {
 
 // Logger is the structured logging contract used across go-migrate. Field
 // arguments are variadic key/value pairs (msg, "key1", val1, "key2", val2, ...).
+// The leveled, formatted and contextual methods are one responsibility
+// (structured logging) and match the conventional logger surface callers expect.
 //
-//nolint:interfacebloat // Cohesive logging contract: the leveled, formatted and
-// contextual methods are one responsibility (structured logging) and match the
-// conventional logger surface callers expect.
+//nolint:interfacebloat // Cohesive logging contract; see the surface described above.
 type Logger interface {
 	Debug(msg string, fields ...interface{})
 	Info(msg string, fields ...interface{})
@@ -188,10 +188,14 @@ func (l *logger) Fatal(msg string, f ...interface{}) {
 	os.Exit(1)
 }
 
-func (l *logger) Debugf(format string, a ...interface{}) { l.log(LevelDebug, fmt.Sprintf(format, a...)) }
-func (l *logger) Infof(format string, a ...interface{})  { l.log(LevelInfo, fmt.Sprintf(format, a...)) }
-func (l *logger) Warnf(format string, a ...interface{})  { l.log(LevelWarn, fmt.Sprintf(format, a...)) }
-func (l *logger) Errorf(format string, a ...interface{}) { l.log(LevelError, fmt.Sprintf(format, a...)) }
+func (l *logger) Debugf(format string, a ...interface{}) {
+	l.log(LevelDebug, fmt.Sprintf(format, a...))
+}
+func (l *logger) Infof(format string, a ...interface{}) { l.log(LevelInfo, fmt.Sprintf(format, a...)) }
+func (l *logger) Warnf(format string, a ...interface{}) { l.log(LevelWarn, fmt.Sprintf(format, a...)) }
+func (l *logger) Errorf(format string, a ...interface{}) {
+	l.log(LevelError, fmt.Sprintf(format, a...))
+}
 
 // Fatalf logs a formatted message at fatal severity and exits.
 func (l *logger) Fatalf(format string, a ...interface{}) {

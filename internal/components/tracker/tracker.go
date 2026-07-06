@@ -18,15 +18,16 @@ import (
 	"sort"
 	"time"
 
-	"gorm.io/gorm"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"gorm.io/gorm"
 )
 
 // MigrationTracker interface defines methods for tracking migration state.
+// The methods form a cohesive migration-state store contract (record, query,
+// changelog and schema-table setup) implemented as one transactional unit by
+// DatabaseMigrationTracker.
 //
-//nolint:interfacebloat // Cohesive migration-state store contract (record,
-// query, changelog and schema-table setup) implemented as one transactional
-// unit by DatabaseMigrationTracker.
+//nolint:interfacebloat // Cohesive migration-state store contract (see doc comment above).
 type MigrationTracker interface {
 	RecordMigration(ctx context.Context, migration *types.Migration) error
 	RemoveMigration(ctx context.Context, migrationID string) error
@@ -38,7 +39,7 @@ type MigrationTracker interface {
 	GetMigrationHistory(ctx context.Context, limit, offset int) ([]*types.Migration, error)
 	RecordChangelog(ctx context.Context, entry *ChangelogEntry) error
 	GetChangelog(ctx context.Context, limit, offset int) ([]*ChangelogEntry, error)
-	
+
 	// Drift detection and validation methods
 	ValidateChecksum(ctx context.Context, migration *types.Migration) (*ChecksumValidationResult, error)
 	DetectDrift(ctx context.Context) ([]*DriftDetectionResult, error)
@@ -60,61 +61,61 @@ type InMemoryMigrationTracker struct {
 // FileMigrationTracker implements MigrationTracker using file storage
 type FileMigrationTracker struct {
 	filePath string
-	data     *TrackerData
+	data     *Data
 }
 
-// TrackerData represents the structure for file-based tracking
-type TrackerData struct {
-	Migrations map[string]*types.Migration   `json:"migrations"`
-	Changelog  []*ChangelogEntry       `json:"changelog"`
-	Metadata   map[string]interface{}  `json:"metadata"`
-	UpdatedAt  time.Time               `json:"updated_at"`
+// Data represents the structure for file-based tracking
+type Data struct {
+	Migrations map[string]*types.Migration `json:"migrations"`
+	Changelog  []*ChangelogEntry           `json:"changelog"`
+	Metadata   map[string]interface{}      `json:"metadata"`
+	UpdatedAt  time.Time                   `json:"updated_at"`
 }
 
 // MigrationRecord represents a migration record in the database
 type MigrationRecord struct {
-	ID              string                 `gorm:"primaryKey;column:id" json:"id"`
-	Version         string                 `gorm:"column:version;index" json:"version"`
-	Description     string                 `gorm:"column:description" json:"description"`
-	Filename        string                 `gorm:"column:filename" json:"filename"`
-	Filepath        string                 `gorm:"column:filepath" json:"filepath"`
-	Content         string                 `gorm:"column:content;type:text" json:"content"`
-	Checksum        string                 `gorm:"column:checksum;index" json:"checksum"`
-	Type            string                 `gorm:"column:type" json:"type"`
-	Author          string                 `gorm:"column:author" json:"author"`
-	ChangesetID     string                 `gorm:"column:changeset_id" json:"changeset_id"`
-	State           string                 `gorm:"column:state;index" json:"state"`
-	Contexts        string                 `gorm:"column:contexts" json:"contexts"` // JSON array
-	Labels          string                 `gorm:"column:labels" json:"labels"`     // JSON array
-	DependsOn       string                 `gorm:"column:depends_on" json:"depends_on"` // JSON array
-	Preconditions   string                 `gorm:"column:preconditions" json:"preconditions"` // JSON array
-	RollbackSQL     string                 `gorm:"column:rollback_sql;type:text" json:"rollback_sql"`
-	CanRollback     bool                   `gorm:"column:can_rollback" json:"can_rollback"`
-	RunAlways       bool                   `gorm:"column:run_always" json:"run_always"`
-	RunOnChange     bool                   `gorm:"column:run_on_change" json:"run_on_change"`
-	FailOnError     bool                   `gorm:"column:fail_on_error" json:"fail_on_error"`
-	ExecutedAt      *time.Time             `gorm:"column:executed_at" json:"executed_at"`
-	RolledBackAt    *time.Time             `gorm:"column:rolled_back_at" json:"rolled_back_at"`
-	ExecutionTime   int64                  `gorm:"column:execution_time" json:"execution_time"` // nanoseconds
-	ErrorMessage    string                 `gorm:"column:error_message" json:"error_message"`
-	Metadata        string                 `gorm:"column:metadata;type:text" json:"metadata"` // JSON
-	CreatedAt       time.Time              `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt       time.Time              `gorm:"column:updated_at" json:"updated_at"`
+	ID            string     `gorm:"primaryKey;column:id" json:"id"`
+	Version       string     `gorm:"column:version;index" json:"version"`
+	Description   string     `gorm:"column:description" json:"description"`
+	Filename      string     `gorm:"column:filename" json:"filename"`
+	Filepath      string     `gorm:"column:filepath" json:"filepath"`
+	Content       string     `gorm:"column:content;type:text" json:"content"`
+	Checksum      string     `gorm:"column:checksum;index" json:"checksum"`
+	Type          string     `gorm:"column:type" json:"type"`
+	Author        string     `gorm:"column:author" json:"author"`
+	ChangesetID   string     `gorm:"column:changeset_id" json:"changeset_id"`
+	State         string     `gorm:"column:state;index" json:"state"`
+	Contexts      string     `gorm:"column:contexts" json:"contexts"`           // JSON array
+	Labels        string     `gorm:"column:labels" json:"labels"`               // JSON array
+	DependsOn     string     `gorm:"column:depends_on" json:"depends_on"`       // JSON array
+	Preconditions string     `gorm:"column:preconditions" json:"preconditions"` // JSON array
+	RollbackSQL   string     `gorm:"column:rollback_sql;type:text" json:"rollback_sql"`
+	CanRollback   bool       `gorm:"column:can_rollback" json:"can_rollback"`
+	RunAlways     bool       `gorm:"column:run_always" json:"run_always"`
+	RunOnChange   bool       `gorm:"column:run_on_change" json:"run_on_change"`
+	FailOnError   bool       `gorm:"column:fail_on_error" json:"fail_on_error"`
+	ExecutedAt    *time.Time `gorm:"column:executed_at" json:"executed_at"`
+	RolledBackAt  *time.Time `gorm:"column:rolled_back_at" json:"rolled_back_at"`
+	ExecutionTime int64      `gorm:"column:execution_time" json:"execution_time"` // nanoseconds
+	ErrorMessage  string     `gorm:"column:error_message" json:"error_message"`
+	Metadata      string     `gorm:"column:metadata;type:text" json:"metadata"` // JSON
+	CreatedAt     time.Time  `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at" json:"updated_at"`
 }
 
 // ChangelogRecord represents a changelog entry in the database
 type ChangelogRecord struct {
-	ID            uint                   `gorm:"primaryKey;autoIncrement" json:"id"`
-	MigrationID   string                 `gorm:"column:migration_id;index" json:"migration_id"`
-	Operation     string                 `gorm:"column:operation" json:"operation"`
-	Status        string                 `gorm:"column:status" json:"status"`
-	ExecutedBy    string                 `gorm:"column:executed_by" json:"executed_by"`
-	ExecutedAt    time.Time              `gorm:"column:executed_at" json:"executed_at"`
-	ExecutionTime int64                  `gorm:"column:execution_time" json:"execution_time"`
-	ErrorMessage  string                 `gorm:"column:error_message" json:"error_message"`
-	Context       string                 `gorm:"column:context;type:text" json:"context"` // JSON
-	Metadata      string                 `gorm:"column:metadata;type:text" json:"metadata"` // JSON
-	CreatedAt     time.Time              `gorm:"column:created_at" json:"created_at"`
+	ID            uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	MigrationID   string    `gorm:"column:migration_id;index" json:"migration_id"`
+	Operation     string    `gorm:"column:operation" json:"operation"`
+	Status        string    `gorm:"column:status" json:"status"`
+	ExecutedBy    string    `gorm:"column:executed_by" json:"executed_by"`
+	ExecutedAt    time.Time `gorm:"column:executed_at" json:"executed_at"`
+	ExecutionTime int64     `gorm:"column:execution_time" json:"execution_time"`
+	ErrorMessage  string    `gorm:"column:error_message" json:"error_message"`
+	Context       string    `gorm:"column:context;type:text" json:"context"`   // JSON
+	Metadata      string    `gorm:"column:metadata;type:text" json:"metadata"` // JSON
+	CreatedAt     time.Time `gorm:"column:created_at" json:"created_at"`
 }
 
 // ChangelogEntry represents an internal changelog entry for migration tracking
@@ -154,12 +155,12 @@ type DriftDetectionResult struct {
 
 // IdempotencyValidationResult represents the result of idempotency validation
 type IdempotencyValidationResult struct {
-	IsIdempotent     bool      `json:"is_idempotent"`
-	MigrationID      string    `json:"migration_id"`
+	IsIdempotent      bool       `json:"is_idempotent"`
+	MigrationID       string     `json:"migration_id"`
 	PreviousExecution *time.Time `json:"previous_execution"`
-	ValidatedAt      time.Time `json:"validated_at"`
-	CanRerun         bool      `json:"can_rerun"`
-	Message          string    `json:"message"`
+	ValidatedAt       time.Time  `json:"validated_at"`
+	CanRerun          bool       `json:"can_rerun"`
+	Message           string     `json:"message"`
 }
 
 // TableName returns the table name for MigrationRecord
@@ -179,23 +180,25 @@ func NewDatabaseMigrationTracker(db *gorm.DB, tableName string) (*DatabaseMigrat
 	return NewDatabaseMigrationTrackerWithDryRun(db, tableName, false)
 }
 
+// NewDatabaseMigrationTrackerWithDryRun creates a new database migration tracker.
+// When dryRun is true, tracking tables are not auto-created.
 func NewDatabaseMigrationTrackerWithDryRun(db *gorm.DB, tableName string, dryRun bool) (*DatabaseMigrationTracker, error) {
 	if tableName == "" {
 		tableName = "migration_history"
 	}
-	
+
 	tracker := &DatabaseMigrationTracker{
 		db:        db,
 		tableName: tableName,
 	}
-	
+
 	// Auto-migrate tables and handle errors only if not in dry run mode
 	if !dryRun {
 		if err := tracker.initializeTables(); err != nil {
 			return nil, fmt.Errorf("failed to initialize migration tracker tables: %w", err)
 		}
 	}
-	
+
 	return tracker, nil
 }
 
@@ -206,65 +209,65 @@ func (t *DatabaseMigrationTracker) initializeTables() error {
 	if err := t.db.Table(t.tableName).AutoMigrate(migrationRecord); err != nil {
 		return fmt.Errorf("failed to create migration history table: %w", err)
 	}
-	
+
 	// Create changelog table
 	if err := t.db.AutoMigrate(&ChangelogRecord{}); err != nil {
 		return fmt.Errorf("failed to create changelog table: %w", err)
 	}
-	
+
 	// Add additional indexes for better performance
 	if err := t.addPerformanceIndexes(); err != nil {
 		return fmt.Errorf("failed to add performance indexes: %w", err)
 	}
-	
+
 	return nil
 }
 
 // addPerformanceIndexes adds composite indexes for better query performance
 func (t *DatabaseMigrationTracker) addPerformanceIndexes() error {
 	// Composite index for migration queries by state and execution time
-	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_migrations_state_executed_at ON " + 
+	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_migrations_state_executed_at ON " +
 		t.tableName + " (state, executed_at)").Error; err != nil {
 		return fmt.Errorf("failed to create state_executed_at index: %w", err)
 	}
-	
+
 	// Composite index for version uniqueness and state
-	if err := t.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_migrations_version_unique ON " + 
+	if err := t.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_migrations_version_unique ON " +
 		t.tableName + " (version) WHERE state != 'rolled_back'").Error; err != nil {
 		return fmt.Errorf("failed to create version uniqueness index: %w", err)
 	}
-	
+
 	// Index for checksum-based drift detection
-	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_migrations_checksum_state ON " + 
+	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_migrations_checksum_state ON " +
 		t.tableName + " (checksum, state)").Error; err != nil {
 		return fmt.Errorf("failed to create checksum_state index: %w", err)
 	}
-	
+
 	// Composite index for changelog queries by migration and timestamp
-	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_changelog_migration_executed_at ON " + 
+	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_changelog_migration_executed_at ON " +
 		"migration_changelog (migration_id, executed_at DESC)").Error; err != nil {
 		return fmt.Errorf("failed to create changelog migration_executed_at index: %w", err)
 	}
-	
+
 	// Index for changelog status queries
-	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_changelog_status_executed_at ON " + 
+	if err := t.db.Exec("CREATE INDEX IF NOT EXISTS idx_changelog_status_executed_at ON " +
 		"migration_changelog (status, executed_at DESC)").Error; err != nil {
 		return fmt.Errorf("failed to create changelog status_executed_at index: %w", err)
 	}
-	
+
 	return nil
 }
 
 // RecordMigration records a migration execution
 func (t *DatabaseMigrationTracker) RecordMigration(ctx context.Context, migration *types.Migration) error {
 	record := t.migrationToRecord(migration)
-	
+
 	// Use upsert to handle updates with configured table name
 	result := t.db.WithContext(ctx).Table(t.tableName).Save(record)
 	if result.Error != nil {
 		return fmt.Errorf("failed to record migration: %w", result.Error)
 	}
-	
+
 	// Record changelog entry
 	changelog := &ChangelogEntry{
 		MigrationID:   migration.ID,
@@ -280,7 +283,7 @@ func (t *DatabaseMigrationTracker) RecordMigration(ctx context.Context, migratio
 			"type":        migration.Type,
 		},
 	}
-	
+
 	return t.RecordChangelog(ctx, changelog)
 }
 
@@ -308,15 +311,15 @@ func (t *DatabaseMigrationTracker) RecordMigrationSuccess(ctx context.Context, m
 func (t *DatabaseMigrationTracker) RecordMigrationFailure(ctx context.Context, migration types.MigrationRecord, errorMsg string) error {
 	now := time.Now()
 	migrationObj := &types.Migration{
-		ID:            migration.ID,
-		Version:       migration.Version,
-		Description:   migration.Description,
-		Type:          types.MigrationType(migration.Type),
-		State:         "failed",
-		ExecutedAt:    &now,
-		Checksum:      migration.Checksum,
-		Script:        migration.Script,
-		ErrorMessage:  errorMsg,
+		ID:           migration.ID,
+		Version:      migration.Version,
+		Description:  migration.Description,
+		Type:         types.MigrationType(migration.Type),
+		State:        "failed",
+		ExecutedAt:   &now,
+		Checksum:     migration.Checksum,
+		Script:       migration.Script,
+		ErrorMessage: errorMsg,
 		// Note: types.MigrationRecord doesn't have FileName/FilePath/ExecutedBy fields
 		// These would need to be added to types.MigrationRecord if needed
 	}
@@ -334,7 +337,7 @@ func (t *DatabaseMigrationTracker) GetMigration(ctx context.Context, id string) 
 		}
 		return nil, fmt.Errorf("failed to get migration: %w", result.Error)
 	}
-	
+
 	return t.recordToMigration(&record)
 }
 
@@ -358,7 +361,7 @@ func (t *DatabaseMigrationTracker) GetMigrationByVersion(ctx context.Context, ve
 		}
 		return nil, fmt.Errorf("failed to get migration: %w", result.Error)
 	}
-	
+
 	return t.recordToMigration(&record)
 }
 
@@ -369,7 +372,7 @@ func (t *DatabaseMigrationTracker) GetAppliedMigrations(ctx context.Context) ([]
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get applied migrations: %w", result.Error)
 	}
-	
+
 	migrations := make([]*types.Migration, len(records))
 	for i, record := range records {
 		migration, err := t.recordToMigration(&record)
@@ -378,7 +381,7 @@ func (t *DatabaseMigrationTracker) GetAppliedMigrations(ctx context.Context) ([]
 		}
 		migrations[i] = migration
 	}
-	
+
 	return migrations, nil
 }
 
@@ -389,7 +392,7 @@ func (t *DatabaseMigrationTracker) GetPendingMigrations(ctx context.Context) ([]
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get pending migrations: %w", result.Error)
 	}
-	
+
 	migrations := make([]*types.Migration, len(records))
 	for i, record := range records {
 		migration, err := t.recordToMigration(&record)
@@ -398,7 +401,7 @@ func (t *DatabaseMigrationTracker) GetPendingMigrations(ctx context.Context) ([]
 		}
 		migrations[i] = migration
 	}
-	
+
 	return migrations, nil
 }
 
@@ -409,7 +412,7 @@ func (t *DatabaseMigrationTracker) IsMigrationApplied(ctx context.Context, id st
 	if result.Error != nil {
 		return false, fmt.Errorf("failed to check migration status: %w", result.Error)
 	}
-	
+
 	return count > 0, nil
 }
 
@@ -420,7 +423,7 @@ func (t *DatabaseMigrationTracker) GetMigrationHistory(ctx context.Context, limi
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get migration history: %w", result.Error)
 	}
-	
+
 	migrations := make([]*types.Migration, len(records))
 	for i, record := range records {
 		migration, err := t.recordToMigration(&record)
@@ -429,19 +432,19 @@ func (t *DatabaseMigrationTracker) GetMigrationHistory(ctx context.Context, limi
 		}
 		migrations[i] = migration
 	}
-	
+
 	return migrations, nil
 }
 
 // RecordChangelog records a changelog entry
 func (t *DatabaseMigrationTracker) RecordChangelog(ctx context.Context, entry *ChangelogEntry) error {
 	record := t.changelogToRecord(entry)
-	
+
 	result := t.db.WithContext(ctx).Create(record)
 	if result.Error != nil {
 		return fmt.Errorf("failed to record changelog: %w", result.Error)
 	}
-	
+
 	return nil
 }
 
@@ -452,7 +455,7 @@ func (t *DatabaseMigrationTracker) GetChangelog(ctx context.Context, limit, offs
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get changelog: %w", result.Error)
 	}
-	
+
 	entries := make([]*ChangelogEntry, len(records))
 	for i, record := range records {
 		entry, err := t.recordToChangelog(&record)
@@ -461,7 +464,7 @@ func (t *DatabaseMigrationTracker) GetChangelog(ctx context.Context, limit, offs
 		}
 		entries[i] = entry
 	}
-	
+
 	return entries, nil
 }
 
@@ -471,49 +474,49 @@ func (t *DatabaseMigrationTracker) GetChangelog(ctx context.Context, limit, offs
 func (t *DatabaseMigrationTracker) migrationToRecord(migration *types.Migration) *MigrationRecord {
 	// Convert contexts to JSON
 	contextsJSON, _ := json.Marshal(migration.Contexts)
-	
+
 	// Convert labels to JSON
 	labelsJSON, _ := json.Marshal(migration.Labels)
-	
+
 	// Convert dependencies to JSON
 	dependenciesJSON, _ := json.Marshal(migration.Dependencies)
-	
+
 	// Convert preconditions to JSON
 	preconditionsJSON, _ := json.Marshal(migration.Preconditions)
-	
+
 	// Convert metadata to JSON
 	metadataJSON, _ := json.Marshal(migration.Metadata)
 
 	record := &MigrationRecord{
-		ID:              migration.ID,
-		Version:         migration.Version,
-		Description:     migration.Description,
-		Filename:        migration.FileName,
-		Filepath:        migration.FilePath,
-		Content:         migration.Script,
-		Checksum:        migration.Checksum,
-		Type:            string(migration.Type),
-		Author:          migration.Author,
-		ChangesetID:     migration.ChangesetID,
-		State:           migration.State,
-		Contexts:        string(contextsJSON),
-		Labels:          string(labelsJSON),
-		DependsOn:       string(dependenciesJSON),
-		Preconditions:   string(preconditionsJSON),
-		RollbackSQL:     migration.RollbackSQL,
-		CanRollback:     migration.CanRollback,
-		RunAlways:       migration.RunAlways,
-		RunOnChange:     migration.RunOnChange,
-		FailOnError:     migration.FailOnError,
-		ExecutedAt:      migration.ExecutedAt,
-		RolledBackAt:    migration.RolledBackAt,
-		ExecutionTime:   int64(migration.ExecutionTime),
-		ErrorMessage:    migration.ErrorMessage,
-		Metadata:        string(metadataJSON),
-		CreatedAt:       migration.CreatedAt,
-		UpdatedAt:       migration.UpdatedAt,
+		ID:            migration.ID,
+		Version:       migration.Version,
+		Description:   migration.Description,
+		Filename:      migration.FileName,
+		Filepath:      migration.FilePath,
+		Content:       migration.Script,
+		Checksum:      migration.Checksum,
+		Type:          string(migration.Type),
+		Author:        migration.Author,
+		ChangesetID:   migration.ChangesetID,
+		State:         migration.State,
+		Contexts:      string(contextsJSON),
+		Labels:        string(labelsJSON),
+		DependsOn:     string(dependenciesJSON),
+		Preconditions: string(preconditionsJSON),
+		RollbackSQL:   migration.RollbackSQL,
+		CanRollback:   migration.CanRollback,
+		RunAlways:     migration.RunAlways,
+		RunOnChange:   migration.RunOnChange,
+		FailOnError:   migration.FailOnError,
+		ExecutedAt:    migration.ExecutedAt,
+		RolledBackAt:  migration.RolledBackAt,
+		ExecutionTime: int64(migration.ExecutionTime),
+		ErrorMessage:  migration.ErrorMessage,
+		Metadata:      string(metadataJSON),
+		CreatedAt:     migration.CreatedAt,
+		UpdatedAt:     migration.UpdatedAt,
 	}
-	
+
 	return record
 }
 
@@ -525,7 +528,7 @@ func (t *DatabaseMigrationTracker) recordToMigration(record *MigrationRecord) (*
 			return nil, fmt.Errorf("failed to parse contexts: %w", err)
 		}
 	}
-	
+
 	// Parse labels from JSON
 	var labels []string
 	if record.Labels != "" {
@@ -533,7 +536,7 @@ func (t *DatabaseMigrationTracker) recordToMigration(record *MigrationRecord) (*
 			return nil, fmt.Errorf("failed to parse labels: %w", err)
 		}
 	}
-	
+
 	// Parse dependencies from JSON
 	var dependencies []string
 	if record.DependsOn != "" {
@@ -541,7 +544,7 @@ func (t *DatabaseMigrationTracker) recordToMigration(record *MigrationRecord) (*
 			return nil, fmt.Errorf("failed to parse dependencies: %w", err)
 		}
 	}
-	
+
 	// Parse preconditions from JSON
 	var preconditions []types.Precondition
 	if record.Preconditions != "" {
@@ -549,7 +552,7 @@ func (t *DatabaseMigrationTracker) recordToMigration(record *MigrationRecord) (*
 			return nil, fmt.Errorf("failed to parse preconditions: %w", err)
 		}
 	}
-	
+
 	// Parse metadata from JSON
 	var metadata map[string]string
 	if record.Metadata != "" {
@@ -559,105 +562,105 @@ func (t *DatabaseMigrationTracker) recordToMigration(record *MigrationRecord) (*
 	}
 
 	migration := &types.Migration{
-		ID:              record.ID,
-		Version:         record.Version,
-		Description:     record.Description,
-		Type:            types.MigrationType(record.Type),
-		FileName:        record.Filename,
-		FilePath:        record.Filepath,
-		Script:          record.Content,
-		Checksum:        record.Checksum,
-		Author:          record.Author,
-		ChangesetID:     record.ChangesetID,
-		Tags:            []string{}, // Initialize empty tags
-		Contexts:        contexts,
-		Labels:          labels,
-		Dependencies:    dependencies,
-		Preconditions:   preconditions,
-		State:           record.State,
-		ExecutedAt:      record.ExecutedAt,
-		ExecutedBy:      "", // Not stored in record
-		ExecutionTime:   time.Duration(record.ExecutionTime),
-		ErrorMessage:    record.ErrorMessage,
-		CanRollback:     record.CanRollback,
-		RollbackSQL:     record.RollbackSQL,
-		Rollback:        nil, // Initialize as nil
-		RolledBackAt:    record.RolledBackAt,
-		RolledBackBy:    "", // Not stored in record
-		RunAlways:       record.RunAlways,
-		RunOnChange:     record.RunOnChange,
-		FailOnError:     record.FailOnError,
-		Comments:        "", // Not stored in record
-		Metadata:        metadata,
-		CreatedAt:       record.CreatedAt,
-		UpdatedAt:       record.UpdatedAt,
+		ID:            record.ID,
+		Version:       record.Version,
+		Description:   record.Description,
+		Type:          types.MigrationType(record.Type),
+		FileName:      record.Filename,
+		FilePath:      record.Filepath,
+		Script:        record.Content,
+		Checksum:      record.Checksum,
+		Author:        record.Author,
+		ChangesetID:   record.ChangesetID,
+		Tags:          []string{}, // Initialize empty tags
+		Contexts:      contexts,
+		Labels:        labels,
+		Dependencies:  dependencies,
+		Preconditions: preconditions,
+		State:         record.State,
+		ExecutedAt:    record.ExecutedAt,
+		ExecutedBy:    "", // Not stored in record
+		ExecutionTime: time.Duration(record.ExecutionTime),
+		ErrorMessage:  record.ErrorMessage,
+		CanRollback:   record.CanRollback,
+		RollbackSQL:   record.RollbackSQL,
+		Rollback:      nil, // Initialize as nil
+		RolledBackAt:  record.RolledBackAt,
+		RolledBackBy:  "", // Not stored in record
+		RunAlways:     record.RunAlways,
+		RunOnChange:   record.RunOnChange,
+		FailOnError:   record.FailOnError,
+		Comments:      "", // Not stored in record
+		Metadata:      metadata,
+		CreatedAt:     record.CreatedAt,
+		UpdatedAt:     record.UpdatedAt,
 	}
-	
+
 	return migration, nil
 }
 
 // changelogToRecord converts ChangelogEntry to ChangelogRecord
 func (t *DatabaseMigrationTracker) changelogToRecord(entry *ChangelogEntry) *ChangelogRecord {
 	record := &ChangelogRecord{
-		MigrationID:   entry.MigrationID,
-		Operation:     entry.Operation,
-		Status:        entry.Status,
-		ExecutedBy:    entry.ExecutedBy,
-		ExecutedAt:    entry.ExecutedAt,
-		ErrorMessage:  entry.ErrorMessage,
-		CreatedAt:     time.Now(),
+		MigrationID:  entry.MigrationID,
+		Operation:    entry.Operation,
+		Status:       entry.Status,
+		ExecutedBy:   entry.ExecutedBy,
+		ExecutedAt:   entry.ExecutedAt,
+		ErrorMessage: entry.ErrorMessage,
+		CreatedAt:    time.Now(),
 	}
-	
+
 	// Convert execution time
 	if entry.ExecutionTime > 0 {
 		record.ExecutionTime = int64(entry.ExecutionTime)
 	}
-	
+
 	// Convert context and metadata to JSON
 	if entry.Context != nil {
 		if data, err := json.Marshal(entry.Context); err == nil {
 			record.Context = string(data)
 		}
 	}
-	
+
 	if entry.Metadata != nil {
 		if data, err := json.Marshal(entry.Metadata); err == nil {
 			record.Metadata = string(data)
 		}
 	}
-	
+
 	return record
 }
 
 // recordToChangelog converts ChangelogRecord to ChangelogEntry
 func (t *DatabaseMigrationTracker) recordToChangelog(record *ChangelogRecord) (*ChangelogEntry, error) {
 	entry := &ChangelogEntry{
-		MigrationID:   record.MigrationID,
-		Operation:     record.Operation,
-		Status:        record.Status,
-		ExecutedBy:    record.ExecutedBy,
-		ExecutedAt:    record.ExecutedAt,
-		ErrorMessage:  record.ErrorMessage,
+		MigrationID:  record.MigrationID,
+		Operation:    record.Operation,
+		Status:       record.Status,
+		ExecutedBy:   record.ExecutedBy,
+		ExecutedAt:   record.ExecutedAt,
+		ErrorMessage: record.ErrorMessage,
 	}
-	
+
 	// Convert execution time
 	if record.ExecutionTime > 0 {
 		entry.ExecutionTime = time.Duration(record.ExecutionTime)
 	}
-	
+
 	// Convert JSON to maps
 	if record.Context != "" {
 		if err := json.Unmarshal([]byte(record.Context), &entry.Context); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
 		}
 	}
-	
+
 	if record.Metadata != "" {
 		if err := json.Unmarshal([]byte(record.Metadata), &entry.Metadata); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 	}
-	
+
 	return entry, nil
 }
 
@@ -665,11 +668,11 @@ func (t *DatabaseMigrationTracker) recordToChangelog(record *ChangelogRecord) (*
 func (t *DatabaseMigrationTracker) ValidateChecksum(ctx context.Context, migration *types.Migration) (*ChecksumValidationResult, error) {
 	var record MigrationRecord
 	result := &ChecksumValidationResult{
-		MigrationID:      migration.ID,
-		ActualChecksum:   migration.Checksum,
-		ValidatedAt:      time.Now(),
+		MigrationID:    migration.ID,
+		ActualChecksum: migration.Checksum,
+		ValidatedAt:    time.Now(),
 	}
-	
+
 	err := t.db.WithContext(ctx).Table(t.tableName).Where("id = ?", migration.ID).First(&record).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -679,16 +682,16 @@ func (t *DatabaseMigrationTracker) ValidateChecksum(ctx context.Context, migrati
 		}
 		return nil, fmt.Errorf("failed to get migration record: %w", err)
 	}
-	
+
 	result.ExpectedChecksum = record.Checksum
 	result.IsValid = record.Checksum == migration.Checksum
-	
+
 	if result.IsValid {
 		result.Message = "Checksum validation passed"
 	} else {
 		result.Message = fmt.Sprintf("Checksum mismatch: expected %s, got %s", record.Checksum, migration.Checksum)
 	}
-	
+
 	return result, nil
 }
 
@@ -698,7 +701,7 @@ func (t *DatabaseMigrationTracker) ValidateChecksum(ctx context.Context, migrati
 func NewFileMigrationTracker(filePath string) *FileMigrationTracker {
 	return &FileMigrationTracker{
 		filePath: filePath,
-		data: &TrackerData{
+		data: &Data{
 			Migrations: make(map[string]*types.Migration),
 			Changelog:  make([]*ChangelogEntry, 0),
 			Metadata:   make(map[string]interface{}),
@@ -801,7 +804,7 @@ func (t *FileMigrationTracker) RecordMigrationSuccess(ctx context.Context, migra
 		// Note: types.MigrationRecord doesn't have Filename/Filepath/Author/ChangesetID fields
 		// These would need to be added to types.MigrationRecord if needed
 	}
-	
+
 	return t.RecordMigration(ctx, migrationObj)
 }
 
@@ -809,19 +812,19 @@ func (t *FileMigrationTracker) RecordMigrationSuccess(ctx context.Context, migra
 func (t *FileMigrationTracker) RecordMigrationFailure(ctx context.Context, migration types.MigrationRecord, errorMsg string) error {
 	now := time.Now()
 	migrationObj := &types.Migration{
-		ID:            migration.ID,
-		Version:       migration.Version,
-		Description:   migration.Description,
-		Script:        migration.Script,
-		Checksum:      migration.Checksum,
-		Type:          types.MigrationType(migration.Type),
-		State:         "failed",
-		ExecutedAt:    &now,
-		ErrorMessage:  errorMsg,
+		ID:           migration.ID,
+		Version:      migration.Version,
+		Description:  migration.Description,
+		Script:       migration.Script,
+		Checksum:     migration.Checksum,
+		Type:         types.MigrationType(migration.Type),
+		State:        "failed",
+		ExecutedAt:   &now,
+		ErrorMessage: errorMsg,
 		// Note: types.MigrationRecord doesn't have Filename/Filepath/Author/ChangesetID fields
 		// These would need to be added to types.MigrationRecord if needed
 	}
-	
+
 	return t.RecordMigration(ctx, migrationObj)
 }
 
@@ -1177,34 +1180,34 @@ func (t *FileMigrationTracker) copyMigrationForFile(migration *types.Migration) 
 	}
 
 	return &types.Migration{
-		ID:              migration.ID,
-		Version:         migration.Version,
-		Description:     migration.Description,
-		Type:            migration.Type,
-		FileName:        migration.FileName,
-		FilePath:        migration.FilePath,
-		Script:          migration.Script,
-		Checksum:        migration.Checksum,
-		Author:          migration.Author,
-		ChangesetID:     migration.ChangesetID,
-		Tags:            tags,
-		Contexts:        contexts,
-		Labels:          labels,
-		Dependencies:    dependencies,
-		Preconditions:   preconditions,
-		State:           migration.State,
-		RollbackSQL:     migration.RollbackSQL,
-		CanRollback:     migration.CanRollback,
-		RunAlways:       migration.RunAlways,
-		RunOnChange:     migration.RunOnChange,
-		FailOnError:     migration.FailOnError,
-		ExecutedAt:      migration.ExecutedAt,
-		RolledBackAt:    migration.RolledBackAt,
-		ExecutionTime:   migration.ExecutionTime,
-		ErrorMessage:    migration.ErrorMessage,
-		Metadata:        metadata,
-		CreatedAt:       migration.CreatedAt,
-		UpdatedAt:       migration.UpdatedAt,
+		ID:            migration.ID,
+		Version:       migration.Version,
+		Description:   migration.Description,
+		Type:          migration.Type,
+		FileName:      migration.FileName,
+		FilePath:      migration.FilePath,
+		Script:        migration.Script,
+		Checksum:      migration.Checksum,
+		Author:        migration.Author,
+		ChangesetID:   migration.ChangesetID,
+		Tags:          tags,
+		Contexts:      contexts,
+		Labels:        labels,
+		Dependencies:  dependencies,
+		Preconditions: preconditions,
+		State:         migration.State,
+		RollbackSQL:   migration.RollbackSQL,
+		CanRollback:   migration.CanRollback,
+		RunAlways:     migration.RunAlways,
+		RunOnChange:   migration.RunOnChange,
+		FailOnError:   migration.FailOnError,
+		ExecutedAt:    migration.ExecutedAt,
+		RolledBackAt:  migration.RolledBackAt,
+		ExecutionTime: migration.ExecutionTime,
+		ErrorMessage:  migration.ErrorMessage,
+		Metadata:      metadata,
+		CreatedAt:     migration.CreatedAt,
+		UpdatedAt:     migration.UpdatedAt,
 	}
 }
 
@@ -1242,7 +1245,7 @@ func (t *FileMigrationTracker) copyChangelogEntryForFile(entry *ChangelogEntry) 
 // DetectDrift detects drift in applied migrations by comparing checksums
 func (t *DatabaseMigrationTracker) DetectDrift(ctx context.Context) ([]*DriftDetectionResult, error) {
 	var results []*DriftDetectionResult
-	
+
 	// For now, we'll return an empty result set as drift detection is a placeholder
 	// In a real implementation, you'd:
 	// 1. Get all applied migrations from the database
@@ -1250,7 +1253,7 @@ func (t *DatabaseMigrationTracker) DetectDrift(ctx context.Context) ([]*DriftDet
 	// 3. Calculate their current checksums
 	// 4. Compare with stored checksums in the database
 	// 5. If different, create DriftDetectionResult and append to results
-	
+
 	return results, nil
 }
 
@@ -1261,7 +1264,7 @@ func (t *DatabaseMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		MigrationID: migration.ID,
 		ValidatedAt: time.Now(),
 	}
-	
+
 	err := t.db.WithContext(ctx).Table(t.tableName).Where("id = ?", migration.ID).First(&record).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -1272,9 +1275,9 @@ func (t *DatabaseMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		}
 		return nil, fmt.Errorf("failed to get migration record: %w", err)
 	}
-	
+
 	result.PreviousExecution = record.ExecutedAt
-	
+
 	// Check if migration is marked as always runnable
 	if record.RunAlways {
 		result.IsIdempotent = true
@@ -1282,7 +1285,7 @@ func (t *DatabaseMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		result.Message = "Migration marked as run_always, safe to re-run"
 		return result, nil
 	}
-	
+
 	// Check if migration should run on change
 	if record.RunOnChange && record.Checksum != migration.Checksum {
 		result.IsIdempotent = true
@@ -1290,7 +1293,7 @@ func (t *DatabaseMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		result.Message = "Migration marked as run_on_change and checksum differs, safe to re-run"
 		return result, nil
 	}
-	
+
 	// Check current state
 	switch record.State {
 	case "applied":
@@ -1310,7 +1313,7 @@ func (t *DatabaseMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		result.CanRerun = true
 		result.Message = "Migration in unknown state, assuming safe to run"
 	}
-	
+
 	return result, nil
 }
 
@@ -1328,7 +1331,7 @@ func NewInMemoryMigrationTracker() *InMemoryMigrationTracker {
 func (t *InMemoryMigrationTracker) RecordMigration(ctx context.Context, migration *types.Migration) error {
 	// Store migration
 	t.migrations[migration.ID] = migration
-	
+
 	// Record changelog entry
 	changelog := &ChangelogEntry{
 		MigrationID:   migration.ID,
@@ -1344,7 +1347,7 @@ func (t *InMemoryMigrationTracker) RecordMigration(ctx context.Context, migratio
 			"type":        migration.Type,
 		},
 	}
-	
+
 	return t.RecordChangelog(ctx, changelog)
 }
 
@@ -1372,15 +1375,15 @@ func (t *InMemoryMigrationTracker) RecordMigrationSuccess(ctx context.Context, m
 func (t *InMemoryMigrationTracker) RecordMigrationFailure(ctx context.Context, migration types.MigrationRecord, errorMsg string) error {
 	now := time.Now()
 	migrationObj := &types.Migration{
-		ID:            migration.ID,
-		Version:       migration.Version,
-		Description:   migration.Description,
-		Type:          types.MigrationType(migration.Type),
-		State:         "failed",
-		ExecutedAt:    &now,
-		Checksum:      migration.Checksum,
-		Script:        migration.Script,
-		ErrorMessage:  errorMsg,
+		ID:           migration.ID,
+		Version:      migration.Version,
+		Description:  migration.Description,
+		Type:         types.MigrationType(migration.Type),
+		State:        "failed",
+		ExecutedAt:   &now,
+		Checksum:     migration.Checksum,
+		Script:       migration.Script,
+		ErrorMessage: errorMsg,
 		// Note: types.MigrationRecord doesn't have FileName/FilePath/ExecutedBy fields
 		// These would need to be added to types.MigrationRecord if needed
 	}
@@ -1394,7 +1397,7 @@ func (t *InMemoryMigrationTracker) GetMigration(ctx context.Context, id string) 
 	if !exists {
 		return nil, fmt.Errorf("migration not found: %s", id)
 	}
-	
+
 	// Return a copy to prevent external modifications
 	return t.copyMigration(migration), nil
 }
@@ -1412,36 +1415,36 @@ func (t *InMemoryMigrationTracker) GetMigrationByVersion(ctx context.Context, ve
 			return t.copyMigration(migration), nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("migration not found: %s", version)
 }
 
 // GetAppliedMigrations retrieves all applied migrations
 func (t *InMemoryMigrationTracker) GetAppliedMigrations(ctx context.Context) ([]*types.Migration, error) {
 	var applied []*types.Migration
-	
+
 	for _, migration := range t.migrations {
 		if migration.State == "applied" {
 			applied = append(applied, t.copyMigration(migration))
 		}
 	}
-	
+
 	// Sort by execution time
 	// Note: In a real implementation, you'd want proper sorting
-	
+
 	return applied, nil
 }
 
 // GetPendingMigrations retrieves all pending migrations
 func (t *InMemoryMigrationTracker) GetPendingMigrations(ctx context.Context) ([]*types.Migration, error) {
 	var pending []*types.Migration
-	
+
 	for _, migration := range t.migrations {
 		if migration.State == "pending" {
 			pending = append(pending, t.copyMigration(migration))
 		}
 	}
-	
+
 	return pending, nil
 }
 
@@ -1451,29 +1454,29 @@ func (t *InMemoryMigrationTracker) IsMigrationApplied(ctx context.Context, id st
 	if !exists {
 		return false, nil
 	}
-	
+
 	return migration.State == "applied", nil
 }
 
 // GetMigrationHistory retrieves migration history with pagination
 func (t *InMemoryMigrationTracker) GetMigrationHistory(ctx context.Context, limit, offset int) ([]*types.Migration, error) {
-	var history []*types.Migration
-	
+	history := make([]*types.Migration, 0, len(t.migrations))
+
 	for _, migration := range t.migrations {
 		history = append(history, t.copyMigration(migration))
 	}
-	
+
 	// Apply pagination
 	start := offset
 	if start > len(history) {
 		start = len(history)
 	}
-	
+
 	end := start + limit
 	if end > len(history) {
 		end = len(history)
 	}
-	
+
 	return history[start:end], nil
 }
 
@@ -1491,7 +1494,7 @@ func (t *InMemoryMigrationTracker) RecordChangelog(ctx context.Context, entry *C
 		Context:       make(map[string]interface{}),
 		Metadata:      make(map[string]interface{}),
 	}
-	
+
 	// Copy context and metadata
 	for k, v := range entry.Context {
 		entryCopy.Context[k] = v
@@ -1499,7 +1502,7 @@ func (t *InMemoryMigrationTracker) RecordChangelog(ctx context.Context, entry *C
 	for k, v := range entry.Metadata {
 		entryCopy.Metadata[k] = v
 	}
-	
+
 	t.changelog = append(t.changelog, entryCopy)
 	return nil
 }
@@ -1511,18 +1514,18 @@ func (t *InMemoryMigrationTracker) GetChangelog(ctx context.Context, limit, offs
 	if start > len(t.changelog) {
 		start = len(t.changelog)
 	}
-	
+
 	end := start + limit
 	if end > len(t.changelog) {
 		end = len(t.changelog)
 	}
-	
+
 	// Return copies
 	result := make([]*ChangelogEntry, end-start)
 	for i := start; i < end; i++ {
 		result[i-start] = t.copyChangelogEntry(t.changelog[i])
 	}
-	
+
 	return result, nil
 }
 
@@ -1561,38 +1564,38 @@ func (t *InMemoryMigrationTracker) copyMigration(migration *types.Migration) *ty
 	}
 
 	return &types.Migration{
-		ID:              migration.ID,
-		Version:         migration.Version,
-		Description:     migration.Description,
-		Type:            migration.Type,
-		FileName:        migration.FileName,
-		FilePath:        migration.FilePath,
-		Script:          migration.Script,
-		Checksum:        migration.Checksum,
-		Author:          migration.Author,
-		ChangesetID:     migration.ChangesetID,
-		Tags:            tags,
-		Contexts:        contexts,
-		Labels:          labels,
-		Dependencies:    dependencies,
-		Preconditions:   preconditions,
-		State:           migration.State,
-		ExecutedAt:      migration.ExecutedAt,
-		ExecutedBy:      migration.ExecutedBy,
-		ExecutionTime:   migration.ExecutionTime,
-		ErrorMessage:    migration.ErrorMessage,
-		CanRollback:     migration.CanRollback,
-		RollbackSQL:     migration.RollbackSQL,
-		Rollback:        migration.Rollback,
-		RolledBackAt:    migration.RolledBackAt,
-		RolledBackBy:    migration.RolledBackBy,
-		RunAlways:       migration.RunAlways,
-		RunOnChange:     migration.RunOnChange,
-		FailOnError:     migration.FailOnError,
-		Comments:        migration.Comments,
-		Metadata:        metadata,
-		CreatedAt:       migration.CreatedAt,
-		UpdatedAt:       migration.UpdatedAt,
+		ID:            migration.ID,
+		Version:       migration.Version,
+		Description:   migration.Description,
+		Type:          migration.Type,
+		FileName:      migration.FileName,
+		FilePath:      migration.FilePath,
+		Script:        migration.Script,
+		Checksum:      migration.Checksum,
+		Author:        migration.Author,
+		ChangesetID:   migration.ChangesetID,
+		Tags:          tags,
+		Contexts:      contexts,
+		Labels:        labels,
+		Dependencies:  dependencies,
+		Preconditions: preconditions,
+		State:         migration.State,
+		ExecutedAt:    migration.ExecutedAt,
+		ExecutedBy:    migration.ExecutedBy,
+		ExecutionTime: migration.ExecutionTime,
+		ErrorMessage:  migration.ErrorMessage,
+		CanRollback:   migration.CanRollback,
+		RollbackSQL:   migration.RollbackSQL,
+		Rollback:      migration.Rollback,
+		RolledBackAt:  migration.RolledBackAt,
+		RolledBackBy:  migration.RolledBackBy,
+		RunAlways:     migration.RunAlways,
+		RunOnChange:   migration.RunOnChange,
+		FailOnError:   migration.FailOnError,
+		Comments:      migration.Comments,
+		Metadata:      metadata,
+		CreatedAt:     migration.CreatedAt,
+		UpdatedAt:     migration.UpdatedAt,
 	}
 }
 
@@ -1609,7 +1612,7 @@ func (t *InMemoryMigrationTracker) copyChangelogEntry(entry *ChangelogEntry) *Ch
 		Context:       make(map[string]interface{}),
 		Metadata:      make(map[string]interface{}),
 	}
-	
+
 	// Copy context and metadata
 	for k, v := range entry.Context {
 		entryCopy.Context[k] = v
@@ -1617,7 +1620,7 @@ func (t *InMemoryMigrationTracker) copyChangelogEntry(entry *ChangelogEntry) *Ch
 	for k, v := range entry.Metadata {
 		entryCopy.Metadata[k] = v
 	}
-	
+
 	return entryCopy
 }
 
@@ -1628,7 +1631,7 @@ func (t *InMemoryMigrationTracker) ValidateChecksum(ctx context.Context, migrati
 		ActualChecksum: migration.Checksum,
 		ValidatedAt:    time.Now(),
 	}
-	
+
 	if existing, exists := t.migrations[migration.ID]; exists {
 		result.ExpectedChecksum = existing.Checksum
 		result.IsValid = existing.Checksum == migration.Checksum
@@ -1641,17 +1644,17 @@ func (t *InMemoryMigrationTracker) ValidateChecksum(ctx context.Context, migrati
 		result.IsValid = true
 		result.Message = "Migration not found in memory, checksum validation skipped"
 	}
-	
+
 	return result, nil
 }
 
 // DetectDrift detects drift in applied migrations (in-memory implementation)
 func (t *InMemoryMigrationTracker) DetectDrift(ctx context.Context) ([]*DriftDetectionResult, error) {
 	var results []*DriftDetectionResult
-	
+
 	// In-memory implementation doesn't have file system access
 	// This would be implemented if file paths were tracked
-	
+
 	return results, nil
 }
 
@@ -1661,10 +1664,10 @@ func (t *InMemoryMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		MigrationID: migration.ID,
 		ValidatedAt: time.Now(),
 	}
-	
+
 	if existing, exists := t.migrations[migration.ID]; exists {
 		result.PreviousExecution = existing.ExecutedAt
-		
+
 		// Check if migration is marked as always runnable
 		if existing.RunAlways {
 			result.IsIdempotent = true
@@ -1672,7 +1675,7 @@ func (t *InMemoryMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 			result.Message = "Migration marked as run_always, safe to re-run"
 			return result, nil
 		}
-		
+
 		// Check if migration should run on change
 		if existing.RunOnChange && existing.Checksum != migration.Checksum {
 			result.IsIdempotent = true
@@ -1680,7 +1683,7 @@ func (t *InMemoryMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 			result.Message = "Migration marked as run_on_change and checksum differs, safe to re-run"
 			return result, nil
 		}
-		
+
 		// Check current state
 		switch existing.State {
 		case "applied":
@@ -1705,6 +1708,6 @@ func (t *InMemoryMigrationTracker) ValidateIdempotency(ctx context.Context, migr
 		result.CanRerun = true
 		result.Message = "Migration not previously executed, safe to run"
 	}
-	
+
 	return result, nil
 }

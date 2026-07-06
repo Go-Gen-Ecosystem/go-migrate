@@ -14,9 +14,9 @@ import (
 	"sort"
 	"time"
 
-	dbcore "github.com/go-gen-ecosystem/go-migrate/internal/database"
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/adapter"
+	adapters "github.com/go-gen-ecosystem/go-migrate/internal/components/adapter"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/executor"
+	dbcore "github.com/go-gen-ecosystem/go-migrate/internal/database"
 
 	loaderpkg "github.com/go-gen-ecosystem/go-migrate/internal/components/loader"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
@@ -44,11 +44,10 @@ type MigrationEngine struct {
 	tracker         types.MigrationTracker
 	backup          types.BackupManager
 	health          types.HealthChecker
-	monitor         types.Monitor
 	rollbackManager types.RollbackManager
 	initialized     bool
 	db              *gorm.DB
-	lockMgr         lock.LockManager
+	lockMgr         lock.Manager
 	logger          logging.ComponentLogger
 
 	// Builder-supplied component inputs (optional). Populated by the
@@ -345,7 +344,7 @@ func (e *MigrationEngine) Migrate(ctx context.Context, target string, dryRun boo
 				}
 				return nil
 			}
-			
+
 			pending, err := filterPendingMigrations(ctx, p.Migrations, eng.tracker, p.Target)
 			if err != nil {
 				return fmt.Errorf("failed to filter pending migrations: %w", err)
@@ -447,7 +446,7 @@ func (e *MigrationEngine) Rollback(ctx context.Context, steps int) error {
 // RollbackWithDryRun rolls back migrations with optional dry run mode
 func (e *MigrationEngine) RollbackWithDryRun(ctx context.Context, steps int, dryRun bool) error {
 	e.logger.WithContext(ctx).Debug("Starting rollback operation", "steps", steps, "dryRun", dryRun)
-	
+
 	if !e.initialized {
 		if err := e.Initialize(ctx); err != nil {
 			return fmt.Errorf("failed to initialize engine: %w", err)
@@ -482,10 +481,10 @@ func (e *MigrationEngine) RollbackWithDryRun(ctx context.Context, steps int, dry
 	e.logger.WithContext(ctx).Debug("Planning rollback", "requestedSteps", steps, "maxRollbackDepth", maxDepth, "actualSteps", minSteps)
 	toRollback := pickLast(applied, minSteps)
 	e.logger.WithContext(ctx).Info("Rollback plan created", "appliedMigrations", len(applied), "migrationsToRollback", len(toRollback))
-	
+
 	for i, m := range toRollback {
 		e.logger.WithContext(ctx).Debug("Rolling back migration", "step", i+1, "total", len(toRollback), "id", m.ID, "version", m.Version)
-		
+
 		// Execute the rollback SQL (or simulate in dry run mode)
 		if dryRun {
 			e.logger.WithContext(ctx).Info("DRY RUN - Would rollback migration", "id", m.ID)
@@ -495,7 +494,7 @@ func (e *MigrationEngine) RollbackWithDryRun(ctx context.Context, steps int, dry
 				return fmt.Errorf("failed to rollback %s: %w", m.ID, err)
 			}
 			e.logger.WithContext(ctx).Debug("Successfully executed rollback SQL", "id", m.ID)
-			
+
 			// Remove the migration record from the tracker
 			if err := e.tracker.RemoveMigration(ctx, m.ID); err != nil {
 				e.logger.WithContext(ctx).Error("Failed to remove migration from tracker", err)
@@ -636,7 +635,7 @@ func (e *MigrationEngine) Initialize(ctx context.Context) error {
 }
 
 // createDatabaseSpecificLockManager creates a lock manager optimized for the specific database type
-func (e *MigrationEngine) createDatabaseSpecificLockManager(db *gorm.DB, dryRun bool) lock.LockManager {
+func (e *MigrationEngine) createDatabaseSpecificLockManager(db *gorm.DB, dryRun bool) lock.Manager {
 	// Use in-memory lock manager for dry run mode to avoid database table access
 	if dryRun {
 		return lock.NewInMemoryLockManager()
@@ -647,7 +646,7 @@ func (e *MigrationEngine) createDatabaseSpecificLockManager(db *gorm.DB, dryRun 
 }
 
 // createDatabaseSpecificLockManagerFromDriver creates a lock manager based on driver string
-func createDatabaseSpecificLockManagerFromDriver(driver string, db *gorm.DB, dryRun bool) lock.LockManager {
+func createDatabaseSpecificLockManagerFromDriver(driver string, db *gorm.DB, dryRun bool) lock.Manager {
 	// Use in-memory lock manager for dry run mode to avoid database table access
 	if dryRun {
 		return lock.NewInMemoryLockManager()
@@ -660,7 +659,7 @@ func createDatabaseSpecificLockManagerFromDriver(driver string, db *gorm.DB, dry
 // Helper: filter pending migrations and optionally target up to specific version/id
 func filterPendingMigrations(ctx context.Context, migrations []*types.Migration, tracker types.MigrationTracker, target string) ([]*types.Migration, error) {
 	pending := make([]*types.Migration, 0, len(migrations))
-	
+
 	for i := range migrations {
 		m := migrations[i]
 		applied, err := tracker.IsMigrationApplied(ctx, m.ID)
@@ -669,15 +668,14 @@ func filterPendingMigrations(ctx context.Context, migrations []*types.Migration,
 		}
 		if !applied {
 			pending = append(pending, m)
-		} else {
 		}
-		
+
 		// Stop at target if specified
 		if target != "" && (m.Version == target || m.ID == target) {
 			break
 		}
 	}
-	
+
 	return pending, nil
 }
 
@@ -696,17 +694,14 @@ func (r *simpleDependencyResolver) ResolveDependencies(ctx context.Context, migr
 func planExecutionOrder(migrations []*types.Migration, cfg types.Config) ([]*types.Migration, error) {
 	// Sort migrations by version for execution order
 	sortByVersion(migrations)
-	
-	// Apply any additional ordering rules based on configuration
-	if cfg.Migration.ExecutionMode == "parallel" {
-		// For parallel execution, we might group migrations differently
-		// For now, keep sequential order
-	}
-	
+
+	// Parallel execution mode ("parallel") would group migrations differently,
+	// but for now all modes keep the sequential version order established above.
+
 	// Check for circular dependencies
 	visited := make(map[string]bool)
 	recursionStack := make(map[string]bool)
-	
+
 	for _, migration := range migrations {
 		if !visited[migration.ID] {
 			if hasCycle := checkCyclicDependencies(migration, migrations, visited, recursionStack); hasCycle {
@@ -714,14 +709,14 @@ func planExecutionOrder(migrations []*types.Migration, cfg types.Config) ([]*typ
 			}
 		}
 	}
-	
+
 	return migrations, nil
 }
 
 func checkCyclicDependencies(migration *types.Migration, allMigrations []*types.Migration, visited, recursionStack map[string]bool) bool {
 	visited[migration.ID] = true
 	recursionStack[migration.ID] = true
-	
+
 	// Check dependencies
 	for _, depID := range migration.Dependencies {
 		if !visited[depID] {
@@ -740,7 +735,7 @@ func checkCyclicDependencies(migration *types.Migration, allMigrations []*types.
 			return true // Cycle detected
 		}
 	}
-	
+
 	recursionStack[migration.ID] = false
 	return false
 }
@@ -755,18 +750,18 @@ func pickLast(applied []*types.Migration, n int) []*types.Migration {
 	if len(applied) == 0 {
 		return []*types.Migration{}
 	}
-	
+
 	start := len(applied) - n
 	if start < 0 {
 		start = 0
 	}
-	
+
 	// Return in reverse order for rollback (most recent first)
 	result := make([]*types.Migration, 0, n)
 	for i := len(applied) - 1; i >= start; i-- {
 		result = append(result, applied[i])
 	}
-	
+
 	return result
 }
 
@@ -821,12 +816,14 @@ type monitoringExecutor struct {
 
 func (m *monitoringExecutor) Execute(ctx context.Context, mig *types.Migration) error {
 	if m.monitor != nil {
-		m.monitor.RecordMigrationStart(ctx, mig.ID)
+		// Monitoring hooks are best-effort: a failed metric write must not
+		// abort or alter the migration execution itself.
+		_ = m.monitor.RecordMigrationStart(ctx, mig.ID)
 		start := time.Now()
 		defer func() {
 			duration := time.Since(start)
 			success := true // This would need to be determined based on actual execution result
-			m.monitor.RecordMigrationEnd(ctx, mig.ID, success, duration.Nanoseconds())
+			_ = m.monitor.RecordMigrationEnd(ctx, mig.ID, success, duration.Nanoseconds())
 		}()
 	}
 	return m.base.Execute(ctx, mig)
@@ -864,16 +861,16 @@ type PipelineContext struct {
 	Migrations []*types.Migration
 	Pending    []*types.Migration
 	Planned    []*types.Migration
-	
+
 	// Execution results
 	ExecutedMigrations []*types.Migration
 	ExecutionPlans     []*types.ExecutionPlan
-	
+
 	// Error tracking
 	HadError         bool
 	ValidationErrors []string
 	ExecutionErrors  []string
-	
+
 	// Optional integration state
 	BackupName string
 	HealthPre  map[string]interface{}
@@ -900,8 +897,13 @@ func NewStepFunc(name string, fn func(ctx context.Context, eng *MigrationEngine,
 	}
 }
 
+// Name returns the step's identifier.
 func (s StepFunc) Name() string { return s.name }
-func (s StepFunc) Run(ctx context.Context, eng *MigrationEngine, pctx *PipelineContext) error { return s.fn(ctx, eng, pctx) }
+
+// Run executes the step's wrapped function against the engine and pipeline context.
+func (s StepFunc) Run(ctx context.Context, eng *MigrationEngine, pctx *PipelineContext) error {
+	return s.fn(ctx, eng, pctx)
+}
 
 // Pipeline composes steps and runs them sequentially
 type Pipeline struct {

@@ -17,11 +17,11 @@ import (
 
 // EngineBackend defines the Bridge implementor interface for DB-specific
 // operations. This decouples engine orchestration from database-specific
-// implementations.
-//
-//nolint:interfacebloat // Cohesive Bridge contract for one DB backend
+// implementations. The methods form one cohesive backend contract
 // (lock/apply/rollback/status/capabilities); splitting would fragment a single
 // backend's responsibility across artificial seams.
+//
+//nolint:interfacebloat // Cohesive Bridge contract for one DB backend (see doc comment above).
 type EngineBackend interface {
 	// Lock management
 	AcquireLock(ctx context.Context) error
@@ -41,11 +41,12 @@ type EngineBackend interface {
 	SupportsRollback() bool
 }
 
-// MigrationEngineInterface defines the interface for migration engines.
-//
-//nolint:interfacebloat // Cohesive engine lifecycle+operations contract
+// MigrationEngineInterface defines the interface for migration engines. The methods
+// form one cohesive engine lifecycle+operations contract
 // (initialize/status/migrate/rollback/validate/info/close); these are the
 // engine's public verbs and belong together as one responsibility.
+//
+//nolint:interfacebloat // Cohesive engine lifecycle+operations contract (see doc comment above).
 type MigrationEngineInterface interface {
 	Status(ctx context.Context) (*MigrationStatus, error)
 	Migrate(ctx context.Context, target string, dryRun bool) error
@@ -83,15 +84,15 @@ type MigrationScript struct {
 
 // MigrationResult represents the result of a migration operation
 type MigrationResult struct {
-	Success          bool                    `json:"success"`
-	ExecutedCount    int                     `json:"executed_count"`
-	FailedCount      int                     `json:"failed_count"`
-	SkippedCount     int                     `json:"skipped_count"`
-	TotalTime        time.Duration           `json:"total_time"`
-	ExecutedScripts  []MigrationScript       `json:"executed_scripts"`
-	FailedScripts    []FailedMigrationScript `json:"failed_scripts"`
-	Warnings         []string                `json:"warnings"`
-	Errors           []string                `json:"errors"`
+	Success         bool                    `json:"success"`
+	ExecutedCount   int                     `json:"executed_count"`
+	FailedCount     int                     `json:"failed_count"`
+	SkippedCount    int                     `json:"skipped_count"`
+	TotalTime       time.Duration           `json:"total_time"`
+	ExecutedScripts []MigrationScript       `json:"executed_scripts"`
+	FailedScripts   []FailedMigrationScript `json:"failed_scripts"`
+	Warnings        []string                `json:"warnings"`
+	Errors          []string                `json:"errors"`
 }
 
 // DryRunResult represents the result of a dry run operation
@@ -116,13 +117,13 @@ type ValidationResult struct {
 
 // FailedMigrationScript represents a failed migration with error details
 type FailedMigrationScript struct {
-	Script       MigrationScript `json:"script"`
-	Error        string          `json:"error"`
-	ErrorCode    string          `json:"error_code"`
-	FailureTime  time.Time       `json:"failure_time"`
-	CanRetry     bool            `json:"can_retry"`
-	RetryCount   int             `json:"retry_count"`
-	StackTrace   string          `json:"stack_trace,omitempty"`
+	Script      MigrationScript `json:"script"`
+	Error       string          `json:"error"`
+	ErrorCode   string          `json:"error_code"`
+	FailureTime time.Time       `json:"failure_time"`
+	CanRetry    bool            `json:"can_retry"`
+	RetryCount  int             `json:"retry_count"`
+	StackTrace  string          `json:"stack_trace,omitempty"`
 }
 
 // LockInfo represents information about a migration lock
@@ -140,31 +141,31 @@ type LockInfo struct {
 
 // OrderedExecutionPlan represents a dependency-resolved execution plan
 type OrderedExecutionPlan struct {
-	Phases           []ExecutionPhase  `json:"phases"`
-	TotalMigrations  int               `json:"total_migrations"`
-	EstimatedTime    time.Duration     `json:"estimated_time"`
-	ParallelBatches  [][]MigrationScript `json:"parallel_batches"`
-	Dependencies     map[string][]string `json:"dependencies"`
-	Constraints      []DependencyConstraint `json:"constraints"`
+	Phases          []ExecutionPhase       `json:"phases"`
+	TotalMigrations int                    `json:"total_migrations"`
+	EstimatedTime   time.Duration          `json:"estimated_time"`
+	ParallelBatches [][]MigrationScript    `json:"parallel_batches"`
+	Dependencies    map[string][]string    `json:"dependencies"`
+	Constraints     []DependencyConstraint `json:"constraints"`
 }
 
 // ExecutionPhase represents a phase in the execution plan
 type ExecutionPhase struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Migrations   []MigrationScript `json:"migrations"`
-	CanParallel  bool              `json:"can_parallel"`
-	Dependencies []string          `json:"dependencies"`
-	EstimatedTime time.Duration    `json:"estimated_time"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Migrations    []MigrationScript `json:"migrations"`
+	CanParallel   bool              `json:"can_parallel"`
+	Dependencies  []string          `json:"dependencies"`
+	EstimatedTime time.Duration     `json:"estimated_time"`
 }
 
 // DependencyConstraint represents a constraint in dependency resolution
 type DependencyConstraint struct {
-	Type        string   `json:"type"` // hard, soft, conflict, optional
-	Source      string   `json:"source"`
-	Target      string   `json:"target"`
-	Description string   `json:"description"`
-	Weight      int      `json:"weight"`
+	Type        string `json:"type"` // hard, soft, conflict, optional
+	Source      string `json:"source"`
+	Target      string `json:"target"`
+	Description string `json:"description"`
+	Weight      int    `json:"weight"`
 }
 
 // CompoundMigration represents a group of migrations treated as a unit

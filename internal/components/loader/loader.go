@@ -678,13 +678,13 @@ func (v *SQLFileValidator) ExtractMetadata(content string) (map[string]interface
 
 // Helper functions
 
-// calculateChecksum calculates the MD5 checksum of migration content
+// CalculateChecksum calculates the MD5 checksum of migration content
 func CalculateChecksum(content string) string {
 	hash := md5.Sum([]byte(content))
 	return hex.EncodeToString(hash[:])
 }
 
-// generateMigrationID generates a deterministic migration ID based on filename
+// GenerateMigrationID generates a deterministic migration ID based on filename
 func GenerateMigrationID(filename string) string {
 	hash := md5.Sum([]byte(filename))
 	return hex.EncodeToString(hash[:])

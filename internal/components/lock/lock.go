@@ -46,8 +46,8 @@ type MigrationLock struct {
 	Metadata    string    `json:"metadata" gorm:"type:text"`
 }
 
-// LockManager interface for managing migration locks
-type LockManager interface {
+// Manager interface for managing migration locks
+type Manager interface {
 	AcquireLock(ctx context.Context, lockID string, timeout time.Duration) (*MigrationLock, error)
 	ReleaseLock(ctx context.Context, lock *MigrationLock) error
 	IsLocked(ctx context.Context, lockID string) (bool, error)
@@ -56,7 +56,7 @@ type LockManager interface {
 	CleanupExpiredLocks(ctx context.Context) error
 }
 
-// DatabaseLockManager implements LockManager using database storage
+// DatabaseLockManager implements Manager using database storage
 type DatabaseLockManager struct {
 	db        *gorm.DB
 	tableName string
@@ -64,13 +64,13 @@ type DatabaseLockManager struct {
 	mu        sync.RWMutex
 }
 
-// InMemoryLockManager implements LockManager using in-memory storage
+// InMemoryLockManager implements Manager using in-memory storage
 type InMemoryLockManager struct {
 	locks map[string]*MigrationLock
 	mu    sync.RWMutex
 }
 
-// FileLockManager implements LockManager using file-based locking
+// FileLockManager implements Manager using file-based locking
 type FileLockManager struct {
 	lockDir string
 	locks   map[string]*fileLock
@@ -84,8 +84,8 @@ type fileLock struct {
 	lock     *MigrationLock
 }
 
-// LockRecord represents a lock record in the database
-type LockRecord struct {
+// Record represents a lock record in the database
+type Record struct {
 	ID          string    `gorm:"primaryKey;column:id" json:"id"`
 	AcquiredBy  string    `gorm:"column:acquired_by" json:"acquired_by"`
 	AcquiredAt  time.Time `gorm:"column:acquired_at" json:"acquired_at"`
@@ -99,8 +99,8 @@ type LockRecord struct {
 	UpdatedAt   time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
-// TableName returns the table name for LockRecord
-func (LockRecord) TableName() string {
+// TableName returns the table name for Record
+func (Record) TableName() string {
 	return DefaultMigrationLockTableName
 }
 
@@ -137,7 +137,7 @@ func NewDatabaseLockManagerWithDryRun(db *gorm.DB, tableName string, dryRun bool
 
 // initializeTable creates the lock table
 func (l *DatabaseLockManager) initializeTable() error {
-	return l.db.AutoMigrate(&LockRecord{})
+	return l.db.AutoMigrate(&Record{})
 }
 
 // AcquireLock acquires a migration lock
@@ -158,8 +158,8 @@ func (l *DatabaseLockManager) AcquireLock(ctx context.Context, lockID string, ti
 	}
 
 	// Detect database dialect for SQLite-specific handling
-	dialect := l.db.Dialector.Name()
-	
+	dialect := l.db.Name()
+
 	// Use database transaction for atomic lock acquisition
 	var lock *MigrationLock
 	err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -167,7 +167,7 @@ func (l *DatabaseLockManager) AcquireLock(ctx context.Context, lockID string, ti
 		if dialect == "sqlite" {
 			return l.acquireLockSQLite(ctx, tx, lockID, timeout, &lock)
 		}
-		
+
 		// For other databases, use SELECT FOR UPDATE
 		return l.acquireLockWithSelectForUpdate(ctx, tx, lockID, timeout, &lock)
 	})
@@ -197,10 +197,10 @@ func (l *DatabaseLockManager) acquireLockSQLite(ctx context.Context, tx *gorm.DB
 		}
 
 		// First, try to clean up any expired locks
-		tx.Where("id = ? AND expires_at <= ?", lockID, time.Now()).Delete(&LockRecord{})
+		tx.Where("id = ? AND expires_at <= ?", lockID, time.Now()).Delete(&Record{})
 
 		// Try to insert a new lock record using SQLite's INSERT OR IGNORE
-		lockRecord := LockRecord{
+		lockRecord := Record{
 			ID:         lockID,
 			AcquiredBy: acquiredBy,
 			AcquiredAt: time.Now(),
@@ -244,7 +244,7 @@ func (l *DatabaseLockManager) acquireLockSQLite(ctx context.Context, tx *gorm.DB
 // acquireLockWithSelectForUpdate implements lock acquisition using SELECT FOR UPDATE for PostgreSQL/MySQL
 func (l *DatabaseLockManager) acquireLockWithSelectForUpdate(ctx context.Context, tx *gorm.DB, lockID string, timeout time.Duration, lock **MigrationLock) error {
 	// Use SELECT FOR UPDATE to prevent race conditions
-	var existingLock LockRecord
+	var existingLock Record
 	result := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ?", lockID).First(&existingLock)
 
 	if result.Error == nil {
@@ -284,11 +284,11 @@ func (l *DatabaseLockManager) ReleaseLock(ctx context.Context, lock *MigrationLo
 	// Use database transaction for atomic lock release
 	return l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Verify we own the lock with SELECT FOR UPDATE
-		var existingLock LockRecord
+		var existingLock Record
 		result := tx.Set("gorm:query_option", "FOR UPDATE").
 			Where("id = ? AND acquired_by = ?", lock.ID, lock.AcquiredBy).
 			First(&existingLock)
-		
+
 		if result.Error != nil {
 			if result.Error == gorm.ErrRecordNotFound {
 				return fmt.Errorf("lock not found or not owned by this process")
@@ -314,7 +314,7 @@ func (l *DatabaseLockManager) RefreshLock(ctx context.Context, lock *MigrationLo
 	// Update expiration time
 	newExpiresAt := time.Now().Add(timeout)
 
-	result := l.db.WithContext(ctx).Model(&LockRecord{}).
+	result := l.db.WithContext(ctx).Model(&Record{}).
 		Where("id = ? AND acquired_by = ?", lock.ID, lock.AcquiredBy).
 		Updates(map[string]interface{}{
 			"expires_at": newExpiresAt,
@@ -341,7 +341,7 @@ func (l *DatabaseLockManager) IsLocked(ctx context.Context, lockID string) (bool
 	defer l.mu.RUnlock()
 
 	var count int64
-	result := l.db.WithContext(ctx).Model(&LockRecord{}).
+	result := l.db.WithContext(ctx).Model(&Record{}).
 		Where("id = ? AND expires_at > ?", lockID, time.Now()).
 		Count(&count)
 
@@ -357,7 +357,7 @@ func (l *DatabaseLockManager) GetActiveLocks(ctx context.Context) ([]*MigrationL
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	var records []LockRecord
+	var records []Record
 	result := l.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&records)
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get active locks: %w", result.Error)
@@ -380,7 +380,7 @@ func (l *DatabaseLockManager) CleanupExpiredLocks(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	result := l.db.WithContext(ctx).Where("expires_at <= ?", time.Now()).Delete(&LockRecord{})
+	result := l.db.WithContext(ctx).Where("expires_at <= ?", time.Now()).Delete(&Record{})
 	if result.Error != nil {
 		return fmt.Errorf("failed to cleanup expired locks: %w", result.Error)
 	}
@@ -417,7 +417,7 @@ func (l *DatabaseLockManager) createNewLock(ctx context.Context, lockID string, 
 }
 
 // updateExistingLock updates an existing expired lock
-func (l *DatabaseLockManager) updateExistingLock(ctx context.Context, existingLock *LockRecord, timeout time.Duration) (*MigrationLock, error) {
+func (l *DatabaseLockManager) updateExistingLock(ctx context.Context, existingLock *Record, timeout time.Duration) (*MigrationLock, error) {
 	hostname, _ := os.Hostname()
 	processID := os.Getpid()
 
@@ -437,9 +437,9 @@ func (l *DatabaseLockManager) updateExistingLock(ctx context.Context, existingLo
 	return l.recordToLock(existingLock)
 }
 
-// lockToRecord converts MigrationLock to LockRecord
-func (l *DatabaseLockManager) lockToRecord(lock *MigrationLock) *LockRecord {
-	return &LockRecord{
+// lockToRecord converts MigrationLock to Record
+func (l *DatabaseLockManager) lockToRecord(lock *MigrationLock) *Record {
+	return &Record{
 		ID:          lock.ID,
 		AcquiredBy:  lock.AcquiredBy,
 		AcquiredAt:  lock.AcquiredAt,
@@ -453,8 +453,8 @@ func (l *DatabaseLockManager) lockToRecord(lock *MigrationLock) *LockRecord {
 	}
 }
 
-// recordToLock converts LockRecord to MigrationLock
-func (l *DatabaseLockManager) recordToLock(record *LockRecord) (*MigrationLock, error) {
+// recordToLock converts Record to MigrationLock
+func (l *DatabaseLockManager) recordToLock(record *Record) (*MigrationLock, error) {
 	return &MigrationLock{
 		ID:          record.ID,
 		AcquiredBy:  record.AcquiredBy,
@@ -654,8 +654,8 @@ func (l *FileLockManager) AcquireLock(ctx context.Context, lockID string, timeou
 			return nil, fmt.Errorf("lock %s is already acquired", lockID)
 		}
 
-		// Lock is expired, remove it
-		os.Remove(lockFilePath)
+		// Lock is expired, remove it (best effort; recreated below regardless).
+		_ = os.Remove(lockFilePath)
 	}
 
 	// Create lock file
@@ -663,7 +663,9 @@ func (l *FileLockManager) AcquireLock(ctx context.Context, lockID string, timeou
 	if err != nil {
 		return nil, fmt.Errorf("failed to create lock file: %w", err)
 	}
-	file.Close()
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close lock file: %w", err)
+	}
 
 	// Create lock object
 	hostname, _ := os.Hostname()
@@ -757,8 +759,8 @@ func (l *FileLockManager) IsLocked(ctx context.Context, lockID string) (bool, er
 
 	// Check if lock is expired (using default timeout of 30 minutes)
 	if time.Since(fileInfo.ModTime()) > 30*time.Minute {
-		// Lock is expired, remove it
-		os.Remove(lockFilePath)
+		// Lock is expired, remove it (best effort; staleness already reported).
+		_ = os.Remove(lockFilePath)
 		return false, nil
 	}
 
@@ -792,8 +794,8 @@ func (l *FileLockManager) CleanupExpiredLocks(ctx context.Context) error {
 	now := time.Now()
 	for lockID, fileLock := range l.locks {
 		if now.After(fileLock.lock.ExpiresAt) {
-			// Remove lock file
-			os.Remove(fileLock.filePath)
+			// Remove lock file (best effort; the in-memory entry is dropped regardless).
+			_ = os.Remove(fileLock.filePath)
 			delete(l.locks, lockID)
 		}
 	}
@@ -838,7 +840,7 @@ func (l *DatabaseLockManager) createNewLockInTx(tx *gorm.DB, lockID string, time
 }
 
 // updateExistingLockInTx updates an existing lock within a transaction
-func (l *DatabaseLockManager) updateExistingLockInTx(tx *gorm.DB, existingLock *LockRecord, timeout time.Duration) (*MigrationLock, error) {
+func (l *DatabaseLockManager) updateExistingLockInTx(tx *gorm.DB, existingLock *Record, timeout time.Duration) (*MigrationLock, error) {
 	hostname, _ := os.Hostname()
 	processID := os.Getpid()
 

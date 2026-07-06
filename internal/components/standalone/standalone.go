@@ -22,8 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// StandaloneMigrationTool represents a standalone migration tool
-type StandaloneMigrationTool struct {
+// Tool represents a standalone migration tool
+type Tool struct {
 	config        *types.StandaloneConfig
 	db            *gorm.DB
 	engine        *engine.MigrationEngine
@@ -33,8 +33,8 @@ type StandaloneMigrationTool struct {
 }
 
 // NewStandaloneMigrationToolFromPath creates a new standalone migration tool from config path
-func NewStandaloneMigrationToolFromPath(configPath string) (*StandaloneMigrationTool, error) {
-	tool := &StandaloneMigrationTool{
+func NewStandaloneMigrationToolFromPath(configPath string) (*Tool, error) {
+	tool := &Tool{
 		configManager: NewDefaultConfigManager(),
 		pluginManager: NewDefaultPluginManager(),
 		logger:        NewDefaultLogger(),
@@ -67,14 +67,14 @@ func NewStandaloneMigrationToolFromPath(configPath string) (*StandaloneMigration
 }
 
 // initializeLogger initializes the logger based on configuration
-func (t *StandaloneMigrationTool) initializeLogger() error {
+func (t *Tool) initializeLogger() error {
 	// Implementation would depend on chosen logging library
 	// For now, use a simple implementation
 	t.logger = NewDefaultLogger()
 	return nil
 }
 
-func (t *StandaloneMigrationTool) initializeMigrationEngine(dryRun bool) error {
+func (t *Tool) initializeMigrationEngine(dryRun bool) error {
 	engine, err := engine.NewMigrationEngineWithFactory(types.Config{
 		Database:  t.config.Database,
 		Migration: t.config.Migration,
@@ -88,7 +88,7 @@ func (t *StandaloneMigrationTool) initializeMigrationEngine(dryRun bool) error {
 }
 
 // loadPlugins loads migration plugins
-func (t *StandaloneMigrationTool) loadPlugins() error {
+func (t *Tool) loadPlugins() error {
 	// Initialize enabled plugins
 	for _, pluginConfig := range t.config.Plugins {
 		if !pluginConfig.Enabled {
@@ -112,7 +112,7 @@ func (t *StandaloneMigrationTool) loadPlugins() error {
 }
 
 // MigrateWithOptions runs migrations with options
-func (t *StandaloneMigrationTool) MigrateWithOptions(ctx context.Context, options MigrateOptions) error {
+func (t *Tool) MigrateWithOptions(ctx context.Context, options MigrateOptions) error {
 	t.logger.Info("Starting migration", "target", options.Target, "dry_run", options.DryRun)
 
 	// Create backup if enabled
@@ -135,7 +135,7 @@ func (t *StandaloneMigrationTool) MigrateWithOptions(ctx context.Context, option
 }
 
 // RollbackWithOptions rolls back migrations with options
-func (t *StandaloneMigrationTool) RollbackWithOptions(ctx context.Context, options RollbackOptions) error {
+func (t *Tool) RollbackWithOptions(ctx context.Context, options RollbackOptions) error {
 	t.logger.Info("Starting rollback", "target", options.Target, "dry_run", options.DryRun)
 
 	// Run rollback based on options
@@ -158,17 +158,17 @@ func (t *StandaloneMigrationTool) RollbackWithOptions(ctx context.Context, optio
 }
 
 // Status returns migration status
-func (t *StandaloneMigrationTool) Status(ctx context.Context) (*types.MigrationStatus, error) {
+func (t *Tool) Status(ctx context.Context) (*types.MigrationStatus, error) {
 	return t.engine.Status(ctx)
 }
 
 // ValidateWithPath validates migrations with path
-func (t *StandaloneMigrationTool) ValidateWithPath(ctx context.Context, path string) error {
+func (t *Tool) ValidateWithPath(ctx context.Context, path string) error {
 	return t.engine.Validate(ctx)
 }
 
 // createBackup creates a database backup
-func (t *StandaloneMigrationTool) createBackup(ctx context.Context) error {
+func (t *Tool) createBackup(ctx context.Context) error {
 	backupPath := filepath.Join("backups", fmt.Sprintf("backup_%s_%d.sql",
 		t.config.Database.Database, time.Now().Unix()))
 
@@ -184,11 +184,14 @@ func (t *StandaloneMigrationTool) createBackup(ctx context.Context) error {
 }
 
 // Close closes the standalone migration tool
-func (t *StandaloneMigrationTool) Close() error {
+func (t *Tool) Close() error {
 	if t.db != nil {
 		sqlDB, err := t.db.DB()
-		if err == nil {
-			sqlDB.Close()
+		if err != nil {
+			return fmt.Errorf("failed to obtain underlying database handle: %w", err)
+		}
+		if err := sqlDB.Close(); err != nil {
+			return fmt.Errorf("failed to close database connection: %w", err)
 		}
 	}
 	return nil
@@ -197,7 +200,7 @@ func (t *StandaloneMigrationTool) Close() error {
 // Interface compatibility methods for types.StandaloneMigrationTool
 
 // Migrate implements the types.MigrationTool interface
-func (t *StandaloneMigrationTool) Migrate(ctx context.Context, target string, dryRun bool) error {
+func (t *Tool) Migrate(ctx context.Context, target string, dryRun bool) error {
 	options := MigrateOptions{
 		Target: target,
 		DryRun: dryRun,
@@ -206,7 +209,7 @@ func (t *StandaloneMigrationTool) Migrate(ctx context.Context, target string, dr
 }
 
 // Rollback implements the types.MigrationTool interface
-func (t *StandaloneMigrationTool) Rollback(ctx context.Context, steps int) error {
+func (t *Tool) Rollback(ctx context.Context, steps int) error {
 	options := RollbackOptions{
 		Target: "", // Will rollback by steps
 	}
@@ -214,12 +217,12 @@ func (t *StandaloneMigrationTool) Rollback(ctx context.Context, steps int) error
 }
 
 // Validate implements the types.MigrationTool interface
-func (t *StandaloneMigrationTool) Validate(ctx context.Context) error {
+func (t *Tool) Validate(ctx context.Context) error {
 	return t.ValidateWithPath(ctx, "")
 }
 
 // Info implements the types.MigrationTool interface
-func (t *StandaloneMigrationTool) Info(ctx context.Context) (*types.MigrationInfo, error) {
+func (t *Tool) Info(ctx context.Context) (*types.MigrationInfo, error) {
 	return &types.MigrationInfo{
 		Version:        "1.0.0",
 		DatabaseType:   t.config.Database.Driver,
@@ -233,7 +236,7 @@ func (t *StandaloneMigrationTool) Info(ctx context.Context) (*types.MigrationInf
 }
 
 // LoadConfig implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) LoadConfig(configPath string) error {
+func (t *Tool) LoadConfig(configPath string) error {
 	config, err := t.configManager.LoadConfig(configPath)
 	if err != nil {
 		return err
@@ -243,32 +246,32 @@ func (t *StandaloneMigrationTool) LoadConfig(configPath string) error {
 }
 
 // SaveConfig implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) SaveConfig(configPath string) error {
+func (t *Tool) SaveConfig(configPath string) error {
 	return t.configManager.SaveConfig(t.config, configPath)
 }
 
 // GetConfig implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) GetConfig() *types.StandaloneConfig {
+func (t *Tool) GetConfig() *types.StandaloneConfig {
 	return t.config
 }
 
 // SetEnvironment implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) SetEnvironment(env *types.EnvironmentConfig) {
+func (t *Tool) SetEnvironment(env *types.EnvironmentConfig) {
 	t.config.Environment = *env
 }
 
 // GetEnvironment implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) GetEnvironment() *types.EnvironmentConfig {
+func (t *Tool) GetEnvironment() *types.EnvironmentConfig {
 	return &t.config.Environment
 }
 
 // SetPlugins implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) SetPlugins(plugins []types.PluginConfig) {
+func (t *Tool) SetPlugins(plugins []types.PluginConfig) {
 	t.config.Plugins = plugins
 }
 
 // GetPlugins implements the types.StandaloneMigrationTool interface
-func (t *StandaloneMigrationTool) GetPlugins() []types.PluginConfig {
+func (t *Tool) GetPlugins() []types.PluginConfig {
 	return t.config.Plugins
 }
 
@@ -470,7 +473,7 @@ func (m *DefaultPluginManager) GetPlugin(name string) (types.MigrationPlugin, er
 
 // ListPlugins lists all registered plugins
 func (m *DefaultPluginManager) ListPlugins() []string {
-	var names []string
+	names := make([]string, 0, len(m.plugins))
 	for name := range m.plugins {
 		names = append(names, name)
 	}

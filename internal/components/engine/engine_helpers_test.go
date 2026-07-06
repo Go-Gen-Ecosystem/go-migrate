@@ -117,10 +117,10 @@ func (r *recordingExecutor) GetExecutionPlan(ms []*types.Migration) ([]string, e
 
 // recordingMonitor records start/end calls made by the monitoring wrapper.
 type recordingMonitor struct {
-	starts  int
-	ends    int
-	lastID  string
-	lastOK  bool
+	starts int
+	ends   int
+	lastID string
+	lastOK bool
 }
 
 func (m *recordingMonitor) RecordMigrationStart(ctx context.Context, id string) error {

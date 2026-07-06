@@ -44,10 +44,10 @@ type MigrationTool interface {
 }
 
 // StandaloneMigrationTool provides additional methods for standalone migration tools.
+// The embedded MigrationTool verbs plus config/environment/plugin management form the
+// tool's single public surface, used together by the CLI.
 //
-//nolint:interfacebloat // Cohesive standalone-tool facade: the embedded
-// MigrationTool verbs plus config/environment/plugin management form the tool's
-// single public surface, used together by the CLI.
+//nolint:interfacebloat // Cohesive standalone-tool facade (see doc comment above).
 type StandaloneMigrationTool interface {
 	MigrationTool
 
@@ -74,11 +74,11 @@ type StandaloneMigrationTool interface {
 }
 
 // MigrationTracker defines the interface for tracking migration state.
+// History queries, success/failure recording, applied-version checks and
+// schema-table setup form one transactional responsibility (as in Flyway/Liquibase
+// trackers); splitting them would fracture that boundary.
 //
-//nolint:interfacebloat // Cohesive migration-state store: history queries,
-// success/failure recording, applied-version checks and schema-table setup form
-// one transactional responsibility (as in Flyway/Liquibase trackers); splitting
-// them would fracture that boundary.
+//nolint:interfacebloat // Cohesive migration-state store (see doc comment above).
 type MigrationTracker interface {
 	GetExecutedMigrations(ctx context.Context) ([]MigrationRecord, error)
 	GetFailedMigrations(ctx context.Context) ([]MigrationRecord, error)
@@ -227,12 +227,12 @@ type LoggingConfig struct {
 
 // FeatureConfig represents feature flags configuration
 type FeatureConfig struct {
-	AutoBackup        bool `json:"auto_backup" yaml:"auto_backup"`
-	DryRunMode        bool `json:"dry_run_mode" yaml:"dry_run_mode"`
-	ParallelExecution bool `json:"parallel_execution" yaml:"parallel_execution"`
-	HealthChecks      bool `json:"health_checks" yaml:"health_checks"`
-	Monitoring        bool `json:"monitoring" yaml:"monitoring"`
-	Notifications     bool `json:"notifications" yaml:"notifications"`
+	AutoBackup          bool `json:"auto_backup" yaml:"auto_backup"`
+	DryRunMode          bool `json:"dry_run_mode" yaml:"dry_run_mode"`
+	ParallelExecution   bool `json:"parallel_execution" yaml:"parallel_execution"`
+	HealthChecks        bool `json:"health_checks" yaml:"health_checks"`
+	Monitoring          bool `json:"monitoring" yaml:"monitoring"`
+	Notifications       bool `json:"notifications" yaml:"notifications"`
 	StateBasedMigration bool `json:"state_based_migration" yaml:"state_based_migration"`
 }
 
@@ -285,6 +285,7 @@ type RollbackInfo struct {
 	Automatic   bool          `json:"automatic"`
 }
 
+// Migration represents a single database migration and its full lifecycle metadata.
 type Migration struct {
 	// Basic identification
 	ID          string        `json:"id" gorm:"primaryKey"`
@@ -333,6 +334,7 @@ type Migration struct {
 	UpdatedAt time.Time         `json:"updated_at"`
 }
 
+// Supported migration source formats.
 const (
 	MigrationTypeSQL  MigrationType = "sql"
 	MigrationTypeGo   MigrationType = "go"
@@ -350,23 +352,25 @@ type ExecutionPlan struct {
 	Errors        []string      `json:"errors"`
 }
 
-// GoMigrate changeset types
+// ChangeSet represents a GoMigrate changeset: a named, ordered group of changes
+// with optional preconditions, rollback and execution controls.
 type ChangeSet struct {
-	ID            string                  `json:"id" yaml:"id" xml:"id,attr"`
-	Author        string                  `json:"author" yaml:"author" xml:"author,attr"`
-	Comment       string                  `json:"comment,omitempty" yaml:"comment,omitempty" xml:"comment,attr,omitempty"`
-	FilePath      string                  `json:"filePath" yaml:"filePath" xml:"filePath,attr"`
-	Context       string                  `json:"context,omitempty" yaml:"context,omitempty" xml:"context,attr,omitempty"`
-	Labels        string                  `json:"labels,omitempty" yaml:"labels,omitempty" xml:"labels,attr,omitempty"`
-	RunAlways     bool                    `json:"runAlways,omitempty" yaml:"runAlways,omitempty" xml:"runAlways,attr,omitempty"`
-	RunOnChange   bool                    `json:"runOnChange,omitempty" yaml:"runOnChange,omitempty" xml:"runOnChange,attr,omitempty"`
-	FailOnError   bool                    `json:"failOnError,omitempty" yaml:"failOnError,omitempty" xml:"failOnError,attr,omitempty"`
-	Changes       []Change                `json:"changes" yaml:"changes" xml:"changes"`
-	Rollback      *ChangeRollback         `json:"rollback,omitempty" yaml:"rollback,omitempty" xml:"rollback,omitempty"`
-	Preconditions []ChangePrecondition    `json:"preconditions,omitempty" yaml:"preconditions,omitempty" xml:"preconditions,omitempty"`
-	RunAfter      []string                `json:"runAfter,omitempty" yaml:"runAfter,omitempty" xml:"runAfter,omitempty"`
+	ID            string               `json:"id" yaml:"id" xml:"id,attr"`
+	Author        string               `json:"author" yaml:"author" xml:"author,attr"`
+	Comment       string               `json:"comment,omitempty" yaml:"comment,omitempty" xml:"comment,attr,omitempty"`
+	FilePath      string               `json:"filePath" yaml:"filePath" xml:"filePath,attr"`
+	Context       string               `json:"context,omitempty" yaml:"context,omitempty" xml:"context,attr,omitempty"`
+	Labels        string               `json:"labels,omitempty" yaml:"labels,omitempty" xml:"labels,attr,omitempty"`
+	RunAlways     bool                 `json:"runAlways,omitempty" yaml:"runAlways,omitempty" xml:"runAlways,attr,omitempty"`
+	RunOnChange   bool                 `json:"runOnChange,omitempty" yaml:"runOnChange,omitempty" xml:"runOnChange,attr,omitempty"`
+	FailOnError   bool                 `json:"failOnError,omitempty" yaml:"failOnError,omitempty" xml:"failOnError,attr,omitempty"`
+	Changes       []Change             `json:"changes" yaml:"changes" xml:"changes"`
+	Rollback      *ChangeRollback      `json:"rollback,omitempty" yaml:"rollback,omitempty" xml:"rollback,omitempty"`
+	Preconditions []ChangePrecondition `json:"preconditions,omitempty" yaml:"preconditions,omitempty" xml:"preconditions,omitempty"`
+	RunAfter      []string             `json:"runAfter,omitempty" yaml:"runAfter,omitempty" xml:"runAfter,omitempty"`
 }
 
+// Changelog represents a GoMigrate changelog document containing an ordered set of changesets.
 type Changelog struct {
 	XMLName           xml.Name    `json:"-" yaml:"-" xml:"databaseChangeLog"`
 	Xmlns             string      `json:"xmlns,omitempty" yaml:"xmlns,omitempty" xml:"xmlns,attr,omitempty"`
@@ -376,18 +380,19 @@ type Changelog struct {
 	ChangeSets        []ChangeSet `json:"changeSets,omitempty" yaml:"changeSets,omitempty" xml:"changeSets,omitempty"`
 }
 
+// ChangePrecondition represents a condition that must hold before a changeset is applied.
 type ChangePrecondition struct {
 	OnFail    string                 `json:"onFail,omitempty" yaml:"onFail,omitempty" xml:"onFail,attr,omitempty"`
 	OnError   string                 `json:"onError,omitempty" yaml:"onError,omitempty" xml:"onError,attr,omitempty"`
 	Condition map[string]interface{} `json:"condition" yaml:"condition" xml:",any"`
 }
 
+// ChangeRollback holds the SQL used to undo a changeset.
 type ChangeRollback struct {
 	SQL string `json:"sql,omitempty" yaml:"sql,omitempty" xml:",chardata"`
 }
 
-// RollbackResult represents the result of a rollback operation
-
+// RollbackResult represents the result of a rollback operation.
 type RollbackResult struct {
 	Success      bool          `json:"success"`
 	MigrationID  string        `json:"migration_id"`
@@ -483,23 +488,23 @@ type SelectiveRollbackResult struct {
 
 // RollbackImpactAnalysis contains analysis of rollback impact
 type RollbackImpactAnalysis struct {
-	MigrationID          string                  `json:"migration_id"`
-	ImpactLevel          string                  `json:"impact_level"`
-	AffectedMigrations   []*MigrationImpact      `json:"affected_migrations"`
-	AffectedTables       []string                `json:"affected_tables"`
-	AffectedColumns      []string                `json:"affected_columns"`
-	AffectedIndexes      []string                `json:"affected_indexes"`
-	AffectedConstraints  []string                `json:"affected_constraints"`
-	AffectedObjects      []string                `json:"affected_objects"`
-	DataLossRisk         bool                    `json:"data_loss_risk"`
-	EstimatedDataLoss    *DataLossEstimate       `json:"estimated_data_loss,omitempty"`
-	EstimatedDuration    time.Duration           `json:"estimated_duration"`
-	Conflicts            []*RollbackConflict     `json:"conflicts"`
-	Recommendations      []string                `json:"recommendations"`
-	Warnings             []string                `json:"warnings"`
-	CanProceedSafely     bool                    `json:"can_proceed_safely"`
-	RequiresManual       bool                    `json:"requires_manual"`
-	AnalyzedAt           time.Time               `json:"analyzed_at"`
+	MigrationID         string              `json:"migration_id"`
+	ImpactLevel         string              `json:"impact_level"`
+	AffectedMigrations  []*MigrationImpact  `json:"affected_migrations"`
+	AffectedTables      []string            `json:"affected_tables"`
+	AffectedColumns     []string            `json:"affected_columns"`
+	AffectedIndexes     []string            `json:"affected_indexes"`
+	AffectedConstraints []string            `json:"affected_constraints"`
+	AffectedObjects     []string            `json:"affected_objects"`
+	DataLossRisk        bool                `json:"data_loss_risk"`
+	EstimatedDataLoss   *DataLossEstimate   `json:"estimated_data_loss,omitempty"`
+	EstimatedDuration   time.Duration       `json:"estimated_duration"`
+	Conflicts           []*RollbackConflict `json:"conflicts"`
+	Recommendations     []string            `json:"recommendations"`
+	Warnings            []string            `json:"warnings"`
+	CanProceedSafely    bool                `json:"can_proceed_safely"`
+	RequiresManual      bool                `json:"requires_manual"`
+	AnalyzedAt          time.Time           `json:"analyzed_at"`
 }
 
 // MigrationImpact describes the impact of a migration rollback
@@ -516,39 +521,39 @@ type MigrationImpact struct {
 
 // DataLossEstimate estimates potential data loss
 type DataLossEstimate struct {
-	TablesAffected  []string          `json:"tables_affected"`
-	EstimatedRows   map[string]int64  `json:"estimated_rows"`
-	TotalEstimate   int64             `json:"total_estimate"`
-	RecoverableFrom string            `json:"recoverable_from,omitempty"`
-	BackupRequired  bool              `json:"backup_required"`
+	TablesAffected  []string         `json:"tables_affected"`
+	EstimatedRows   map[string]int64 `json:"estimated_rows"`
+	TotalEstimate   int64            `json:"total_estimate"`
+	RecoverableFrom string           `json:"recoverable_from,omitempty"`
+	BackupRequired  bool             `json:"backup_required"`
 }
 
 // RollbackConflict describes a conflict during rollback
 type RollbackConflict struct {
-	Type             string   `json:"type"` // dependency, data, schema, sequence
-	Severity         string   `json:"severity"` // low, medium, high, critical
-	Description      string   `json:"description"`
-	AffectedObjects  []string `json:"affected_objects"`
-	Resolution       string   `json:"resolution"`
-	CanAutoResolve   bool     `json:"can_auto_resolve"`
-	RequiresManual   bool     `json:"requires_manual"`
+	Type            string   `json:"type"`     // dependency, data, schema, sequence
+	Severity        string   `json:"severity"` // low, medium, high, critical
+	Description     string   `json:"description"`
+	AffectedObjects []string `json:"affected_objects"`
+	Resolution      string   `json:"resolution"`
+	CanAutoResolve  bool     `json:"can_auto_resolve"`
+	RequiresManual  bool     `json:"requires_manual"`
 }
 
 // RollbackTestResult contains the result of rollback testing
 type RollbackTestResult struct {
-	Success         bool                   `json:"success"`
-	Environment     string                 `json:"environment"`
-	TestedAt        time.Time              `json:"tested_at"`
-	Duration        time.Duration          `json:"duration"`
-	TestCases       []*RollbackTestCase    `json:"test_cases"`
-	TotalTests      int                    `json:"total_tests"`
-	PassedTests     int                    `json:"passed_tests"`
-	FailedTests     int                    `json:"failed_tests"`
-	SkippedTests    int                    `json:"skipped_tests"`
-	Coverage        float64                `json:"coverage"`
-	Errors          []string               `json:"errors"`
-	Warnings        []string               `json:"warnings"`
-	Recommendation  string                 `json:"recommendation"`
+	Success        bool                `json:"success"`
+	Environment    string              `json:"environment"`
+	TestedAt       time.Time           `json:"tested_at"`
+	Duration       time.Duration       `json:"duration"`
+	TestCases      []*RollbackTestCase `json:"test_cases"`
+	TotalTests     int                 `json:"total_tests"`
+	PassedTests    int                 `json:"passed_tests"`
+	FailedTests    int                 `json:"failed_tests"`
+	SkippedTests   int                 `json:"skipped_tests"`
+	Coverage       float64             `json:"coverage"`
+	Errors         []string            `json:"errors"`
+	Warnings       []string            `json:"warnings"`
+	Recommendation string              `json:"recommendation"`
 }
 
 // RollbackTestCase represents a single test case
@@ -565,30 +570,30 @@ type RollbackTestCase struct {
 
 // DependencyGraph represents migration dependencies
 type DependencyGraph struct {
-	RootMigration  *Migration             `json:"root_migration"`
-	Nodes          map[string]*DependencyNode `json:"nodes"`
-	Edges          []*DependencyEdge      `json:"edges"`
-	Levels         [][]string             `json:"levels"` // Migrations grouped by dependency level
-	MaxDepth       int                    `json:"max_depth"`
-	TotalNodes     int                    `json:"total_nodes"`
-	HasCycles      bool                   `json:"has_cycles"`
-	CyclicPaths    [][]string             `json:"cyclic_paths,omitempty"`
+	RootMigration *Migration                 `json:"root_migration"`
+	Nodes         map[string]*DependencyNode `json:"nodes"`
+	Edges         []*DependencyEdge          `json:"edges"`
+	Levels        [][]string                 `json:"levels"` // Migrations grouped by dependency level
+	MaxDepth      int                        `json:"max_depth"`
+	TotalNodes    int                        `json:"total_nodes"`
+	HasCycles     bool                       `json:"has_cycles"`
+	CyclicPaths   [][]string                 `json:"cyclic_paths,omitempty"`
 }
 
 // DependencyNode represents a node in the dependency graph
 type DependencyNode struct {
 	Migration      *Migration `json:"migration"`
-	Level          int        `json:"level"` // Distance from root
+	Level          int        `json:"level"`        // Distance from root
 	Dependencies   []string   `json:"dependencies"` // Migration IDs this depends on
-	Dependents     []string   `json:"dependents"` // Migration IDs that depend on this
+	Dependents     []string   `json:"dependents"`   // Migration IDs that depend on this
 	IsRollbackable bool       `json:"is_rollbackable"`
 }
 
 // DependencyEdge represents an edge in the dependency graph
 type DependencyEdge struct {
-	From       string `json:"from"` // Migration ID
-	To         string `json:"to"` // Migration ID
-	EdgeType   string `json:"edge_type"` // explicit, implicit, data
+	From       string `json:"from"`        // Migration ID
+	To         string `json:"to"`          // Migration ID
+	EdgeType   string `json:"edge_type"`   // explicit, implicit, data
 	IsBlocking bool   `json:"is_blocking"` // Whether this dependency blocks rollback
 }
 
@@ -1042,10 +1047,11 @@ type PluginManager interface {
 	ListPlugins() []string
 }
 
-// MigrationPlugin interface for migration plugins.
+// MigrationPlugin interface for migration plugins. The methods form a cohesive
+// plugin lifecycle contract (identity/init/hooks/teardown); a plugin implements
+// the whole set as one unit.
 //
-//nolint:interfacebloat // Cohesive plugin lifecycle contract
-// (identity/init/hooks/teardown); a plugin implements the whole set as one unit.
+//nolint:interfacebloat // Cohesive plugin lifecycle contract (see doc comment above).
 type MigrationPlugin interface {
 	Name() string
 	Version() string
@@ -1055,8 +1061,6 @@ type MigrationPlugin interface {
 	AfterMigration(ctx context.Context, migration *Migration, result *MigrationResult) error
 	OnError(ctx context.Context, migration *Migration, err error) error
 }
-
-
 
 // ChangelogEntryRecord represents a changelog entry record
 type ChangelogEntryRecord struct {

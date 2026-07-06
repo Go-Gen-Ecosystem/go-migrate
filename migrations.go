@@ -14,9 +14,12 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
-// Public type aliases for external use
+// Public re-export aliases forming the migration tool's API. Each aliases an
+// internal type; documentation for each lives on the underlying type in the
+// types and standalone packages.
+//
+//nolint:revive // Re-export aliases; docs live on the aliased types.
 type (
-	// Core types
 	Config                  = types.Config
 	Migration               = types.Migration
 	MigrationStatus         = types.MigrationStatus
@@ -28,24 +31,20 @@ type (
 	StandaloneConfig        = types.StandaloneConfig
 	MigrationRecord         = types.MigrationRecord
 
-	// Database and configuration types
-	DatabaseConfig   = types.DatabaseConfig
-	MigrationConfig  = types.MigrationConfig
-	LoggingConfig    = types.LoggingConfig
-	FeatureConfig    = types.FeatureConfig
+	DatabaseConfig  = types.DatabaseConfig
+	MigrationConfig = types.MigrationConfig
+	LoggingConfig   = types.LoggingConfig
+	FeatureConfig   = types.FeatureConfig
 
-	// Options types
 	MigrateOptions  = standalone.MigrateOptions
 	RollbackOptions = standalone.RollbackOptions
 
-	// Rollback types
-	RollbackResult              = types.RollbackResult
-	SelectiveRollbackResult     = types.SelectiveRollbackResult
-	RollbackImpactAnalysis      = types.RollbackImpactAnalysis
-	RollbackTestResult          = types.RollbackTestResult
-	DependencyGraph             = types.DependencyGraph
-	SelectiveRollbackOptions    = types.SelectiveRollbackOptions
-
+	RollbackResult           = types.RollbackResult
+	SelectiveRollbackResult  = types.SelectiveRollbackResult
+	RollbackImpactAnalysis   = types.RollbackImpactAnalysis
+	RollbackTestResult       = types.RollbackTestResult
+	DependencyGraph          = types.DependencyGraph
+	SelectiveRollbackOptions = types.SelectiveRollbackOptions
 )
 
 // NewMigrationTool creates a new migration tool instance
@@ -63,7 +62,7 @@ func NewStandaloneMigrationTool(config *StandaloneConfig) (StandaloneMigrationTo
 }
 
 // NewStandaloneMigrationToolFromPath creates a new standalone migration tool from config path
-func NewStandaloneMigrationToolFromPath(configPath string) (*standalone.StandaloneMigrationTool, error) {
+func NewStandaloneMigrationToolFromPath(configPath string) (*standalone.Tool, error) {
 	return standalone.NewStandaloneMigrationToolFromPath(configPath)
 }
 

@@ -20,7 +20,7 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
-// SQLServerLockManager implements LockManager for SQL Server databases
+// SQLServerLockManager implements Manager for SQL Server databases
 // Uses SQL Server application locks (sp_getapplock/sp_releaseapplock) for better performance and reliability
 type SQLServerLockManager struct {
 	db        *gorm.DB
@@ -53,7 +53,7 @@ func (l *SQLServerLockManager) AcquireLock(ctx context.Context, lockID string, t
 
 	// Try to acquire application lock using sp_getapplock
 	var result int
-	err := l.db.WithContext(ctx).Raw("EXEC sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = ?", 
+	err := l.db.WithContext(ctx).Raw("EXEC sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = ?",
 		l.lockName, timeoutMs).Scan(&result).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire SQL Server application lock: %w", err)
@@ -76,8 +76,11 @@ func (l *SQLServerLockManager) AcquireLock(ctx context.Context, lockID string, t
 
 	// Create lock record for visibility and tracking
 	if err := l.ensureLockTable(ctx); err != nil {
-		// Release application lock if table creation fails
-		l.releaseApplicationLock(ctx)
+		// Release application lock if table creation fails (best effort rollback).
+		if relErr := l.releaseApplicationLock(ctx); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release SQL Server application lock after table setup error", "error", relErr)
+		}
 		return nil, fmt.Errorf("failed to ensure lock table: %w", err)
 	}
 
@@ -91,8 +94,8 @@ func (l *SQLServerLockManager) AcquireLock(ctx context.Context, lockID string, t
 		ProcessID:   getProcessID(),
 		Operation:   "migration",
 		Description: "SQL Server migration lock",
-		Metadata:    serializeMetadata(map[string]interface{}{
-			"lock_mode": "Exclusive",
+		Metadata: serializeMetadata(map[string]interface{}{
+			"lock_mode":  "Exclusive",
 			"lock_owner": "Session",
 			"timeout_ms": timeoutMs,
 		}),
@@ -102,8 +105,11 @@ func (l *SQLServerLockManager) AcquireLock(ctx context.Context, lockID string, t
 	lockRecord := l.lockToRecord(lock)
 	err = l.db.WithContext(ctx).Table(l.tableName).Create(lockRecord).Error
 	if err != nil {
-		// Release application lock if record insertion fails
-		l.releaseApplicationLock(ctx)
+		// Release application lock if record insertion fails (best effort rollback).
+		if relErr := l.releaseApplicationLock(ctx); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release SQL Server application lock after record insert error", "error", relErr)
+		}
 		return nil, fmt.Errorf("failed to insert lock record: %w", err)
 	}
 
@@ -118,7 +124,7 @@ func (l *SQLServerLockManager) ReleaseLock(ctx context.Context, lock *MigrationL
 	}
 
 	// Remove lock record
-	err := l.db.WithContext(ctx).Table(l.tableName).Where("id = ?", lock.ID).Delete(&LockRecord{}).Error
+	err := l.db.WithContext(ctx).Table(l.tableName).Where("id = ?", lock.ID).Delete(&Record{}).Error
 	if err != nil {
 		// Continue with application lock release even if record deletion fails.
 		logging.GetComponentLogger("lock").Warn(
@@ -143,7 +149,7 @@ func (l *SQLServerLockManager) RefreshLock(ctx context.Context, lock *MigrationL
 	// Update the lock record
 	lock.ExpiresAt = time.Now().Add(timeout)
 	lockRecord := l.lockToRecord(lock)
-	
+
 	err := l.db.WithContext(ctx).Table(l.tableName).Where("id = ?", lock.ID).Updates(lockRecord).Error
 	if err != nil {
 		return fmt.Errorf("failed to refresh lock record: %w", err)
@@ -165,7 +171,7 @@ func (l *SQLServerLockManager) IsLocked(ctx context.Context, lockID string) (boo
 
 // GetActiveLocks returns all currently active locks
 func (l *SQLServerLockManager) GetActiveLocks(ctx context.Context) ([]*MigrationLock, error) {
-	var records []LockRecord
+	var records []Record
 	err := l.db.WithContext(ctx).Table(l.tableName).Where("expires_at > ?", time.Now()).Find(&records).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active locks: %w", err)
@@ -185,7 +191,7 @@ func (l *SQLServerLockManager) GetActiveLocks(ctx context.Context) ([]*Migration
 
 // CleanupExpiredLocks removes expired lock records
 func (l *SQLServerLockManager) CleanupExpiredLocks(ctx context.Context) error {
-	err := l.db.WithContext(ctx).Table(l.tableName).Where("expires_at <= ?", time.Now()).Delete(&LockRecord{}).Error
+	err := l.db.WithContext(ctx).Table(l.tableName).Where("expires_at <= ?", time.Now()).Delete(&Record{}).Error
 	if err != nil {
 		return fmt.Errorf("failed to cleanup expired locks: %w", err)
 	}
@@ -220,7 +226,7 @@ func (l *SQLServerLockManager) ensureLockTable(ctx context.Context) error {
 			WHERE TABLE_NAME = ? AND TABLE_SCHEMA = SCHEMA_NAME()
 		) THEN 1 ELSE 0 END
 	`, l.tableName).Scan(&exists).Error
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to check if lock table exists: %w", err)
 	}
@@ -253,9 +259,9 @@ func (l *SQLServerLockManager) ensureLockTable(ctx context.Context) error {
 	return nil
 }
 
-// lockToRecord converts a MigrationLock to a LockRecord
-func (l *SQLServerLockManager) lockToRecord(lock *MigrationLock) *LockRecord {
-	return &LockRecord{
+// lockToRecord converts a MigrationLock to a Record
+func (l *SQLServerLockManager) lockToRecord(lock *MigrationLock) *Record {
+	return &Record{
 		ID:          lock.ID,
 		AcquiredBy:  lock.AcquiredBy,
 		AcquiredAt:  lock.AcquiredAt,
@@ -270,8 +276,8 @@ func (l *SQLServerLockManager) lockToRecord(lock *MigrationLock) *LockRecord {
 	}
 }
 
-// recordToLock converts a LockRecord to a MigrationLock
-func (l *SQLServerLockManager) recordToLock(record *LockRecord) (*MigrationLock, error) {
+// recordToLock converts a Record to a MigrationLock
+func (l *SQLServerLockManager) recordToLock(record *Record) (*MigrationLock, error) {
 	return &MigrationLock{
 		ID:          record.ID,
 		AcquiredBy:  record.AcquiredBy,
@@ -306,12 +312,12 @@ func serializeMetadata(metadata map[string]interface{}) string {
 	if metadata == nil {
 		return "{}"
 	}
-	
+
 	data, err := json.Marshal(metadata)
 	if err != nil {
 		return "{}"
 	}
-	
+
 	return string(data)
 }
 
@@ -320,12 +326,12 @@ func deserializeMetadata(data string) (map[string]interface{}, error) {
 	if data == "" {
 		return make(map[string]interface{}), nil
 	}
-	
+
 	var metadata map[string]interface{}
 	err := json.Unmarshal([]byte(data), &metadata)
 	if err != nil {
 		return make(map[string]interface{}), err
 	}
-	
+
 	return metadata, nil
 }

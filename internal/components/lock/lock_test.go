@@ -41,7 +41,7 @@ func newGormDB(t *testing.T) *gorm.DB {
 	}
 	// Keep a single connection so the shared in-memory DB stays alive.
 	sqlDB.SetMaxOpenConns(1)
-	t.Cleanup(func() { sqlDB.Close() })
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
 }
 
@@ -372,7 +372,7 @@ func TestDatabaseLock_GetActiveLocksAndCleanup(t *testing.T) {
 	}
 
 	// Insert an already-expired lock row directly, then clean it up.
-	expired := &LockRecord{
+	expired := &Record{
 		ID:        "expired",
 		ExpiresAt: time.Now().Add(-time.Hour),
 		CreatedAt: time.Now(),
@@ -423,7 +423,7 @@ func TestDatabaseLock_ExpiredLockReacquired(t *testing.T) {
 	mgr := NewDatabaseLockManager(db, "")
 
 	// Seed an expired lock row for the id we want to acquire.
-	if err := db.WithContext(ctx).Create(&LockRecord{
+	if err := db.WithContext(ctx).Create(&Record{
 		ID:        "k",
 		ExpiresAt: time.Now().Add(-time.Hour),
 		CreatedAt: time.Now().Add(-2 * time.Hour),
@@ -461,7 +461,7 @@ func TestDatabaseLock_HelperConversionsAndCreateUpdate(t *testing.T) {
 	}
 
 	// updateExistingLock refreshes an existing expired row in place.
-	var rec LockRecord
+	var rec Record
 	if err := db.WithContext(ctx).Where("id = ?", "H1").First(&rec).Error; err != nil {
 		t.Fatalf("load record: %v", err)
 	}
@@ -492,7 +492,7 @@ func newSQLDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 

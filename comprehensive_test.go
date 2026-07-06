@@ -262,8 +262,8 @@ func createTestDatabase(t testing.TB) (*sql.DB, func()) {
 	require.NoError(t, err, "Should ping test database")
 
 	cleanup := func() {
-		db.Close()
-		os.Remove(tempFile)
+		_ = db.Close()
+		_ = os.Remove(tempFile)
 	}
 
 	return db, cleanup
@@ -278,9 +278,9 @@ func createTestGormDatabase(t testing.TB) *gorm.DB {
 
 	t.Cleanup(func() {
 		if sqlDB, derr := gdb.DB(); derr == nil {
-			sqlDB.Close()
+			_ = sqlDB.Close()
 		}
-		os.Remove(tempFile)
+		_ = os.Remove(tempFile)
 	})
 
 	return gdb

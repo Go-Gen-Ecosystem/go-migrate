@@ -77,11 +77,11 @@ func (f *fakeTracker) RecordMigrationSuccess(context.Context, types.MigrationRec
 func (f *fakeTracker) RecordMigrationFailure(context.Context, types.MigrationRecord, string) error {
 	return nil
 }
-func (f *fakeTracker) RemoveMigration(context.Context, string) error   { return nil }
-func (f *fakeTracker) IsLocked(context.Context) (bool, error)          { return false, nil }
-func (f *fakeTracker) AcquireLock(context.Context) error               { return nil }
-func (f *fakeTracker) ReleaseLock(context.Context) error               { return nil }
-func (f *fakeTracker) EnsureSchemaTable(context.Context) error         { return nil }
+func (f *fakeTracker) RemoveMigration(context.Context, string) error { return nil }
+func (f *fakeTracker) IsLocked(context.Context) (bool, error)        { return false, nil }
+func (f *fakeTracker) AcquireLock(context.Context) error             { return nil }
+func (f *fakeTracker) ReleaseLock(context.Context) error             { return nil }
+func (f *fakeTracker) EnsureSchemaTable(context.Context) error       { return nil }
 func (f *fakeTracker) GetCurrentVersion(context.Context) (string, error) {
 	return "", nil
 }
@@ -159,7 +159,7 @@ func TestSyntaxValidator_DetailedWarnings(t *testing.T) {
 	result := v.ValidateMigrationDetailed(context.Background(), m)
 	require.NotNil(t, result)
 
-	var codes []string
+	codes := make([]string, 0, len(result.Warnings))
 	for _, w := range result.Warnings {
 		codes = append(codes, w.Code)
 	}
@@ -218,7 +218,7 @@ func TestSecurityValidator_DetailedHardcodedPassword(t *testing.T) {
 	result := v.ValidateMigrationDetailed(context.Background(), m)
 	require.NotNil(t, result)
 
-	var codes []string
+	codes := make([]string, 0, len(result.Issues))
 	for _, issue := range result.Issues {
 		codes = append(codes, issue.Code)
 	}

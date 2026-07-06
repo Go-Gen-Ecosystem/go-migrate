@@ -16,7 +16,7 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
-// MySQLLockManager implements LockManager for MySQL databases
+// MySQLLockManager implements Manager for MySQL databases
 // Uses MySQL GET_LOCK() function for named locks
 type MySQLLockManager struct {
 	db        *sql.DB
@@ -26,7 +26,7 @@ type MySQLLockManager struct {
 }
 
 // NewMySQLLockManager creates a new MySQL lock manager
-// Note: This is a legacy implementation that doesn't match the current LockManager interface
+// Note: This is a legacy implementation that doesn't match the current Manager interface
 // Use NewDatabaseLockManager instead for consistent behavior
 func NewMySQLLockManager(db *sql.DB, tableName string) *MySQLLockManager {
 	return &MySQLLockManager{
@@ -55,8 +55,11 @@ func (l *MySQLLockManager) AcquireLock() error {
 
 	// Also create a record in the lock table for visibility
 	if err := l.ensureLockTable(); err != nil {
-		// Release named lock if table creation fails
-		l.releaseNamedLock()
+		// Release named lock if table creation fails (best effort rollback).
+		if relErr := l.releaseNamedLock(); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release MySQL named lock after table setup error", "error", relErr)
+		}
 		return fmt.Errorf("failed to ensure lock table: %w", err)
 	}
 
@@ -72,8 +75,11 @@ func (l *MySQLLockManager) AcquireLock() error {
 
 	_, err = l.db.Exec(query, fmt.Sprintf("mysql_%d", time.Now().UnixNano()), "migration_engine")
 	if err != nil {
-		// Release named lock if record insertion fails
-		l.releaseNamedLock()
+		// Release named lock if record insertion fails (best effort rollback).
+		if relErr := l.releaseNamedLock(); relErr != nil {
+			logging.GetComponentLogger("lock").Warn(
+				"failed to release MySQL named lock after record insert error", "error", relErr)
+		}
 		return fmt.Errorf("failed to insert lock record: %w", err)
 	}
 

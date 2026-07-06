@@ -19,10 +19,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// Type aliases for compatibility
+// Migration is an alias for types.Migration, kept for package-local compatibility.
 type Migration = types.Migration
+
+// MigrationConfig is an alias for types.MigrationConfig.
 type MigrationConfig = types.MigrationConfig
+
+// MigrationExecutor is an alias for types.MigrationExecutor.
 type MigrationExecutor = types.MigrationExecutor
+
+// ExecutionPlan is an alias for types.ExecutionPlan.
 type ExecutionPlan = types.ExecutionPlan
 
 // Migration states
@@ -74,7 +80,7 @@ func NewDryRunMigrationExecutor(executor MigrationExecutor) *DryRunMigrationExec
 	// Try to detect database dialect from the underlying executor
 	dbDialect := "unknown"
 	if dbExec, ok := executor.(*DatabaseMigrationExecutor); ok && dbExec.db != nil {
-		dbDialect = dbExec.db.Dialector.Name()
+		dbDialect = dbExec.db.Name()
 	}
 
 	return &DryRunMigrationExecutor{

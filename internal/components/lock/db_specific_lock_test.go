@@ -32,7 +32,7 @@ func TestMySQLLock_AcquireSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT GET_LOCK(?, 0)")).
 		WithArgs("migration_lock").
@@ -56,7 +56,7 @@ func TestMySQLLock_AcquireSuccess(t *testing.T) {
 
 func TestMySQLLock_AcquireContention(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// GET_LOCK returns 0 -> already held by another process.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT GET_LOCK(?, 0)")).
@@ -74,7 +74,7 @@ func TestMySQLLock_AcquireContention(t *testing.T) {
 
 func TestMySQLLock_ReleaseNotAcquiredIsNoOp(t *testing.T) {
 	db, _, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mgr := NewMySQLLockManager(db, "migration_locks")
 	if err := mgr.ReleaseLock(); err != nil {
 		t.Errorf("ReleaseLock without acquire should be a no-op: %v", err)
@@ -83,7 +83,7 @@ func TestMySQLLock_ReleaseNotAcquiredIsNoOp(t *testing.T) {
 
 func TestMySQLLock_ReleaseSuccess(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mgr := NewMySQLLockManager(db, "migration_locks")
 	mgr.acquired = true
@@ -107,7 +107,7 @@ func TestMySQLLock_ReleaseSuccess(t *testing.T) {
 
 func TestMySQLLock_IsLocked(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// IS_FREE_LOCK returns 0 -> lock in use; table count confirms it.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT IS_FREE_LOCK(?)")).
@@ -128,7 +128,7 @@ func TestMySQLLock_IsLocked(t *testing.T) {
 
 func TestMySQLLock_IsFree(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// IS_FREE_LOCK returns 1 -> free.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT IS_FREE_LOCK(?)")).
@@ -149,7 +149,7 @@ func TestMySQLLock_IsFree(t *testing.T) {
 
 func TestPostgresLock_AcquireSuccess(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT pg_try_advisory_lock($1)")).
 		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
@@ -172,7 +172,7 @@ func TestPostgresLock_AcquireSuccess(t *testing.T) {
 
 func TestPostgresLock_AcquireContention(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT pg_try_advisory_lock($1)")).
 		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(false))
@@ -185,7 +185,7 @@ func TestPostgresLock_AcquireContention(t *testing.T) {
 
 func TestPostgresLock_IsLockedWhenAdvisoryHeld(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// pg_try_advisory_lock returns false -> someone else holds it.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT pg_try_advisory_lock($1)")).
@@ -205,7 +205,7 @@ func TestPostgresLock_IsLockedWhenAdvisoryHeld(t *testing.T) {
 
 func TestPostgresLock_IsLockedWhenFree(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// We could acquire it -> it was free; manager releases immediately.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT pg_try_advisory_lock($1)")).
@@ -253,10 +253,10 @@ func newSQLServerGormDB(t *testing.T, tableName string) *gorm.DB {
 	}
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
-	t.Cleanup(func() { sqlDB.Close() })
+	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	// Create the lock table using a sqlite-compatible schema matching LockRecord.
-	if err := db.Table(tableName).AutoMigrate(&LockRecord{}); err != nil {
+	// Create the lock table using a sqlite-compatible schema matching Record.
+	if err := db.Table(tableName).AutoMigrate(&Record{}); err != nil {
 		t.Fatalf("automigrate lock table %q: %v", tableName, err)
 	}
 	return db
