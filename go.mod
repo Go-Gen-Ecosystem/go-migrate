@@ -3,6 +3,7 @@ module github.com/go-gen-ecosystem/go-migrate
 go 1.26.4
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/go-sql-driver/mysql v1.10.0
@@ -21,7 +22,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/golang-sql/civil v0.0.0-20190719163853-cb61b32ac6fe // indirect
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
