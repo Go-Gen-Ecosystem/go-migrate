@@ -18,12 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/backup"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/dialect"
 	migrationErrors "github.com/go-gen-ecosystem/go-migrate/internal/components/errors"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/factory"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/health"
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/observability"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -45,7 +43,6 @@ func TestMigrationSystemIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	migrationsDir := filepath.Join(tmpDir, "migrations")
-	backupDir := filepath.Join(tmpDir, "backups")
 
 	// Create migrations directory
 	err := os.MkdirAll(migrationsDir, 0755)
@@ -137,40 +134,6 @@ func TestMigrationSystemIntegration(t *testing.T) {
 		}
 	})
 
-	// Test backup functionality
-	t.Run("BackupAndRestore", func(t *testing.T) {
-		backupFactory := backup.NewBackupManagerFactory()
-		backupManager, err := backupFactory.CreateManager("sqlite3", db, nil, &backup.BackupConfig{
-			BackupDir:     backupDir,
-			Compression:   false,
-			IncludeData:   true,
-			IncludeSchema: true,
-		})
-		if err != nil {
-			t.Fatalf("failed to create backup manager: %v", err)
-		}
-
-		// Create backup
-		backupInfo, err := backupManager.CreateBackup(ctx, &backup.BackupConfig{
-			BackupDir:     backupDir,
-			Compression:   false,
-			IncludeData:   true,
-			IncludeSchema: true,
-		})
-		if err != nil {
-			t.Fatalf("backup creation failed: %v", err)
-		}
-
-		if backupInfo == nil {
-			t.Fatal("backup info should not be nil")
-		}
-
-		// Validate backup
-		err = backupManager.ValidateBackup(ctx, backupInfo)
-		if err != nil {
-			t.Fatalf("backup validation failed: %v", err)
-		}
-	})
 }
 
 // TestMigrationSystemWithErrors tests error handling and recovery
@@ -409,58 +372,6 @@ func TestMigrationSystemPerformance(t *testing.T) {
 }
 
 // TestMigrationSystemObservability tests observability features
-func TestMigrationSystemObservability(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-	migrationsDir := filepath.Join(tmpDir, "migrations")
-
-	// Create migrations directory
-	err := os.MkdirAll(migrationsDir, 0755)
-	if err != nil {
-		t.Fatalf("failed to create migrations directory: %v", err)
-	}
-
-	// Create test migrations
-	createTestMigrations(t, migrationsDir)
-
-	// Create database
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Create observability manager
-	obsManager := observability.NewObservabilityManager(
-		&observability.NoOpMetricsCollector{},
-		observability.NewNoOpTracingManager(),
-		observability.NewSlogLogger(),
-	)
-
-	// Test observability integration
-	t.Run("ObservabilityIntegration", func(t *testing.T) {
-		// Get metrics snapshot
-		metricsSnapshot, err := obsManager.GetMetrics(context.Background())
-		if err != nil {
-			t.Errorf("failed to get metrics: %v", err)
-		}
-		if metricsSnapshot == nil {
-			t.Error("metrics snapshot should not be nil")
-		}
-
-		// Get logger
-		logger := obsManager.Logger()
-		if logger == nil {
-			t.Error("logger should not be nil")
-		}
-
-		// Test logging
-		logger.Info("test migration completed")
-		logger.Debug("debug message")
-		logger.Warn("warning message")
-	})
-}
-
 // TestMigrationSystemDialectSupport tests database dialect support
 func TestMigrationSystemDialectSupport(t *testing.T) {
 	// Test dialect manager

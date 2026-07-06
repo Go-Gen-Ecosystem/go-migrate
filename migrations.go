@@ -9,7 +9,6 @@
 package migrations
 
 import (
-	"github.com/go-gen-ecosystem/go-migrate/governance"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/standalone"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
@@ -47,10 +46,6 @@ type (
 	DependencyGraph             = types.DependencyGraph
 	SelectiveRollbackOptions    = types.SelectiveRollbackOptions
 
-	// Governance types (imported from governance package)
-	ApprovalRequest             = governance.ApprovalRequest
-	ComplianceReport            = governance.ComplianceReport
-	PolicyValidationResult      = governance.PolicyResult
 )
 
 // NewMigrationTool creates a new migration tool instance
