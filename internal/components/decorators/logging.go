@@ -10,7 +10,6 @@ package decorators
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -56,7 +55,7 @@ func (d *LoggingDecorator) Connect(ctx context.Context, config types.DatabaseCon
 		"host", config.Host,
 		"port", config.Port,
 		"database", config.Database,
-		"user", config.User,
+		"user", config.Username,
 	)
 	
 	err := d.wrapped.Connect(ctx, config)
@@ -363,7 +362,7 @@ func (d *LoggingDecorator) CreateIndex(ctx context.Context, indexDef backend.Ind
 	
 	d.logger.Info("Creating index",
 		"index", indexDef.Name,
-		"table", indexDef.TableName,
+		"table", indexDef.Table,
 		"columns", indexDef.Columns,
 		"unique", indexDef.Unique,
 	)
@@ -374,14 +373,14 @@ func (d *LoggingDecorator) CreateIndex(ctx context.Context, indexDef backend.Ind
 	if err != nil {
 		d.logger.Error("Failed to create index",
 			"index", indexDef.Name,
-			"table", indexDef.TableName,
+			"table", indexDef.Table,
 			"error", err,
 			"duration", duration,
 		)
 	} else {
 		d.logger.Info("Index created successfully",
 			"index", indexDef.Name,
-			"table", indexDef.TableName,
+			"table", indexDef.Table,
 			"duration", duration,
 		)
 	}
@@ -422,7 +421,7 @@ func (d *LoggingDecorator) CreateBackup(ctx context.Context, backupConfig backen
 	
 	d.logger.Info("Creating backup",
 		"path", backupConfig.Path,
-		"compress", backupConfig.Compress,
+		"compress", backupConfig.Compression,
 	)
 	
 	err := d.wrapped.CreateBackup(ctx, backupConfig)
@@ -494,7 +493,7 @@ func (d *LoggingDecorator) logQueryResult(operation, query string, args []interf
 	}
 	
 	if err != nil {
-		d.logger.Error("Query failed",
+		d.logger.LogAttrs(context.Background(), slog.LevelError, "Query failed",
 			append(logAttrs, slog.String("error", err.Error()))...,
 		)
 	} else {
@@ -502,8 +501,8 @@ func (d *LoggingDecorator) logQueryResult(operation, query string, args []interf
 		if duration > d.config.SlowQueryThresh {
 			level = slog.LevelWarn
 		}
-		
-		d.logger.Log(context.Background(), level, "Query completed", logAttrs...)
+
+		d.logger.LogAttrs(context.Background(), level, "Query completed", logAttrs...)
 	}
 }
 
@@ -606,7 +605,7 @@ func (t *LoggingTransaction) Rollback() error {
 	
 	err := t.wrapped.Rollback()
 	duration := time.Since(start)
-	
+
 	if err != nil {
 		t.logger.Error("Failed to rollback transaction",
 			"error", err,
@@ -617,7 +616,37 @@ func (t *LoggingTransaction) Rollback() error {
 			"duration", duration,
 		)
 	}
-	
+
+	return err
+}
+
+// Savepoint logs creation of a named savepoint and delegates to the wrapped tx.
+func (t *LoggingTransaction) Savepoint(name string) error {
+	t.logger.Debug("Creating savepoint", "savepoint", name)
+	err := t.wrapped.Savepoint(name)
+	if err != nil {
+		t.logger.Error("Failed to create savepoint", "savepoint", name, "error", err)
+	}
+	return err
+}
+
+// RollbackToSavepoint logs rollback to a named savepoint and delegates.
+func (t *LoggingTransaction) RollbackToSavepoint(name string) error {
+	t.logger.Debug("Rolling back to savepoint", "savepoint", name)
+	err := t.wrapped.RollbackToSavepoint(name)
+	if err != nil {
+		t.logger.Error("Failed to roll back to savepoint", "savepoint", name, "error", err)
+	}
+	return err
+}
+
+// ReleaseSavepoint logs release of a named savepoint and delegates.
+func (t *LoggingTransaction) ReleaseSavepoint(name string) error {
+	t.logger.Debug("Releasing savepoint", "savepoint", name)
+	err := t.wrapped.ReleaseSavepoint(name)
+	if err != nil {
+		t.logger.Error("Failed to release savepoint", "savepoint", name, "error", err)
+	}
 	return err
 }
 
@@ -709,7 +738,7 @@ func (t *LoggingTransaction) logQueryResult(operation, query string, args []inte
 	}
 	
 	if err != nil {
-		t.logger.Error("Transaction query failed",
+		t.logger.LogAttrs(context.Background(), slog.LevelError, "Transaction query failed",
 			append(logAttrs, slog.String("error", err.Error()))...,
 		)
 	} else {
@@ -717,8 +746,8 @@ func (t *LoggingTransaction) logQueryResult(operation, query string, args []inte
 		if duration > t.config.SlowQueryThresh {
 			level = slog.LevelWarn
 		}
-		
-		t.logger.Log(context.Background(), level, "Transaction query completed", logAttrs...)
+
+		t.logger.LogAttrs(context.Background(), level, "Transaction query completed", logAttrs...)
 	}
 }
 

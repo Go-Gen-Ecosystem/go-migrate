@@ -10,6 +10,7 @@ package decorators
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -138,6 +139,25 @@ func (r *DryRunQueryRows) Columns() ([]string, error) {
 		return nil, fmt.Errorf("dry-run operation would fail: %s", r.errorReason)
 	}
 	return r.columns, nil
+}
+
+// ColumnTypes returns column type metadata. Dry-run simulation does not query a
+// real driver, so no concrete column types are available and an empty slice is
+// returned when the simulated operation would succeed.
+func (r *DryRunQueryRows) ColumnTypes() ([]*sql.ColumnType, error) {
+	if !r.wouldSucceed {
+		return nil, fmt.Errorf("dry-run operation would fail: %s", r.errorReason)
+	}
+	return []*sql.ColumnType{}, nil
+}
+
+// Err reports any error encountered during iteration. Simulated rows surface the
+// configured failure reason, if any.
+func (r *DryRunQueryRows) Err() error {
+	if !r.wouldSucceed {
+		return fmt.Errorf("dry-run operation would fail: %s", r.errorReason)
+	}
+	return nil
 }
 
 // DryRunQueryRow implements QueryRow for dry-run operations
@@ -302,8 +322,32 @@ func (t *DryRunTransaction) Rollback() error {
 	if t.rolledBack {
 		return fmt.Errorf("transaction already rolled back")
 	}
-	
+
 	t.rolledBack = true
+	return nil
+}
+
+// Savepoint simulates creating a savepoint within the transaction.
+func (t *DryRunTransaction) Savepoint(name string) error {
+	if !t.wouldSucceed {
+		return fmt.Errorf("dry-run transaction would fail: %s", t.errorReason)
+	}
+	return nil
+}
+
+// RollbackToSavepoint simulates rolling back to a named savepoint.
+func (t *DryRunTransaction) RollbackToSavepoint(name string) error {
+	if !t.wouldSucceed {
+		return fmt.Errorf("dry-run transaction would fail: %s", t.errorReason)
+	}
+	return nil
+}
+
+// ReleaseSavepoint simulates releasing a named savepoint.
+func (t *DryRunTransaction) ReleaseSavepoint(name string) error {
+	if !t.wouldSucceed {
+		return fmt.Errorf("dry-run transaction would fail: %s", t.errorReason)
+	}
 	return nil
 }
 

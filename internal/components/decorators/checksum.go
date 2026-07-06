@@ -151,44 +151,46 @@ func (s *DatabaseChecksumStore) Initialize(ctx context.Context) error {
 			Name: s.tableName,
 			Columns: []backend.ColumnDefinition{
 				{
-					Name:         "id",
-					Type:         "VARCHAR(255)",
-					NotNull:      true,
-					PrimaryKey:   true,
+					Name:     "id",
+					Type:     "VARCHAR(255)",
+					Nullable: false,
+					Primary:  true,
 				},
 				{
-					Name:    "table_name",
-					Type:    "VARCHAR(255)",
-					NotNull: true,
+					Name:     "table_name",
+					Type:     "VARCHAR(255)",
+					Nullable: false,
 				},
 				{
-					Name:    "operation",
-					Type:    "VARCHAR(100)",
-					NotNull: true,
+					Name:     "operation",
+					Type:     "VARCHAR(100)",
+					Nullable: false,
 				},
 				{
-					Name: "query",
-					Type: "TEXT",
+					Name:     "query",
+					Type:     "TEXT",
+					Nullable: true,
 				},
 				{
-					Name:    "checksum",
-					Type:    "VARCHAR(255)",
-					NotNull: true,
+					Name:     "checksum",
+					Type:     "VARCHAR(255)",
+					Nullable: false,
 				},
 				{
-					Name:    "algorithm",
-					Type:    "VARCHAR(50)",
-					NotNull: true,
+					Name:     "algorithm",
+					Type:     "VARCHAR(50)",
+					Nullable: false,
 				},
 				{
-					Name:    "created_at",
-					Type:    "TIMESTAMP",
-					NotNull: true,
-					Default: "CURRENT_TIMESTAMP",
+					Name:         "created_at",
+					Type:         "TIMESTAMP",
+					Nullable:     false,
+					DefaultValue: "CURRENT_TIMESTAMP",
 				},
 				{
-					Name: "metadata",
-					Type: "TEXT",
+					Name:     "metadata",
+					Type:     "TEXT",
+					Nullable: true,
 				},
 			},
 		}
@@ -199,9 +201,9 @@ func (s *DatabaseChecksumStore) Initialize(ctx context.Context) error {
 		
 		// Create index on table_name and operation
 		indexDef := backend.IndexDefinition{
-			Name:      fmt.Sprintf("idx_%s_table_operation", s.tableName),
-			TableName: s.tableName,
-			Columns:   []string{"table_name", "operation"},
+			Name:    fmt.Sprintf("idx_%s_table_operation", s.tableName),
+			Table:   s.tableName,
+			Columns: []string{"table_name", "operation"},
 		}
 		
 		if err := s.backend.CreateIndex(ctx, indexDef); err != nil {
@@ -506,14 +508,14 @@ func (d *ChecksumDecorator) buildQueryData(query string, args []interface{}) []b
 func (d *ChecksumDecorator) buildTableDefinitionData(tableDef backend.TableDefinition) []byte {
 	data := tableDef.Name
 	for _, col := range tableDef.Columns {
-		data += fmt.Sprintf("%s:%s:%t:%t", col.Name, col.Type, col.NotNull, col.PrimaryKey)
+		data += fmt.Sprintf("%s:%s:%t:%t", col.Name, col.Type, !col.Nullable, col.Primary)
 	}
 	return []byte(data)
 }
 
 // generateChecksumID generates a unique ID for checksum records
 func (d *ChecksumDecorator) generateChecksumID(query string, args []interface{}) string {
-	data := d.buildQueryData(query, args)
+	_ = d.buildQueryData(query, args)
 	return fmt.Sprintf("checksum_%s_%d", d.validator.GetAlgorithm(), time.Now().UnixNano())
 }
 

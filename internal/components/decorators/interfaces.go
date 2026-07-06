@@ -287,15 +287,49 @@ type DryRunConfig struct {
 	LogOperations bool     `json:"log_operations"`
 	AllowedOps    []string `json:"allowed_operations"` // Operations allowed in dry-run mode
 	BlockedOps    []string `json:"blocked_operations"` // Operations blocked in dry-run mode
+
+	// Simulation controls: when SimulateErrors is enabled, the corresponding
+	// FailOn* flags cause the matching simulated operation to return an error,
+	// allowing failure paths to be exercised without touching a real database.
+	SimulateErrors    bool `json:"simulate_errors"`
+	FailOnConnect     bool `json:"fail_on_connect"`
+	FailOnPing        bool `json:"fail_on_ping"`
+	FailOnCreateTable bool `json:"fail_on_create_table"`
+	FailOnDrop        bool `json:"fail_on_drop"`
+	FailOnDelete      bool `json:"fail_on_delete"`
+	FailOnUpdate      bool `json:"fail_on_update"`
+	FailOnTransaction bool `json:"fail_on_transaction"`
+
+	// ValidateOnly restricts dry-run execution to validation without simulating
+	// side effects. AssumeTablesExist reports schema objects as present so that
+	// dependent operations proceed during simulation.
+	ValidateOnly      bool `json:"validate_only"`
+	AssumeTablesExist bool `json:"assume_tables_exist"`
 }
 
 // RetryConfig holds configuration for retry decorator
 type RetryConfig struct {
-	MaxAttempts   int           `json:"max_attempts"`
-	InitialDelay  time.Duration `json:"initial_delay"`
-	MaxDelay      time.Duration `json:"max_delay"`
-	BackoffFactor float64       `json:"backoff_factor"`
-	RetryableErrors []string    `json:"retryable_errors"` // Error patterns that should trigger retry
+	MaxAttempts     int           `json:"max_attempts"`
+	InitialDelay    time.Duration `json:"initial_delay"`
+	MaxDelay        time.Duration `json:"max_delay"`
+	BackoffFactor   float64       `json:"backoff_factor"`
+	RetryableErrors []string      `json:"retryable_errors"` // Error patterns that should trigger retry
+
+	// Strategy selects the delay calculation approach (fixed, exponential,
+	// linear, jittered).
+	Strategy string `json:"strategy"`
+	// BaseDelay is the starting delay used by delay calculators.
+	BaseDelay time.Duration `json:"base_delay"`
+	// BackoffMultiplier is the growth factor for exponential/jittered backoff.
+	BackoffMultiplier float64 `json:"backoff_multiplier"`
+	// DelayIncrement is the fixed step added per attempt for linear backoff.
+	DelayIncrement time.Duration `json:"delay_increment"`
+	// JitterFactor is the fractional randomization applied to jittered backoff.
+	JitterFactor float64 `json:"jitter_factor"`
+	// MaxResultHistory bounds how many retry results are retained in memory.
+	MaxResultHistory int `json:"max_result_history"`
+	// Options carries additional strategy-specific settings.
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
 // CacheConfig holds configuration for cache decorator

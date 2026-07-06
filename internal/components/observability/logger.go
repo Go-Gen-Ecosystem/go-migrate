@@ -45,7 +45,7 @@ func NewMigrationLogger(logger logging.Logger) *MigrationLogger {
 
 // LogMigrationStart logs the start of a migration operation
 func (l *MigrationLogger) LogMigrationStart(ctx context.Context, migrationID, version, operation string) {
-	l.logger.Info(ctx, "Migration operation started",
+	l.logger.WithContext(ctx).Info("Migration operation started",
 		"component", l.component,
 		"operation", operation,
 		"migration_id", migrationID,
@@ -56,7 +56,7 @@ func (l *MigrationLogger) LogMigrationStart(ctx context.Context, migrationID, ve
 
 // LogMigrationSuccess logs successful completion of a migration
 func (l *MigrationLogger) LogMigrationSuccess(ctx context.Context, migrationID, version, operation string, duration time.Duration) {
-	l.logger.Info(ctx, "Migration operation completed successfully",
+	l.logger.WithContext(ctx).Info("Migration operation completed successfully",
 		"component", l.component,
 		"operation", operation,
 		"migration_id", migrationID,
@@ -69,10 +69,8 @@ func (l *MigrationLogger) LogMigrationSuccess(ctx context.Context, migrationID, 
 
 // LogMigrationFailure logs failed migration operation
 func (l *MigrationLogger) LogMigrationFailure(ctx context.Context, migrationID, version, operation string, duration time.Duration, err error) {
-	l.logger.Error(ctx, "Migration operation failed",
-		err,
-	)
-	l.logger.Info(ctx, "Migration failure details",
+	l.logger.WithContext(ctx).Error("Migration operation failed", "error", err)
+	l.logger.WithContext(ctx).Info("Migration failure details",
 		"component", l.component,
 		"operation", operation,
 		"migration_id", migrationID,
@@ -93,7 +91,7 @@ func (l *MigrationLogger) LogLockAcquisition(ctx context.Context, lockID string,
 	}
 
 	if level == "info" {
-		l.logger.Info(ctx, "Migration lock acquisition",
+		l.logger.WithContext(ctx).Info("Migration lock acquisition",
 			"component", l.component,
 			"operation", "lock_acquisition",
 			"lock_id", lockID,
@@ -102,8 +100,8 @@ func (l *MigrationLogger) LogLockAcquisition(ctx context.Context, lockID string,
 			"timestamp", time.Now(),
 		)
 	} else {
-		l.logger.Warn(ctx, "Migration lock acquisition failed", nil)
-		l.logger.Info(ctx, "Lock acquisition failure details",
+		l.logger.WithContext(ctx).Warn("Migration lock acquisition failed")
+		l.logger.WithContext(ctx).Info("Lock acquisition failure details",
 			"component", l.component,
 			"operation", "lock_acquisition",
 			"lock_id", lockID,
@@ -121,7 +119,7 @@ func (l *MigrationLogger) LogLockRelease(ctx context.Context, lockID string, rel
 		status = "failed"
 	}
 
-	l.logger.Info(ctx, "Migration lock release",
+	l.logger.WithContext(ctx).Info("Migration lock release",
 		"component", l.component,
 		"operation", "lock_release",
 		"lock_id", lockID,
@@ -141,7 +139,7 @@ func (l *MigrationLogger) LogDriftDetection(ctx context.Context, migrationID str
 	}
 
 	if level == "info" {
-		l.logger.Info(ctx, "Migration drift detection",
+		l.logger.WithContext(ctx).Info("Migration drift detection",
 			"component", l.component,
 			"operation", "drift_detection",
 			"migration_id", migrationID,
@@ -150,8 +148,8 @@ func (l *MigrationLogger) LogDriftDetection(ctx context.Context, migrationID str
 			"timestamp", time.Now(),
 		)
 	} else {
-		l.logger.Warn(ctx, "Migration drift detected", nil)
-		l.logger.Info(ctx, "Drift detection details",
+		l.logger.WithContext(ctx).Warn("Migration drift detected")
+		l.logger.WithContext(ctx).Info("Drift detection details",
 			"component", l.component,
 			"operation", "drift_detection",
 			"migration_id", migrationID,
@@ -172,7 +170,7 @@ func (l *MigrationLogger) LogChecksumValidation(ctx context.Context, migrationID
 	}
 
 	if level == "info" {
-		l.logger.Info(ctx, "Migration checksum validation",
+		l.logger.WithContext(ctx).Info("Migration checksum validation",
 			"component", l.component,
 			"operation", "checksum_validation",
 			"migration_id", migrationID,
@@ -182,8 +180,8 @@ func (l *MigrationLogger) LogChecksumValidation(ctx context.Context, migrationID
 			"timestamp", time.Now(),
 		)
 	} else {
-		l.logger.Warn(ctx, "Migration checksum validation failed", nil)
-		l.logger.Info(ctx, "Checksum validation details",
+		l.logger.WithContext(ctx).Warn("Migration checksum validation failed")
+		l.logger.WithContext(ctx).Info("Checksum validation details",
 			"component", l.component,
 			"operation", "checksum_validation",
 			"migration_id", migrationID,
@@ -202,7 +200,7 @@ func (l *MigrationLogger) LogIdempotencyValidation(ctx context.Context, migratio
 		status = "cannot_rerun"
 	}
 
-	l.logger.Info(ctx, "Migration idempotency validation",
+	l.logger.WithContext(ctx).Info("Migration idempotency validation",
 		"component", l.component,
 		"operation", "idempotency_validation",
 		"migration_id", migrationID,
@@ -225,7 +223,7 @@ func (l *MigrationLogger) LogSystemEvent(ctx context.Context, event string, fiel
 		fieldPairs = append(fieldPairs, k, v)
 	}
 
-	l.logger.Info(ctx, "Migration system event", fieldPairs...)
+	l.logger.WithContext(ctx).Info("Migration system event", fieldPairs...)
 }
 
 // LogPerformanceMetrics logs performance-related metrics
@@ -240,7 +238,7 @@ func (l *MigrationLogger) LogPerformanceMetrics(ctx context.Context, operation s
 		fieldPairs = append(fieldPairs, k, v)
 	}
 
-	l.logger.Info(ctx, "Migration performance metrics", fieldPairs...)
+	l.logger.WithContext(ctx).Info("Migration performance metrics", fieldPairs...)
 }
 
 // Debug logs debug information
@@ -248,7 +246,7 @@ func (l *MigrationLogger) Debug(ctx context.Context, msg string, fields ...inter
 	allFields := make([]interface{}, 0, len(fields)+2)
 	allFields = append(allFields, "component", l.component)
 	allFields = append(allFields, fields...)
-	l.logger.Debug(ctx, msg, allFields...)
+	l.logger.WithContext(ctx).Debug(msg, allFields...)
 }
 
 // Info logs informational messages
@@ -256,20 +254,35 @@ func (l *MigrationLogger) Info(ctx context.Context, msg string, fields ...interf
 	allFields := make([]interface{}, 0, len(fields)+2)
 	allFields = append(allFields, "component", l.component)
 	allFields = append(allFields, fields...)
-	l.logger.Info(ctx, msg, allFields...)
+	l.logger.WithContext(ctx).Info(msg, allFields...)
 }
 
 // Warn logs warning messages
 func (l *MigrationLogger) Warn(ctx context.Context, msg string, err error) {
-	l.logger.Warn(ctx, msg, err)
+	log := l.logger.WithContext(ctx)
+	if err != nil {
+		log.Warn(msg, "error", err)
+		return
+	}
+	log.Warn(msg)
 }
 
 // Error logs error messages
 func (l *MigrationLogger) Error(ctx context.Context, msg string, err error) {
-	l.logger.Error(ctx, msg, err)
+	log := l.logger.WithContext(ctx)
+	if err != nil {
+		log.Error(msg, "error", err)
+		return
+	}
+	log.Error(msg)
 }
 
 // Fatal logs fatal messages and exits
 func (l *MigrationLogger) Fatal(ctx context.Context, msg string, err error) {
-	l.logger.Fatal(ctx, msg, err)
+	log := l.logger.WithContext(ctx)
+	if err != nil {
+		log.Fatal(msg, "error", err)
+		return
+	}
+	log.Fatal(msg)
 }

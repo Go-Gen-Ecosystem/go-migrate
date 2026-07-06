@@ -242,9 +242,17 @@ type RetryTransaction struct {
 
 // Execute executes with retry logic
 func (t *RetryTransaction) Execute(ctx context.Context, query string, args ...interface{}) (backend.QueryResult, error) {
-	return t.decorator.executeWithRetry(ctx, "TXN_EXECUTE", func() (interface{}, error) {
+	result, err := t.decorator.executeWithRetry(ctx, "TXN_EXECUTE", func() (interface{}, error) {
 		return t.Transaction.Execute(ctx, query, args...)
 	})
+	if err != nil {
+		return nil, err
+	}
+	queryResult, ok := result.(backend.QueryResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type %T from transaction execute", result)
+	}
+	return queryResult, nil
 }
 
 // Query queries with retry logic

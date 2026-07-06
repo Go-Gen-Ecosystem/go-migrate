@@ -736,10 +736,25 @@ func (t *MetricsTransaction) Rollback() error {
 	} else {
 		t.collector.IncrementCounter("database_transactions_rolled_back_total", map[string]string{})
 	}
-	
+
 	t.collector.AddToGauge("database_active_transactions", -1, map[string]string{})
-	
+
 	return err
+}
+
+// Savepoint delegates savepoint creation to the wrapped transaction.
+func (t *MetricsTransaction) Savepoint(name string) error {
+	return t.wrapped.Savepoint(name)
+}
+
+// RollbackToSavepoint delegates savepoint rollback to the wrapped transaction.
+func (t *MetricsTransaction) RollbackToSavepoint(name string) error {
+	return t.wrapped.RollbackToSavepoint(name)
+}
+
+// ReleaseSavepoint delegates savepoint release to the wrapped transaction.
+func (t *MetricsTransaction) ReleaseSavepoint(name string) error {
+	return t.wrapped.ReleaseSavepoint(name)
 }
 
 // Execute collects transaction query execution metrics
