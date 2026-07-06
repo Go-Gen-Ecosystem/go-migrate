@@ -175,6 +175,11 @@ func (e *ConcreteMigrationEngine) Up(ctx context.Context, migrations []types.Mig
 	// Execute migrations
 	for _, migration := range ordered {
 		script := migrationToScript(migration)
+		// executeSingleMigration returns nil both when a migration is applied and
+		// when it is skipped (already applied); it distinguishes the two via
+		// result.SkippedCount. Snapshot it so a skipped migration is not also
+		// counted as executed.
+		skippedBefore := result.SkippedCount
 		if err := e.executeSingleMigration(ctx, script, &result); err != nil {
 			result.FailedCount++
 			result.FailedScripts = append(result.FailedScripts, types.FailedMigrationScript{
@@ -189,7 +194,8 @@ func (e *ConcreteMigrationEngine) Up(ctx context.Context, migrations []types.Mig
 			if !e.getBoolOption("continue_on_failure", false) {
 				break
 			}
-		} else {
+		} else if result.SkippedCount == skippedBefore {
+			// Only count as executed when it was not skipped.
 			result.ExecutedCount++
 			result.ExecutedScripts = append(result.ExecutedScripts, script)
 		}
