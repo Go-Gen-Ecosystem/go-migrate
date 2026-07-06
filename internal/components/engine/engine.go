@@ -384,6 +384,37 @@ func (e *MigrationEngine) Migrate(ctx context.Context, target string, dryRun boo
 			}
 			return nil
 		}},
+		StepFunc{name: "execute_migrations", fn: func(ctx context.Context, eng *MigrationEngine, p *PipelineContext) error {
+			// Dry run applies nothing: no SQL is executed and no records are
+			// written, so the target database is left untouched.
+			if p.DryRun || eng.config.Migration.EnableDryRun {
+				return nil
+			}
+			for _, migration := range p.Pending {
+				start := time.Now()
+				if err := eng.executor.Execute(ctx, migration); err != nil {
+					// Persist the failure for auditability and dirty-state
+					// detection (RecordMigration upserts by ID, so a later
+					// successful retry overwrites this row).
+					if recErr := eng.tracker.RecordMigrationFailure(ctx, migrationToRecord(migration), err.Error()); recErr != nil {
+						eng.logger.WithContext(ctx).Warn("failed to record migration failure",
+							"migration", migration.ID, "error", recErr)
+					}
+					p.HadError = true
+					p.ExecutionErrors = append(p.ExecutionErrors, fmt.Sprintf("Migration %s: %v", migration.ID, err))
+					if eng.config.Migration.StopOnError {
+						return fmt.Errorf("failed to execute migration %s: %w", migration.ID, err)
+					}
+					continue
+				}
+				// Record success so the migration is filtered out on the next run.
+				if err := eng.tracker.RecordMigrationSuccess(ctx, migrationToRecord(migration), time.Since(start).Milliseconds()); err != nil {
+					return fmt.Errorf("migration %s executed but failed to record: %w", migration.ID, err)
+				}
+				p.ExecutedMigrations = append(p.ExecutedMigrations, migration)
+			}
+			return nil
+		}},
 		StepFunc{name: "post_health_check", fn: func(ctx context.Context, eng *MigrationEngine, p *PipelineContext) error {
 			if eng.health != nil && eng.config.Features.HealthChecks {
 				if err := eng.health.CheckHealth(ctx); err != nil {
@@ -751,6 +782,24 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// migrationToRecord projects a loaded migration into the tracker's record shape,
+// carrying only the fields the tracker persists when marking a migration applied
+// or failed. The tracker sets state and timestamps itself.
+func migrationToRecord(m *types.Migration) types.MigrationRecord {
+	return types.MigrationRecord{
+		ID:          m.ID,
+		Version:     m.Version,
+		Description: m.Description,
+		Type:        string(m.Type),
+		Script:      m.Script,
+		Checksum:    m.Checksum,
+		Author:      m.Author,
+		Success:     true,
+		CanRollback: m.CanRollback,
+		RollbackSQL: m.RollbackSQL,
+	}
 }
 
 func executorForDB(db *gorm.DB, cfg *types.MigrationConfig) types.MigrationExecutor {

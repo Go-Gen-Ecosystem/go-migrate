@@ -320,6 +320,59 @@ func TestMigrate_ValidMigrationsPipelineSucceeds(t *testing.T) {
 	}
 }
 
+// TestMigrate_AppliesAndRecordsMigrations proves the primary up-migration path
+// actually executes the migration SQL and records each migration as applied —
+// not merely that the pipeline returns without error. It also asserts
+// idempotency: a second run applies nothing new and does not error.
+func TestMigrate_AppliesAndRecordsMigrations(t *testing.T) {
+	ctx := context.Background()
+	cfg, migDir := newTestConfig(t)
+	writeSQLMigration(t, migDir, "001_create_a.sql",
+		"CREATE TABLE a (id INTEGER PRIMARY KEY);", "DROP TABLE a;")
+	writeSQLMigration(t, migDir, "002_create_b.sql",
+		"CREATE TABLE b (id INTEGER PRIMARY KEY);", "DROP TABLE b;")
+
+	eng, err := NewMigrationEngine(cfg)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer eng.Close()
+
+	if err := eng.Migrate(ctx, "", false); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// The migrations must have actually run: both tables now exist.
+	for _, table := range []string{"a", "b"} {
+		if !eng.db.Migrator().HasTable(table) {
+			t.Errorf("table %q was not created — Migrate did not execute the migration SQL", table)
+		}
+	}
+
+	// Both migrations must be recorded as applied.
+	applied, err := eng.tracker.GetAppliedMigrations(ctx)
+	if err != nil {
+		t.Fatalf("GetAppliedMigrations: %v", err)
+	}
+	if len(applied) != 2 {
+		t.Fatalf("expected 2 applied migrations recorded, got %d", len(applied))
+	}
+
+	// Idempotency: a second run re-loads the same migrations, filters out the
+	// already-applied ones, and executes nothing new (re-running CREATE TABLE
+	// would otherwise fail).
+	if err := eng.Migrate(ctx, "", false); err != nil {
+		t.Fatalf("second Migrate must be a clean no-op: %v", err)
+	}
+	applied2, err := eng.tracker.GetAppliedMigrations(ctx)
+	if err != nil {
+		t.Fatalf("GetAppliedMigrations (2nd): %v", err)
+	}
+	if len(applied2) != 2 {
+		t.Errorf("second run must not re-record; expected 2 applied, got %d", len(applied2))
+	}
+}
+
 func TestMigrate_TargetFiltersToVersion(t *testing.T) {
 	ctx := context.Background()
 	cfg, migDir := newTestConfig(t)
