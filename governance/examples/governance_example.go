@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/governance"
@@ -57,6 +58,7 @@ func ExampleSetupGovernance() {
 	fmt.Println("Governance system initialized successfully")
 	fmt.Printf("Environment: %s\n", config.Environment)
 	fmt.Printf("Compliance Framework: %s\n", config.ComplianceConfig.Framework)
+	fmt.Printf("Registered policies: %d\n", len(manager.GetPolicyEngine().GetPolicies()))
 }
 
 // ExamplePolicyValidation demonstrates policy validation
@@ -310,12 +312,35 @@ func ExampleSeparationOfDuties() {
 	}
 }
 
-// ExampleCustomPolicy demonstrates creating a custom policy
-func ExampleCustomPolicy() {
-	type NoProductionDataPolicy struct {
-		governance.BasePolicy
+// NoProductionDataPolicy is a custom policy that prevents INSERT statements
+// containing production data from running in development environments.
+type NoProductionDataPolicy struct {
+	governance.BasePolicy
+}
+
+// Evaluate implements governance.Policy by flagging migrations whose scripts
+// contain INSERT statements, which may carry production data into development.
+func (p *NoProductionDataPolicy) Evaluate(ctx context.Context, migration *types.Migration) (*governance.PolicyViolation, error) {
+	if migration == nil {
+		return nil, nil
 	}
 
+	if !strings.Contains(strings.ToUpper(migration.Script), "INSERT ") {
+		return nil, nil
+	}
+
+	return &governance.PolicyViolation{
+		PolicyName:  p.GetName(),
+		Severity:    p.GetSeverity(),
+		Message:     "migration contains INSERT statements that may include production data",
+		MigrationID: migration.ID,
+		Suggestion:  "seed data through dedicated fixtures rather than schema migrations",
+		Timestamp:   time.Now(),
+	}, nil
+}
+
+// ExampleCustomPolicy demonstrates creating a custom policy
+func ExampleCustomPolicy() {
 	policy := &NoProductionDataPolicy{
 		BasePolicy: governance.BasePolicy{
 			Name:        "no_production_data",
@@ -325,9 +350,6 @@ func ExampleCustomPolicy() {
 			Enabled:     true,
 		},
 	}
-
-	// This would need to implement the Evaluate method
-	// policy.Evaluate = func(ctx context.Context, migration *types.Migration) (*governance.PolicyViolation, error) { ... }
 
 	manager, _ := governance.NewGovernanceManager(governance.GovernanceConfig{})
 	engine := manager.GetPolicyEngine()
