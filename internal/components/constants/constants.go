@@ -339,7 +339,10 @@ const (
 
 // Regular Expression Patterns
 const (
-	PasswordPattern      = `(?i)(password|pwd)\s*=\s*['"][^'"]+['"]`
+	// PasswordPattern matches hardcoded passwords in both the assignment form
+	// (`password = 'secret'`) and the SQL DDL form (`CREATE USER ... WITH PASSWORD 'secret'`),
+	// where the keyword and the quoted value are separated by whitespace rather than `=`.
+	PasswordPattern      = `(?i)(password|pwd)\s*(?:=\s*)?['"][^'"]+['"]`
 	AllPrivilegesPattern = `(?i)grant\s+all\s+privileges`
 )
 
