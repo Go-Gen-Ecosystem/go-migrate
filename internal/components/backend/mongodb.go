@@ -271,7 +271,7 @@ func (m *MongoDBBackend) GetTableInfo(ctx context.Context, tableName string) (Ta
 
 	// Get collection stats
 	var result bson.M
-	err := m.database.RunCommand(ctx, bson.D{{"collStats", tableName}}).Decode(&result)
+	err := m.database.RunCommand(ctx, bson.D{{Key: "collStats", Value: tableName}}).Decode(&result)
 	if err != nil {
 		return info, err
 	}
@@ -392,8 +392,8 @@ func (m *MongoDBBackend) AddConstraint(ctx context.Context, constraintDef Constr
 	validator := m.buildConstraintValidator(constraintDef)
 
 	command := bson.D{
-		{"collMod", constraintDef.Table},
-		{"validator", validator},
+		{Key: "collMod", Value: constraintDef.Table},
+		{Key: "validator", Value: validator},
 	}
 
 	return m.database.RunCommand(ctx, command).Err()
@@ -421,7 +421,7 @@ func (m *MongoDBBackend) GetDatabaseInfo(ctx context.Context) (DatabaseInfo, err
 
 	// Get database stats
 	var stats bson.M
-	err = m.database.RunCommand(ctx, bson.D{{"dbStats", 1}}).Decode(&stats)
+	err = m.database.RunCommand(ctx, bson.D{{Key: "dbStats", Value: 1}}).Decode(&stats)
 	if err != nil {
 		return DatabaseInfo{}, err
 	}
@@ -442,7 +442,7 @@ func (m *MongoDBBackend) GetDatabaseInfo(ctx context.Context) (DatabaseInfo, err
 // GetVersion returns MongoDB version
 func (m *MongoDBBackend) GetVersion(ctx context.Context) (string, error) {
 	var result bson.M
-	err := m.database.RunCommand(ctx, bson.D{{"buildInfo", 1}}).Decode(&result)
+	err := m.database.RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Decode(&result)
 	if err != nil {
 		return "", err
 	}
@@ -557,7 +557,7 @@ func (m *MongoDBBackend) CreateMigrationTable(ctx context.Context, tableName str
 	// Create unique index on version
 	collection := m.database.Collection(tableName)
 	indexModel := mongo.IndexModel{
-		Keys:    bson.D{{"version", 1}},
+		Keys:    bson.D{{Key: "version", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}
 
@@ -611,7 +611,7 @@ func (m *MongoDBBackend) CreateLockTable(ctx context.Context, tableName string) 
 	// Create unique index on lock_key
 	collection := m.database.Collection(tableName)
 	indexModel := mongo.IndexModel{
-		Keys:    bson.D{{"lock_key", 1}},
+		Keys:    bson.D{{Key: "lock_key", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}
 
