@@ -336,7 +336,7 @@ func (d *MetricsDecorator) BeginTransactionWithOptions(ctx context.Context, opts
 	
 	labels := map[string]string{
 		"operation":        "begin_transaction_with_options",
-		"isolation_level":  string(opts.IsolationLevel),
+		"isolation_level":  fmt.Sprintf("%d", opts.IsolationLevel),
 		"read_only":        fmt.Sprintf("%t", opts.ReadOnly),
 	}
 	
