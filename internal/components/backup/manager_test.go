@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/dialect"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/dialect"
 	_ "github.com/mattn/go-sqlite3"
 )
 

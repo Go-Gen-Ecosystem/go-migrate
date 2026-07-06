@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // OracleExecutor implements MigrationExecutor for Oracle Database

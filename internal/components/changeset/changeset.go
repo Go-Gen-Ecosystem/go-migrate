@@ -20,8 +20,8 @@ import (
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/loader"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/loader"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // ChangesetMigrationLoader handles GoMigrate changeset migrations

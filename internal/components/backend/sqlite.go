@@ -19,7 +19,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // SQLiteBackend implements DatabaseBackend for SQLite

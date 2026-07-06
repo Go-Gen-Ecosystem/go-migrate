@@ -17,7 +17,7 @@ import (
 
 	_ "github.com/denisenkom/go-mssqldb"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // SQLServerBackend implements DatabaseBackend for SQL Server

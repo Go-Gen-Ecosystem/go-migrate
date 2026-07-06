@@ -24,8 +24,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
 )
 
 // Global lock to prevent concurrent SQLite test execution

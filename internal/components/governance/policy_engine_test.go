@@ -12,7 +12,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -12,8 +12,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
-	"github.com/gogen-framework/gogen/pkg/core/observability/logging"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // GovernanceStandaloneTool wraps a standalone migration tool with governance

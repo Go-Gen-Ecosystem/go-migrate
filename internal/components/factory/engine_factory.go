@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // DefaultMigrationEngineFactory implements the MigrationEngineFactory interface

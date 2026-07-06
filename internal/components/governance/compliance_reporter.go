@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/observability/logging"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // ComplianceFramework represents different compliance frameworks

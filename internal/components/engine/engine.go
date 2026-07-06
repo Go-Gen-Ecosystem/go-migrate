@@ -14,17 +14,17 @@ import (
 	"sort"
 	"time"
 
-	dbcore "github.com/gogen-framework/gogen/pkg/core/database"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/adapter"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/executor"
+	dbcore "github.com/go-gen-ecosystem/go-migrate/internal/database"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/adapter"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/executor"
 
-	loaderpkg "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/loader"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/lock"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	loaderpkg "github.com/go-gen-ecosystem/go-migrate/internal/components/loader"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 
-	trackerpkg "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/tracker"
-	validatorpkg "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/validator"
-	"github.com/gogen-framework/gogen/pkg/core/observability/logging"
+	trackerpkg "github.com/go-gen-ecosystem/go-migrate/internal/components/tracker"
+	validatorpkg "github.com/go-gen-ecosystem/go-migrate/internal/components/validator"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 	"gorm.io/gorm"
 )
 

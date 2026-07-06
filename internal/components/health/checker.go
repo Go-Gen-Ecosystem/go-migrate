@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/dialect"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/dialect"
 )
 
 // HealthStatus represents the health status of a component

@@ -18,7 +18,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // MySQLBackend implements DatabaseBackend for MySQL

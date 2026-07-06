@@ -18,14 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/backup"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/dialect"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
-	migrationErrors "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/errors"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/factory"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/health"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/observability"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/backup"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/dialect"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
+	migrationErrors "github.com/go-gen-ecosystem/go-migrate/internal/components/errors"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/factory"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/health"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/observability"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 
 	_ "github.com/mattn/go-sqlite3"
 )

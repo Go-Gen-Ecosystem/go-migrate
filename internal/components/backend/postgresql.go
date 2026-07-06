@@ -19,7 +19,7 @@ import (
 	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // PostgreSQLBackend implements DatabaseBackend for PostgreSQL

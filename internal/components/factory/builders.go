@@ -9,13 +9,13 @@
 package factory
 
 import (
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engines/mongodb"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engines/mysql"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engines/oracle"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engines/postgres"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engines/sqlite"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engines/sqlserver"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/mongodb"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/mysql"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/oracle"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/postgres"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/sqlite"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/sqlserver"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // SQL Database Engine Builders

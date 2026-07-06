@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	"gorm.io/gorm"
 )
 

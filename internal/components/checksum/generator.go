@@ -27,7 +27,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"github.com/zeebo/blake3"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // DefaultChecksumGenerator implements ChecksumGenerator interface

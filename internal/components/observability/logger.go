@@ -12,7 +12,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/observability/logging"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // MigrationLogger provides structured logging for migration operations

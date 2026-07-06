@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // GlobalFactoryRegistry manages all factory instances and provides plugin registration

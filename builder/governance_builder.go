@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"time"
 
-	migrations "github.com/gogen-framework/gogen/pkg/core/database/migrations"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/governance"
+	migrations "github.com/go-gen-ecosystem/go-migrate"
+	"github.com/go-gen-ecosystem/go-migrate/governance"
 )
 
 // GovernanceToolBuilder builds a standalone migration tool with governance

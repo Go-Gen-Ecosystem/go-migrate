@@ -13,7 +13,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/state"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/state"
 )
 
 // StateBasedMigrationBuilder provides fluent API for building state-based migrations

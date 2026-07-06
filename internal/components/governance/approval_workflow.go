@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
-	"github.com/gogen-framework/gogen/pkg/core/observability/logging"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // ApprovalStatus represents the status of an approval request

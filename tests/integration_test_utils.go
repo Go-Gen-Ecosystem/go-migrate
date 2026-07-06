@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations"
+	"github.com/go-gen-ecosystem/go-migrate"
 )
 
 // IntegrationTestSuite provides a base test suite for integration tests

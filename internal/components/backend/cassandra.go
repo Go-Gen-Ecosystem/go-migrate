@@ -18,7 +18,7 @@ import (
 
 	"github.com/gocql/gocql"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // CassandraBackend implements DatabaseBackend for Cassandra

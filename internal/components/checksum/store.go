@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/backend"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/backend"
 )
 
 // MemoryChecksumStore implements ChecksumStore interface using in-memory storage

@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // RedisConfig holds Redis connection configuration

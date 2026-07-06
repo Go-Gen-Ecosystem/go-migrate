@@ -14,8 +14,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/governance"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/governance"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // ExampleSetupGovernance demonstrates how to set up the governance system

@@ -11,12 +11,12 @@ package factory
 import (
 	"fmt"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/backend"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/executor"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/lock"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/tracker"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/validator"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/backend"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/executor"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/tracker"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/validator"
 )
 
 // DatabaseComponentsFactory implements ComponentsFactory for database-specific components

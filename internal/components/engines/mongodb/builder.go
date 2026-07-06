@@ -11,7 +11,7 @@ package mongodb
 import (
 	"fmt"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // MongoDBConfig holds MongoDB connection configuration

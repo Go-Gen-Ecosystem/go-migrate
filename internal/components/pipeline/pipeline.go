@@ -11,9 +11,9 @@ package pipeline
 import (
     "context"
 
-    "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
-    "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/lock"
-    "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+    "github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
+    "github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
+    "github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // Step represents a unit of work in the pipeline

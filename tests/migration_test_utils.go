@@ -21,7 +21,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations"
+	"github.com/go-gen-ecosystem/go-migrate"
 )
 
 // TestEnvironment represents a complete test environment for migration testing

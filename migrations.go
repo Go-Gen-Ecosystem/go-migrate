@@ -9,10 +9,10 @@
 package migrations
 
 import (
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/governance"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/engine"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/standalone"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/governance"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/engine"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/standalone"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // Public type aliases for external use

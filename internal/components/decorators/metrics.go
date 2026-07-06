@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/backend"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/backend"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // MetricsCollector defines the interface for metrics collection

@@ -11,8 +11,8 @@ package adapters
 import (
     "fmt"
 
-    loaderpkg "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/loader"
-    "github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+    loaderpkg "github.com/go-gen-ecosystem/go-migrate/internal/components/loader"
+    "github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // LoaderAdapter adapts loader.FileMigrationLoader to engine.MigrationLoader

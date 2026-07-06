@@ -17,7 +17,7 @@ import (
 
 	_ "github.com/ibmdb/go_ibm_db"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // DB2Backend implements DatabaseBackend for DB2

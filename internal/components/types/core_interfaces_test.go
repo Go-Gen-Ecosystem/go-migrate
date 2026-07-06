@@ -11,7 +11,7 @@ package types
 import (
 	"testing"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/constants"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/constants"
 )
 
 // TestInterfaceImplementations validates that all structs properly implement their interfaces

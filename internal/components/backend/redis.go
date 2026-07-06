@@ -19,7 +19,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // RedisBackend implements DatabaseBackend for Redis

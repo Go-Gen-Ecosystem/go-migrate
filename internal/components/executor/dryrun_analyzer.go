@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/types"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 )
 
 // DryRunAnalyzer performs static analysis of migrations without executing them

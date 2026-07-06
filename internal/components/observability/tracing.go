@@ -21,7 +21,7 @@ import (
 
 const (
 	// Tracer name for migration operations
-	TracerName = "github.com/gogen-framework/gogen/pkg/core/database/migrations"
+	TracerName = "github.com/go-gen-ecosystem/go-migrate"
 	
 	// Span names
 	SpanMigrationExecution = "migration.execute"

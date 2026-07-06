@@ -21,11 +21,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/executor"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/loader"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/lock"
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/validator"
-	"github.com/gogen-framework/gogen/pkg/core/observability/logging"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/executor"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/loader"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/validator"
+	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
 
 // TestCompilationFixes verifies that all compilation fixes work correctly

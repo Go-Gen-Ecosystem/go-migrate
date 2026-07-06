@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gogen-framework/gogen/pkg/core/database/migrations/internal/components/state"
+	"github.com/go-gen-ecosystem/go-migrate/internal/components/state"
 )
 
 // StateInitCommand initializes state-based migrations
