@@ -38,34 +38,7 @@ func NewSQLServerEngineBuilder() types.EngineBuilder {
 	return sqlserver.NewSQLServerEngineBuilder()
 }
 
-// NewOracleEngineBuilder creates a new Oracle engine builder.
-//
-// The Oracle backend implementation is currently gated behind the
-// "drifted_backend" build tag pending reconciliation with the core engine
-// component interfaces, so a placeholder builder is returned by default.
-func NewOracleEngineBuilder() types.EngineBuilder {
-	return &PlaceholderEngineBuilder{dbType: "oracle"}
-}
-
-// NewDB2EngineBuilder creates a new DB2 engine builder
-func NewDB2EngineBuilder() types.EngineBuilder {
-	// DB2 implementation not yet available, return placeholder for now
-	return &PlaceholderEngineBuilder{dbType: "db2"}
-}
-
 // NoSQL Database Engine Builders
-
-// NewCassandraEngineBuilder creates a new Cassandra engine builder
-func NewCassandraEngineBuilder() types.EngineBuilder {
-	// Cassandra implementation not yet available, return placeholder for now
-	return &PlaceholderEngineBuilder{dbType: "cassandra"}
-}
-
-// NewRedisEngineBuilder creates a new Redis engine builder
-func NewRedisEngineBuilder() types.EngineBuilder {
-	// Redis implementation not yet available, return placeholder for now
-	return &PlaceholderEngineBuilder{dbType: "redis"}
-}
 
 // Components Factory Builders
 
@@ -91,34 +64,4 @@ func NewSQLiteComponentsFactory() types.ComponentsFactory {
 func NewSQLServerComponentsFactory() types.ComponentsFactory {
 	// TODO: Implement actual SQL Server components factory
 	return &PlaceholderComponentsFactory{dialect: "sqlserver"}
-}
-
-// NewOracleComponentsFactory creates a new Oracle components factory
-func NewOracleComponentsFactory() types.ComponentsFactory {
-	// TODO: Implement actual Oracle components factory
-	return &PlaceholderComponentsFactory{dialect: "oracle"}
-}
-
-// NewDB2ComponentsFactory creates a new DB2 components factory
-func NewDB2ComponentsFactory() types.ComponentsFactory {
-	// TODO: Implement actual DB2 components factory
-	return &PlaceholderComponentsFactory{dialect: "db2"}
-}
-
-// NewMongoDBComponentsFactory creates a new MongoDB components factory
-func NewMongoDBComponentsFactory() types.ComponentsFactory {
-	// TODO: Implement actual MongoDB components factory
-	return &PlaceholderComponentsFactory{dialect: "mongodb"}
-}
-
-// NewCassandraComponentsFactory creates a new Cassandra components factory
-func NewCassandraComponentsFactory() types.ComponentsFactory {
-	// TODO: Implement actual Cassandra components factory
-	return &PlaceholderComponentsFactory{dialect: "cassandra"}
-}
-
-// NewRedisComponentsFactory creates a new Redis components factory
-func NewRedisComponentsFactory() types.ComponentsFactory {
-	// TODO: Implement actual Redis components factory
-	return &PlaceholderComponentsFactory{dialect: "redis"}
 }

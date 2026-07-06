@@ -18,20 +18,20 @@ import (
 // ConcreteMigrationEngineBuilder implements the EngineBuilder interface
 // It uses the Builder pattern to construct migration engines with all required components
 type ConcreteMigrationEngineBuilder struct {
-	engineType        string
-	config            types.Config
-	backend           types.EngineBackend
-	executor          types.MigrationExecutor
-	tracker           types.MigrationTracker
-	lockMgr           types.LockManager
-	validator         types.MigrationValidator
-	resolver          types.DependencyResolver
-	rollbackManager   types.RollbackManager
-	advancedRollback  types.AdvancedRollbackManager
-	rollbackConfig    *types.RollbackConfig
+	engineType         string
+	config             types.Config
+	backend            types.EngineBackend
+	executor           types.MigrationExecutor
+	tracker            types.MigrationTracker
+	lockMgr            types.LockManager
+	validator          types.MigrationValidator
+	resolver           types.DependencyResolver
+	rollbackManager    types.RollbackManager
+	advancedRollback   types.AdvancedRollbackManager
+	rollbackConfig     *types.RollbackConfig
 	stateBasedMigrator interface{} // state.StateBasedMigrator
-	decorators        []EngineDecorator
-	options           map[string]interface{}
+	decorators         []EngineDecorator
+	options            map[string]interface{}
 }
 
 // NewMigrationEngineBuilder creates a new migration engine builder
@@ -146,7 +146,9 @@ func (b *ConcreteMigrationEngineBuilder) Build() (types.MigrationEngine, error) 
 
 		// Link advanced rollback to base rollback manager if both exist
 		if b.advancedRollback != nil && b.rollbackManager != nil {
-			if setter, ok := b.rollbackManager.(interface{ SetAdvancedManager(types.AdvancedRollbackManager) }); ok {
+			if setter, ok := b.rollbackManager.(interface {
+				SetAdvancedManager(types.AdvancedRollbackManager)
+			}); ok {
 				setter.SetAdvancedManager(b.advancedRollback)
 			}
 		}
@@ -211,12 +213,12 @@ func NewPostgreSQLEngineBuilder() types.EngineBuilder {
 		},
 		dbType: "postgresql",
 	}
-	
+
 	// Set PostgreSQL-specific defaults
 	builder.WithOption("supports_transactions", true)
 	builder.WithOption("supports_rollback", true)
 	builder.WithOption("supports_schemas", true)
-	
+
 	return builder
 }
 
@@ -230,12 +232,12 @@ func NewMySQLEngineBuilder() types.EngineBuilder {
 		},
 		dbType: "mysql",
 	}
-	
+
 	// Set MySQL-specific defaults
 	builder.WithOption("supports_transactions", true)
 	builder.WithOption("supports_rollback", true)
 	builder.WithOption("supports_schemas", false)
-	
+
 	return builder
 }
 
@@ -249,53 +251,13 @@ func NewSQLiteEngineBuilder() types.EngineBuilder {
 		},
 		dbType: "sqlite",
 	}
-	
+
 	// Set SQLite-specific defaults
 	builder.WithOption("supports_transactions", true)
 	builder.WithOption("supports_rollback", false)
 	builder.WithOption("supports_schemas", false)
 	builder.WithOption("file_based", true)
-	
-	return builder
-}
 
-// NewMongoDBEngineBuilder creates a MongoDB-specific engine builder
-func NewMongoDBEngineBuilder() types.EngineBuilder {
-	builder := &DatabaseSpecificEngineBuilder{
-		ConcreteMigrationEngineBuilder: &ConcreteMigrationEngineBuilder{
-			engineType: "mongodb",
-			decorators: make([]EngineDecorator, 0),
-			options:    make(map[string]interface{}),
-		},
-		dbType: "mongodb",
-	}
-	
-	// Set MongoDB-specific defaults
-	builder.WithOption("supports_transactions", true) // MongoDB 4.0+
-	builder.WithOption("supports_rollback", false)
-	builder.WithOption("document_based", true)
-	builder.WithOption("supports_collections", true)
-	
-	return builder
-}
-
-// NewRedisEngineBuilder creates a Redis-specific engine builder
-func NewRedisEngineBuilder() types.EngineBuilder {
-	builder := &DatabaseSpecificEngineBuilder{
-		ConcreteMigrationEngineBuilder: &ConcreteMigrationEngineBuilder{
-			engineType: "redis",
-			decorators: make([]EngineDecorator, 0),
-			options:    make(map[string]interface{}),
-		},
-		dbType: "redis",
-	}
-	
-	// Set Redis-specific defaults
-	builder.WithOption("supports_transactions", false)
-	builder.WithOption("supports_rollback", false)
-	builder.WithOption("key_value_based", true)
-	builder.WithOption("supports_lua_scripts", true)
-	
 	return builder
 }
 

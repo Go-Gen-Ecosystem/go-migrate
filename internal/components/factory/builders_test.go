@@ -54,56 +54,6 @@ func TestNewSQLServerEngineBuilder(t *testing.T) {
 	var _ types.EngineBuilder = builder
 }
 
-func TestNewOracleEngineBuilder(t *testing.T) {
-	builder := NewOracleEngineBuilder()
-
-	if builder == nil {
-		t.Fatal("NewOracleEngineBuilder returned nil")
-	}
-
-	var _ types.EngineBuilder = builder
-}
-
-func TestNewDB2EngineBuilder(t *testing.T) {
-	builder := NewDB2EngineBuilder()
-
-	if builder == nil {
-		t.Fatal("NewDB2EngineBuilder returned nil")
-	}
-
-	var _ types.EngineBuilder = builder
-}
-
-func TestNewMongoDBEngineBuilder(t *testing.T) {
-	builder := NewMongoDBEngineBuilder()
-
-	if builder == nil {
-		t.Fatal("NewMongoDBEngineBuilder returned nil")
-	}
-
-	var _ types.EngineBuilder = builder
-}
-
-func TestNewCassandraEngineBuilder(t *testing.T) {
-	builder := NewCassandraEngineBuilder()
-
-	if builder == nil {
-		t.Fatal("NewCassandraEngineBuilder returned nil")
-	}
-
-	var _ types.EngineBuilder = builder
-}
-
-func TestNewRedisEngineBuilder(t *testing.T) {
-	builder := NewRedisEngineBuilder()
-
-	if builder == nil {
-		t.Fatal("NewRedisEngineBuilder returned nil")
-	}
-
-	var _ types.EngineBuilder = builder
-}
-
 // Test ComponentsFactory builders
 
 func TestNewPostgreSQLComponentsFactory(t *testing.T) {
@@ -168,81 +118,6 @@ func TestNewSQLServerComponentsFactory(t *testing.T) {
 	dialect := factory.GetSupportedDialect()
 	if dialect != "sqlserver" {
 		t.Errorf("Expected dialect 'sqlserver', got '%s'", dialect)
-	}
-}
-
-func TestNewOracleComponentsFactory(t *testing.T) {
-	factory := NewOracleComponentsFactory()
-
-	if factory == nil {
-		t.Fatal("NewOracleComponentsFactory returned nil")
-	}
-
-	var _ types.ComponentsFactory = factory
-
-	dialect := factory.GetSupportedDialect()
-	if dialect != "oracle" {
-		t.Errorf("Expected dialect 'oracle', got '%s'", dialect)
-	}
-}
-
-func TestNewDB2ComponentsFactory(t *testing.T) {
-	factory := NewDB2ComponentsFactory()
-
-	if factory == nil {
-		t.Fatal("NewDB2ComponentsFactory returned nil")
-	}
-
-	var _ types.ComponentsFactory = factory
-
-	dialect := factory.GetSupportedDialect()
-	if dialect != "db2" {
-		t.Errorf("Expected dialect 'db2', got '%s'", dialect)
-	}
-}
-
-func TestNewMongoDBComponentsFactory(t *testing.T) {
-	factory := NewMongoDBComponentsFactory()
-
-	if factory == nil {
-		t.Fatal("NewMongoDBComponentsFactory returned nil")
-	}
-
-	var _ types.ComponentsFactory = factory
-
-	dialect := factory.GetSupportedDialect()
-	if dialect != "mongodb" {
-		t.Errorf("Expected dialect 'mongodb', got '%s'", dialect)
-	}
-}
-
-func TestNewCassandraComponentsFactory(t *testing.T) {
-	factory := NewCassandraComponentsFactory()
-
-	if factory == nil {
-		t.Fatal("NewCassandraComponentsFactory returned nil")
-	}
-
-	var _ types.ComponentsFactory = factory
-
-	dialect := factory.GetSupportedDialect()
-	if dialect != "cassandra" {
-		t.Errorf("Expected dialect 'cassandra', got '%s'", dialect)
-	}
-}
-
-func TestNewRedisComponentsFactory(t *testing.T) {
-	factory := NewRedisComponentsFactory()
-
-	if factory == nil {
-		t.Fatal("NewRedisComponentsFactory returned nil")
-	}
-
-	var _ types.ComponentsFactory = factory
-
-	dialect := factory.GetSupportedDialect()
-	if dialect != "redis" {
-		t.Errorf("Expected dialect 'redis', got '%s'", dialect)
 	}
 }
 
@@ -380,8 +255,8 @@ func TestPlaceholderEngineBuilder_ChainableMethods(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && s != "" && substr != "" &&
-		   len(s) >= len(substr) && s[:len(substr)] == substr ||
-		   (len(s) > len(substr) && stringContains(s, substr))
+		len(s) >= len(substr) && s[:len(substr)] == substr ||
+		(len(s) > len(substr) && stringContains(s, substr))
 }
 
 func stringContains(s, substr string) bool {

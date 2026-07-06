@@ -162,13 +162,6 @@ func (r *ComponentsFactoryRegistry) registerDefaultFactories() {
 	r.RegisterFactory("mysql", NewMySQLComponentsFactory())
 	r.RegisterFactory("sqlite", NewSQLiteComponentsFactory())
 	r.RegisterFactory("sqlserver", NewSQLServerComponentsFactory())
-	r.RegisterFactory("oracle", NewOracleComponentsFactory())
-	r.RegisterFactory("db2", NewDB2ComponentsFactory())
-	
-	// NoSQL Database Factories
-	r.RegisterFactory("mongodb", NewMongoDBComponentsFactory())
-	r.RegisterFactory("cassandra", NewCassandraComponentsFactory())
-	r.RegisterFactory("redis", NewRedisComponentsFactory())
 }
 
 // Global registry instance
