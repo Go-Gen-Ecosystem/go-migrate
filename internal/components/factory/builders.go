@@ -9,7 +9,6 @@
 package factory
 
 import (
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/mongodb"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/mysql"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/postgres"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/engines/sqlite"
@@ -55,11 +54,6 @@ func NewDB2EngineBuilder() types.EngineBuilder {
 }
 
 // NoSQL Database Engine Builders
-
-// NewMongoDBEngineBuilder creates a new MongoDB engine builder
-func NewMongoDBEngineBuilder() types.EngineBuilder {
-	return mongodb.NewMongoDBEngineBuilder()
-}
 
 // NewCassandraEngineBuilder creates a new Cassandra engine builder
 func NewCassandraEngineBuilder() types.EngineBuilder {

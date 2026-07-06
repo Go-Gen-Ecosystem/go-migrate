@@ -98,14 +98,6 @@ func (f *DefaultMigrationEngineFactory) registerDefaultBuilders() {
 	f.RegisterBuilder("sqlite3", NewSQLiteEngineBuilder())
 	f.RegisterBuilder("sqlserver", NewSQLServerEngineBuilder())
 	f.RegisterBuilder("mssql", NewSQLServerEngineBuilder())
-	f.RegisterBuilder("oracle", NewOracleEngineBuilder())
-	f.RegisterBuilder("db2", NewDB2EngineBuilder())
-	
-	// NoSQL Databases
-	f.RegisterBuilder("mongodb", NewMongoDBEngineBuilder())
-	f.RegisterBuilder("mongo", NewMongoDBEngineBuilder())
-	f.RegisterBuilder("cassandra", NewCassandraEngineBuilder())
-	f.RegisterBuilder("redis", NewRedisEngineBuilder())
 }
 
 // ComponentsFactoryRegistry manages the registration of components factories
