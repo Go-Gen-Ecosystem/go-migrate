@@ -176,7 +176,8 @@ func (t *Tool) createBackup(ctx context.Context) error {
 	backupPath := filepath.Join("backups", fmt.Sprintf("backup_%s_%d.sql",
 		t.config.Database.Database, time.Now().Unix()))
 
-	if err := os.MkdirAll(filepath.Dir(backupPath), 0755); err != nil {
+	// Backups contain full database contents, so the directory is owner-only.
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0700); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
@@ -388,11 +389,13 @@ func (m *DefaultConfigManager) SaveConfig(config *types.StandaloneConfig, path s
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	// Config embeds plaintext database credentials (Username/Password/DSN), so
+	// restrict the file and its parent directory to the owner only (least privilege).
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 

@@ -739,7 +739,8 @@ func (s *StandaloneMigrationToolImpl) SaveConfig(configPath string) error {
 		return NewConfigurationError("config", "format", ext, "unsupported config format", nil)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	// Config embeds plaintext database credentials; restrict to owner only.
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return NewConfigurationError("config", "file", configPath, "failed to write config file", err)
 	}
 

@@ -12,8 +12,6 @@ package lock
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -484,120 +482,6 @@ func TestDatabaseLock_HelperConversionsAndCreateUpdate(t *testing.T) {
 	}
 }
 
-// ---------------- SQLiteLockManager (database/sql) ----------------
-
-func newSQLDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "lock.db"))
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
-
-func TestSQLiteLockManager_AcquireReleaseCycle(t *testing.T) {
-	db := newSQLDB(t)
-	mgr := NewSQLiteLockManager(db, "mig_locks")
-
-	if err := mgr.AcquireLock(); err != nil {
-		t.Fatalf("AcquireLock: %v", err)
-	}
-
-	locked, err := mgr.IsLocked()
-	if err != nil || !locked {
-		t.Fatalf("IsLocked = %v %v; want true", locked, err)
-	}
-
-	// Acquiring again on the same manager is idempotent (already acquired).
-	if err := mgr.AcquireLock(); err != nil {
-		t.Fatalf("re-AcquireLock on same manager should be a no-op: %v", err)
-	}
-
-	if err := mgr.ReleaseLock(); err != nil {
-		t.Fatalf("ReleaseLock: %v", err)
-	}
-
-	locked, err = mgr.IsLocked()
-	if err != nil || locked {
-		t.Fatalf("IsLocked after release = %v; want false", locked)
-	}
-
-	// Releasing again is a safe no-op.
-	if err := mgr.ReleaseLock(); err != nil {
-		t.Fatalf("double ReleaseLock should be safe: %v", err)
-	}
-}
-
-func TestSQLiteLockManager_MutualExclusionAcrossManagers(t *testing.T) {
-	db := newSQLDB(t)
-	tableName := "mig_locks_mx"
-
-	// Use very short timeouts so the second acquire fails quickly rather than
-	// waiting on the file lock; both share the same table + file lock path.
-	m1 := NewSQLiteLockManagerWithTimeout(db, tableName, 200*time.Millisecond)
-	m2 := NewSQLiteLockManagerWithTimeout(db, tableName, 200*time.Millisecond)
-
-	if err := m1.AcquireLock(); err != nil {
-		t.Fatalf("m1 AcquireLock: %v", err)
-	}
-	t.Cleanup(func() { _ = m1.ReleaseLock() })
-
-	// m2 must fail because m1 holds both the file lock and the DB row.
-	if err := m2.AcquireLock(); err == nil {
-		_ = m2.ReleaseLock()
-		t.Fatalf("m2 should not acquire a lock already held by m1")
-	}
-}
-
-func TestSQLiteLockManager_WithTimeoutConstructor(t *testing.T) {
-	db := newSQLDB(t)
-	mgr := NewSQLiteLockManagerWithTimeout(db, "t", 3*time.Second)
-	if mgr.lockTimeout != 3*time.Second {
-		t.Errorf("lockTimeout = %v, want 3s", mgr.lockTimeout)
-	}
-}
-
-// ---------------- Pure helpers (KAT) ----------------
-
-func TestIsConstraintError(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"unique constraint", errString("UNIQUE constraint failed: locks.id"), true},
-		{"generic constraint", errString("constraint failed"), true},
-		{"unrelated", errString("disk I/O error"), false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := isConstraintError(c.err); got != c.want {
-				t.Errorf("isConstraintError(%v) = %v, want %v", c.err, got, c.want)
-			}
-		})
-	}
-}
-
-func TestContainsSubstring(t *testing.T) {
-	cases := []struct {
-		s, sub string
-		want   bool
-	}{
-		{"hello world", "o w", true},
-		{"hello", "hello", true},
-		{"hello", "xyz", false},
-		{"abc", "abcd", false},
-		{"UNIQUE constraint failed", "constraint", true},
-	}
-	for _, c := range cases {
-		if got := containsSubstring(c.s, c.sub); got != c.want {
-			t.Errorf("containsSubstring(%q,%q) = %v, want %v", c.s, c.sub, got, c.want)
-		}
-	}
-}
-
 func TestGenerateLockID_Format(t *testing.T) {
 	id := generateLockID()
 	if id == "" {
@@ -614,7 +498,45 @@ func TestGenerateLockID_Format(t *testing.T) {
 	}
 }
 
-// errString is a tiny error helper for KAT tables.
-type errString string
+func TestIsValidLockTableName(t *testing.T) {
+	cases := []struct {
+		name  string
+		want  bool
+		table string
+	}{
+		{"simple", true, "migration_locks"},
+		{"leading underscore", true, "_locks"},
+		{"mixed case and digits", true, "Locks_v2"},
+		{"empty", false, ""},
+		{"leading digit", false, "1locks"},
+		{"contains space", false, "migration locks"},
+		{"sql injection with semicolon", false, "locks; DROP TABLE users;--"},
+		{"quoted identifier", false, "\"locks\""},
+		{"dot separated", false, "schema.locks"},
+		{"hyphen", false, "migration-locks"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isValidLockTableName(c.table); got != c.want {
+				t.Errorf("isValidLockTableName(%q) = %v, want %v", c.table, got, c.want)
+			}
+		})
+	}
+}
 
-func (e errString) Error() string { return string(e) }
+// TestNewDatabaseLockManager_RejectsUnsafeTableName verifies that a table name
+// which is not a plain SQL identifier is not interpolated into lock SQL: the
+// constructor falls back to the safe default instead.
+func TestNewDatabaseLockManager_RejectsUnsafeTableName(t *testing.T) {
+	db := newGormDB(t)
+	mgr := NewDatabaseLockManagerWithDryRun(db, "locks; DROP TABLE users;--", true)
+	if mgr.tableName != DefaultMigrationLockTableName {
+		t.Errorf("unsafe table name should fall back to default, got %q", mgr.tableName)
+	}
+
+	// A valid custom name is preserved.
+	mgr2 := NewDatabaseLockManagerWithDryRun(db, "custom_locks", true)
+	if mgr2.tableName != "custom_locks" {
+		t.Errorf("valid table name should be kept, got %q", mgr2.tableName)
+	}
+}

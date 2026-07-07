@@ -9,7 +9,7 @@
 package loader
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -678,15 +678,19 @@ func (v *SQLFileValidator) ExtractMetadata(content string) (map[string]interface
 
 // Helper functions
 
-// CalculateChecksum calculates the MD5 checksum of migration content
+// CalculateChecksum calculates a SHA-256 content checksum for a migration.
+// The hash is used only for change detection (drift/tamper checks), not for any
+// security or authentication decision; SHA-256 is chosen over MD5 to avoid
+// collision concerns and to keep security scanners clean.
 func CalculateChecksum(content string) string {
-	hash := md5.Sum([]byte(content))
+	hash := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(hash[:])
 }
 
-// GenerateMigrationID generates a deterministic migration ID based on filename
+// GenerateMigrationID generates a deterministic migration ID from the filename
+// using SHA-256. The value is an opaque, stable identifier, not a security token.
 func GenerateMigrationID(filename string) string {
-	hash := md5.Sum([]byte(filename))
+	hash := sha256.Sum256([]byte(filename))
 	return hex.EncodeToString(hash[:])
 }
 

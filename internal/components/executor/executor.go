@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -563,35 +564,43 @@ func NewParallelMigrationExecutor(executor MigrationExecutor, concurrency int) *
 	}
 }
 
-// ExecuteMigrations executes migrations in parallel
+// ExecuteMigrations executes migrations in parallel with bounded concurrency.
+//
+// Note: This should only be used for independent migrations; most migrations
+// should be executed sequentially.
+//
+// Concurrency is bounded at spawn time (via errgroup's limit), the context is
+// honored before each migration runs, and the function does not return until
+// every in-flight migration has finished. On the first error errgroup cancels
+// the derived context so not-yet-started migrations are skipped, but any
+// already-running migration is still awaited before returning.
 func (e *ParallelMigrationExecutor) ExecuteMigrations(ctx context.Context, migrations []*Migration) error {
-	// Note: This should only be used for independent migrations
-	// Most migrations should be executed sequentially
+	concurrency := e.concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
 
-	semaphore := make(chan struct{}, e.concurrency)
-	errChan := make(chan error, len(migrations))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(concurrency)
 
 	for _, migration := range migrations {
-		go func(m *Migration) {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			if err := e.executor.Execute(ctx, m); err != nil {
-				errChan <- err
-				return
+		m := migration
+		group.Go(func() error {
+			// Honor cancellation (parent ctx or a sibling failure) before
+			// starting work against the database.
+			if err := groupCtx.Err(); err != nil {
+				return err
 			}
-			errChan <- nil
-		}(migration)
+			if err := e.executor.Execute(groupCtx, m); err != nil {
+				return fmt.Errorf("parallel migration %s failed: %w", m.ID, err)
+			}
+			return nil
+		})
 	}
 
-	// Wait for all migrations to complete
-	for i := 0; i < len(migrations); i++ {
-		if err := <-errChan; err != nil {
-			return err
-		}
-	}
-
-	return nil
+	// Wait blocks until all in-flight migrations have stopped, then returns the
+	// first non-nil error (if any).
+	return group.Wait()
 }
 
 // ConditionalMigrationExecutor executes migrations based on conditions

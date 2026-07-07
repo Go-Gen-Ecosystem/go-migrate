@@ -10,7 +10,7 @@ package validator
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"regexp"
@@ -207,9 +207,11 @@ func (v *CompositeMigrationValidator) ValidateMigrationCtx(ctx context.Context, 
 	return nil
 }
 
-// calculateChecksum calculates MD5 checksum of the given content
+// calculateChecksum calculates a SHA-256 checksum of the given content. The hash
+// is used only for migration drift/tamper detection, not for security; SHA-256 is
+// used instead of MD5 to avoid collision concerns and keep scanners clean.
 func (v *CompositeMigrationValidator) calculateChecksum(content string) string {
-	hash := md5.Sum([]byte(content))
+	hash := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(hash[:])
 }
 

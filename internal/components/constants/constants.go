@@ -374,17 +374,12 @@ const (
 	ExecutionModeParallel   = "parallel"
 )
 
-// Database Drivers
+// Database Drivers. Only the drivers with an actual GORM dialector in
+// internal/database (SQLite, PostgreSQL, MySQL) are supported by this module.
 const (
 	DriverSQLite     = "sqlite"
 	DriverPostgreSQL = "postgres"
 	DriverMySQL      = "mysql"
-	DriverSQLServer  = "sqlserver"
-	DriverOracle     = "oracle"
-	DriverDB2        = "db2"
-	DriverMongoDB    = "mongodb"
-	DriverCassandra  = "cassandra"
-	DriverRedis      = "redis"
 )
 
 // Default Configuration Values

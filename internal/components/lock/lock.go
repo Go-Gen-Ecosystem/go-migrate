@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -19,6 +20,20 @@ import (
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/logging"
 )
+
+// lockTableNamePattern is the strict allowlist for the lock table identifier.
+// The table name is operator-supplied configuration that is interpolated into a
+// raw SQL statement (INSERT OR IGNORE INTO <table>), so it must be constrained to
+// a plain SQL identifier as defense-in-depth against config-based SQL injection
+// (gosec G201). Only ASCII letters, digits and underscores are permitted, and the
+// name must not start with a digit.
+var lockTableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// isValidLockTableName reports whether name is a safe, plain SQL identifier that
+// may be interpolated into the lock SQL.
+func isValidLockTableName(name string) bool {
+	return lockTableNamePattern.MatchString(name)
+}
 
 // DefaultLockWaitTimeout is the fallback applied when a caller requests a lock
 // with a zero (i.e. unconfigured) timeout. Without it, a zero timeout makes the
@@ -117,6 +132,17 @@ func NewDatabaseLockManagerWithDryRun(db *gorm.DB, tableName string, dryRun bool
 		tableName = DefaultMigrationLockTableName
 	}
 
+	// The table name is interpolated into raw lock SQL, so reject anything that
+	// is not a plain SQL identifier and fall back to the safe default rather than
+	// risk config-based SQL injection (gosec G201, defense-in-depth).
+	if !isValidLockTableName(tableName) {
+		logging.GetComponentLogger("lock").Warn(
+			"configured lock table name is not a valid SQL identifier; using the default",
+			"invalid_table_name", tableName,
+			"default_table_name", DefaultMigrationLockTableName)
+		tableName = DefaultMigrationLockTableName
+	}
+
 	manager := &DatabaseLockManager{
 		db:        db,
 		tableName: tableName,
@@ -209,7 +235,11 @@ func (l *DatabaseLockManager) acquireLockSQLite(ctx context.Context, tx *gorm.DB
 			UpdatedAt:  time.Now(),
 		}
 
-		// Use raw SQL for INSERT OR IGNORE to ensure atomicity
+		// Use raw SQL for INSERT OR IGNORE to ensure atomicity. l.tableName is
+		// validated against a strict SQL-identifier allowlist in the constructor
+		// (isValidLockTableName), and all values are bound as parameters, so the
+		// only interpolated token is a known-safe identifier.
+		//nolint:gosec // G201: table name is allowlist-validated in the constructor; values are parameterized.
 		result := tx.Exec(`
 			INSERT OR IGNORE INTO `+l.tableName+` (id, acquired_by, acquired_at, expires_at, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?)

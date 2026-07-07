@@ -9,7 +9,7 @@
 package loader
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -86,7 +86,7 @@ func TestCalculateChecksum(t *testing.T) {
 	content := "CREATE TABLE users (id INTEGER);"
 	got := CalculateChecksum(content)
 
-	sum := md5.Sum([]byte(content))
+	sum := sha256.Sum256([]byte(content))
 	want := hex.EncodeToString(sum[:])
 
 	assert.Equal(t, want, got)
@@ -103,7 +103,7 @@ func TestGenerateMigrationID(t *testing.T) {
 
 	assert.Equal(t, id1, id2, "same filename must produce same ID")
 	assert.NotEqual(t, id1, id3, "different filename must produce different ID")
-	assert.Len(t, id1, 32, "MD5 hex digest is 32 chars")
+	assert.Len(t, id1, 64, "SHA-256 hex digest is 64 chars")
 }
 
 func TestLoadMigration_SQLBasic(t *testing.T) {

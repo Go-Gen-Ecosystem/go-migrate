@@ -182,10 +182,13 @@ func (l *logger) Info(msg string, f ...interface{})  { l.log(LevelInfo, msg, f..
 func (l *logger) Warn(msg string, f ...interface{})  { l.log(LevelWarn, msg, f...) }
 func (l *logger) Error(msg string, f ...interface{}) { l.log(LevelError, msg, f...) }
 
-// Fatal logs at fatal severity and exits the process.
+// Fatal logs at fatal severity. It deliberately does NOT terminate the process:
+// this is a reusable library logger and calling os.Exit here would hard-kill any
+// consuming application, bypassing deferred cleanup such as lock release and DB
+// connection close. Process termination is the responsibility of the top-level
+// CLI/main layer, which decides its own exit code after logging.
 func (l *logger) Fatal(msg string, f ...interface{}) {
 	l.log(LevelFatal, msg, f...)
-	os.Exit(1)
 }
 
 func (l *logger) Debugf(format string, a ...interface{}) {
@@ -197,10 +200,10 @@ func (l *logger) Errorf(format string, a ...interface{}) {
 	l.log(LevelError, fmt.Sprintf(format, a...))
 }
 
-// Fatalf logs a formatted message at fatal severity and exits.
+// Fatalf logs a formatted message at fatal severity. Like Fatal, it does NOT
+// exit the process; the caller (CLI/main) owns process termination.
 func (l *logger) Fatalf(format string, a ...interface{}) {
 	l.log(LevelFatal, fmt.Sprintf(format, a...))
-	os.Exit(1)
 }
 
 // With returns a logger carrying the given key/value fields.

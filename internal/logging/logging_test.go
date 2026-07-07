@@ -73,6 +73,31 @@ func TestAllLevelsAndFormatted(t *testing.T) {
 	}
 }
 
+// TestFatal_LogsWithoutExiting asserts that the library logger's Fatal/Fatalf
+// emit at FATAL severity but return normally rather than terminating the
+// process. If Fatal called os.Exit, the statements after it would never run and
+// the test binary would abort, so reaching the assertions proves no exit.
+func TestFatal_LogsWithoutExiting(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(&buf, LevelDebug, "json")
+
+	l.Fatal("fatal-msg", "k", "v")
+	l.Fatalf("fatalf-%d", 7)
+
+	// Reaching here means neither call exited the process.
+	out := buf.String()
+	if !strings.Contains(out, "fatal-msg") {
+		t.Errorf("Fatal message missing from output: %q", out)
+	}
+	if !strings.Contains(out, "fatalf-7") {
+		t.Errorf("Fatalf message missing from output: %q", out)
+	}
+	// Fatal attaches structured fields like any other level.
+	if !strings.Contains(out, "\"k\":\"v\"") {
+		t.Errorf("Fatal structured field missing: %q", out)
+	}
+}
+
 func TestWith_AttachesFields(t *testing.T) {
 	var buf bytes.Buffer
 	l := New(&buf, LevelInfo, "json").With("component", "svc")

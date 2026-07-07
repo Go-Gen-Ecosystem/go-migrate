@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -387,6 +388,39 @@ func TestDefaultConfigManager_SaveAndReload(t *testing.T) {
 	reloaded, err := m.LoadConfig(path)
 	require.NoError(t, err)
 	assert.Equal(t, "saved.db", reloaded.Database.Database)
+}
+
+// TestDefaultConfigManager_SaveConfig_OwnerOnlyPerms asserts that a saved config,
+// which embeds plaintext database credentials, is written owner-only (0600) with an
+// owner-only parent directory (0700). Unix permission bits are not enforced on
+// Windows, so the assertion is skipped there.
+func TestDefaultConfigManager_SaveConfig_OwnerOnlyPerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not enforced on Windows")
+	}
+	m := NewDefaultConfigManager()
+	dir := filepath.Join(t.TempDir(), "secretdir")
+	path := filepath.Join(dir, "creds.json")
+
+	cfg := &types.StandaloneConfig{
+		Database: types.DatabaseConfig{
+			Driver:   "postgres",
+			Username: "admin",
+			Password: "s3cr3t",
+			DSN:      "postgres://admin:s3cr3t@localhost/db",
+		},
+	}
+	require.NoError(t, m.SaveConfig(cfg, path))
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm(),
+		"credential-bearing config file must be owner-only")
+
+	di, err := os.Stat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0700), di.Mode().Perm(),
+		"config directory must be owner-only")
 }
 
 func TestDefaultConfigManager_ValidateConfig_FillsDefaults(t *testing.T) {

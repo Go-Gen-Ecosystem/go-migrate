@@ -744,13 +744,14 @@ func (t *FileMigrationTracker) saveData() error {
 		return fmt.Errorf("failed to marshal tracker data: %w", err)
 	}
 
-	// Ensure directory exists
+	// Ensure directory exists. Migration state is owner-only (least privilege),
+	// consistent with credential-bearing config files.
 	dir := filepath.Dir(t.filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create tracker directory: %w", err)
 	}
 
-	err = os.WriteFile(t.filePath, data, 0644)
+	err = os.WriteFile(t.filePath, data, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write tracker file: %w", err)
 	}

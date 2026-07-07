@@ -11,8 +11,10 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -406,6 +408,92 @@ func TestParallelExecutor_PropagatesError(t *testing.T) {
 	err := par.ExecuteMigrations(ctx, migrations)
 	require.Error(t, err)
 }
+
+// TestParallelExecutor_HonorsCanceledContext verifies that when the context is
+// already canceled, ExecuteMigrations returns the cancellation error and does
+// NOT execute any migration against the database.
+func TestParallelExecutor_HonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // canceled up-front
+
+	counter := &countingExecutor{}
+	par := NewParallelMigrationExecutor(counter, 3)
+
+	migrations := []*types.Migration{
+		{ID: "c1", Version: "0001", Script: "CREATE TABLE c1 (id INTEGER);"},
+		{ID: "c2", Version: "0002", Script: "CREATE TABLE c2 (id INTEGER);"},
+		{ID: "c3", Version: "0003", Script: "CREATE TABLE c3 (id INTEGER);"},
+	}
+
+	err := par.ExecuteMigrations(ctx, migrations)
+	require.Error(t, err, "canceled context must surface an error")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(0), counter.executed.Load(),
+		"no migration must run once the context is canceled")
+}
+
+// TestParallelExecutor_WaitsForInFlight verifies that ExecuteMigrations does not
+// return until every goroutine it spawned has finished, even when one migration
+// fails. If the function returned early while goroutines kept running, the
+// post-return count would be observed to increase.
+func TestParallelExecutor_WaitsForInFlight(t *testing.T) {
+	ctx := context.Background()
+
+	// One migration fails immediately; the others block briefly. A correct
+	// implementation still waits for the blocking ones before returning.
+	counter := &countingExecutor{blockFor: 50 * time.Millisecond, failID: "bad"}
+	par := NewParallelMigrationExecutor(counter, 4)
+
+	migrations := []*types.Migration{
+		{ID: "bad", Version: "0001", Script: "x"},
+		{ID: "w1", Version: "0002", Script: "x"},
+		{ID: "w2", Version: "0003", Script: "x"},
+		{ID: "w3", Version: "0004", Script: "x"},
+	}
+
+	err := par.ExecuteMigrations(ctx, migrations)
+	require.Error(t, err)
+
+	// After Wait returns, no goroutine may still be running; the "started but
+	// not finished" gauge must be zero.
+	assert.Equal(t, int32(0), counter.inFlight.Load(),
+		"ExecuteMigrations must not return while migrations are still in flight")
+}
+
+// countingExecutor is a lightweight MigrationExecutor test double that records
+// how many migrations actually ran, tracks in-flight goroutines, and can be
+// told to fail a specific migration ID.
+type countingExecutor struct {
+	executed atomic.Int32
+	inFlight atomic.Int32
+	blockFor time.Duration
+	failID   string
+}
+
+func (c *countingExecutor) Execute(ctx context.Context, m *types.Migration) error {
+	c.inFlight.Add(1)
+	defer c.inFlight.Add(-1)
+	c.executed.Add(1)
+	if c.blockFor > 0 {
+		time.Sleep(c.blockFor)
+	}
+	if m.ID == c.failID {
+		return fmt.Errorf("forced failure for %s", m.ID)
+	}
+	return nil
+}
+
+func (c *countingExecutor) ExecuteDryRun(ctx context.Context, m *types.Migration) (*types.ExecutionPlan, error) {
+	return nil, nil
+}
+func (c *countingExecutor) Rollback(ctx context.Context, m *types.Migration) error { return nil }
+func (c *countingExecutor) ValidateRollback(ctx context.Context, m *types.Migration) error {
+	return nil
+}
+func (c *countingExecutor) ValidateMigration(ctx context.Context, m *types.Migration) error {
+	return nil
+}
+func (c *countingExecutor) GetExecutionPlan(ms []*types.Migration) ([]string, error) { return nil, nil }
 
 // serialExecutor wraps a MigrationExecutor with a mutex so concurrent callers
 // do not race on a single sqlite connection.

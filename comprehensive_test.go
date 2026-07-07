@@ -10,13 +10,11 @@ package migrations
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gormsqlite "gorm.io/driver/sqlite"
@@ -24,7 +22,6 @@ import (
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/executor"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/loader"
-	"github.com/go-gen-ecosystem/go-migrate/internal/components/lock"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/types"
 	"github.com/go-gen-ecosystem/go-migrate/internal/components/validator"
 )
@@ -33,10 +30,6 @@ import (
 // compile and operate correctly against their current public APIs.
 func TestCompilationFixes(t *testing.T) {
 	ctx := context.Background()
-
-	// Create a test database
-	db, cleanup := createTestDatabase(t)
-	defer cleanup()
 
 	t.Run("TestExecutorCompilation", func(t *testing.T) {
 		testExecutorCompilation(t, ctx)
@@ -48,14 +41,6 @@ func TestCompilationFixes(t *testing.T) {
 
 	t.Run("TestLoaderCompilation", func(t *testing.T) {
 		testLoaderCompilation(t, ctx)
-	})
-
-	t.Run("TestSQLiteLockEnhancement", func(t *testing.T) {
-		testSQLiteLockEnhancement(t, db)
-	})
-
-	t.Run("TestDualLockingStrategy", func(t *testing.T) {
-		testDualLockingStrategy(t, db)
 	})
 }
 
@@ -167,108 +152,6 @@ CREATE TABLE users (
 	assert.NotEmpty(t, migrations, "Should load at least one migration")
 }
 
-// testSQLiteLockEnhancement tests the enhanced SQLite lock functionality
-func testSQLiteLockEnhancement(t *testing.T, db *sql.DB) {
-	// Create SQLite lock manager
-	lockManager := lock.NewSQLiteLockManager(db, "migration_locks")
-	require.NotNil(t, lockManager, "Lock manager should be created successfully")
-
-	// Test acquiring lock
-	err := lockManager.AcquireLock()
-	assert.NoError(t, err, "Should acquire lock successfully")
-
-	// Test that lock is acquired
-	isLocked, err := lockManager.IsLocked()
-	assert.NoError(t, err, "Should check lock status without error")
-	assert.True(t, isLocked, "Lock should be acquired")
-
-	// Test releasing lock
-	err = lockManager.ReleaseLock()
-	assert.NoError(t, err, "Should release lock successfully")
-
-	// Test that lock is released
-	isLocked, err = lockManager.IsLocked()
-	assert.NoError(t, err, "Should check lock status without error")
-	assert.False(t, isLocked, "Lock should be released")
-}
-
-// testDualLockingStrategy tests the dual-locking strategy implementation
-func testDualLockingStrategy(t *testing.T, db *sql.DB) {
-	// Create two lock managers to simulate concurrent access. A short file-lock
-	// timeout keeps the mutual-exclusion assertion fast without changing behavior.
-	lockManager1 := lock.NewSQLiteLockManagerWithTimeout(db, "dual_lock_test", 1*time.Second)
-	lockManager2 := lock.NewSQLiteLockManagerWithTimeout(db, "dual_lock_test", 1*time.Second)
-
-	// First manager acquires lock
-	err := lockManager1.AcquireLock()
-	assert.NoError(t, err, "First manager should acquire lock successfully")
-
-	// Second manager should fail to acquire lock
-	err = lockManager2.AcquireLock()
-	assert.Error(t, err, "Second manager should fail to acquire lock")
-
-	// Release lock from first manager
-	err = lockManager1.ReleaseLock()
-	assert.NoError(t, err, "First manager should release lock successfully")
-
-	// Now second manager should be able to acquire lock
-	err = lockManager2.AcquireLock()
-	assert.NoError(t, err, "Second manager should now acquire lock successfully")
-
-	// Clean up
-	err = lockManager2.ReleaseLock()
-	assert.NoError(t, err, "Second manager should release lock successfully")
-}
-
-// TestLockTimeout tests the lock timeout functionality
-func TestLockTimeout(t *testing.T) {
-	db, cleanup := createTestDatabase(t)
-	defer cleanup()
-
-	// Create lock manager with short timeout
-	lockManager := lock.NewSQLiteLockManagerWithTimeout(db, "timeout_test", 1*time.Second)
-
-	// Acquire lock
-	err := lockManager.AcquireLock()
-	assert.NoError(t, err, "Should acquire lock successfully")
-
-	// Create second manager with same timeout
-	lockManager2 := lock.NewSQLiteLockManagerWithTimeout(db, "timeout_test", 1*time.Second)
-
-	// Measure time for timeout
-	start := time.Now()
-	err = lockManager2.AcquireLock()
-	duration := time.Since(start)
-
-	assert.Error(t, err, "Should timeout when trying to acquire held lock")
-	assert.Contains(t, err.Error(), "timeout", "Error should mention timeout")
-	assert.GreaterOrEqual(t, duration, 1*time.Second, "Should wait at least the timeout duration")
-
-	// Clean up
-	err = lockManager.ReleaseLock()
-	assert.NoError(t, err, "Should release lock successfully")
-}
-
-// createTestDatabase creates a temporary SQLite database for testing
-func createTestDatabase(t testing.TB) (*sql.DB, func()) {
-	// Create temporary database file
-	tempFile := filepath.Join(t.TempDir(), "test.db")
-
-	db, err := sql.Open("sqlite3", tempFile)
-	require.NoError(t, err, "Should open test database")
-
-	// Test connection
-	err = db.Ping()
-	require.NoError(t, err, "Should ping test database")
-
-	cleanup := func() {
-		_ = db.Close()
-		_ = os.Remove(tempFile)
-	}
-
-	return db, cleanup
-}
-
 // createTestGormDatabase creates a temporary gorm-backed SQLite database for testing.
 func createTestGormDatabase(t testing.TB) *gorm.DB {
 	tempFile := filepath.Join(t.TempDir(), "gorm_test.db")
@@ -284,25 +167,4 @@ func createTestGormDatabase(t testing.TB) *gorm.DB {
 	})
 
 	return gdb
-}
-
-// BenchmarkDualLocking benchmarks the dual-locking strategy performance
-func BenchmarkDualLocking(b *testing.B) {
-	db, cleanup := createTestDatabase(b)
-	defer cleanup()
-
-	lockManager := lock.NewSQLiteLockManager(db, "benchmark_test")
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		err := lockManager.AcquireLock()
-		if err != nil {
-			b.Fatalf("Failed to acquire lock: %v", err)
-		}
-
-		err = lockManager.ReleaseLock()
-		if err != nil {
-			b.Fatalf("Failed to release lock: %v", err)
-		}
-	}
 }
