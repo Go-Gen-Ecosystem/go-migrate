@@ -251,11 +251,7 @@ func infoSchemaExists(query string) func(Table) (string, []any) {
 // sqliteExists checks the sqlite_master of the table's attached database.
 // The schema is a validated identifier, so it is safe to quote inline.
 func sqliteExists(t Table) (string, []any) {
-	master := "sqlite_master"
-	if t.Schema != "" {
-		master = `"` + t.Schema + `".sqlite_master`
-	}
-	return "SELECT COUNT(*) FROM " + master + " WHERE type = 'table' AND name = ?", []any{t.Name}
+	return "SELECT COUNT(*) FROM " + sqliteMaster(t.Schema) + " WHERE type = 'table' AND name COLLATE NOCASE = ?", []any{t.Name}
 }
 
 // CountTables counts base tables in schema, ignoring the names in exclude
@@ -263,6 +259,13 @@ func sqliteExists(t Table) (string, []any) {
 // already holds an application's tables.
 func (d *Dialect) CountTables(ctx context.Context, q Querier, schema string, exclude ...string) (int, error) {
 	query, args := d.tables(schema)
+	if d.name == SQLite {
+		// sqliteTables returns folded names. Exclusions are validated ASCII identifiers.
+		exclude = slices.Clone(exclude)
+		for i, name := range exclude {
+			exclude[i] = strings.ToLower(name)
+		}
+	}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("list tables in %s: %w", schema, err)
@@ -286,5 +289,12 @@ func infoSchemaTables(query string) func(string) (string, []any) {
 }
 
 func sqliteTables(schema string) (string, []any) {
-	return `SELECT name FROM "` + schema + `".sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`, nil
+	return "SELECT lower(name) FROM " + sqliteMaster(schema) + " WHERE type = 'table' AND lower(name) NOT GLOB 'sqlite_*'", nil
+}
+
+func sqliteMaster(schema string) string {
+	if schema == "" {
+		return "sqlite_master"
+	}
+	return `"` + schema + `".sqlite_master`
 }

@@ -528,6 +528,82 @@ func TestHistoryReadsUseQualifiedTable(t *testing.T) {
 	}
 }
 
+func TestSQLiteHistoryUsesIdentifierCase(t *testing.T) {
+	ctx := t.Context()
+	db := openDB(t)
+	fsys := files("1_initial.sql", "CREATE TABLE initial (id INTEGER);")
+	first := newM(t, db, fsys, WithTable("Mixed_History"))
+	if _, err := first.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newM(t, db, fsys, WithTable("main.mixed_history"))
+	if status, err := second.Status(ctx); err != nil || status.Current != "1" || status.Pending != 0 {
+		t.Fatalf("Status with different history identifier case: %+v, %v", status, err)
+	}
+	if result, err := second.Up(ctx); err != nil || len(result.Applied) != 0 {
+		t.Fatalf("repeated Up with different history identifier case: %+v, %v", result, err)
+	}
+}
+
+func TestSQLiteBaselineCountsApplicationTables(t *testing.T) {
+	fsys := files(
+		"1_initial.sql", "CREATE TABLE initial (id INTEGER);",
+		"2_next.sql", "CREATE TABLE next (id INTEGER);",
+	)
+	for _, tc := range []struct {
+		name, history, setup string
+		want                 []string
+	}{
+		{name: "only migration tables", history: "Mixed_History", want: []string{"1", "2"}},
+		{
+			name:    "reserved sqlite prefix",
+			history: "mixed_history",
+			setup:   "CREATE TABLE disposable (id INTEGER PRIMARY KEY AUTOINCREMENT); DROP TABLE disposable;",
+			want:    []string{"1", "2"},
+		},
+		{
+			name:    "sqlite prefix without underscore",
+			history: "mixed_history",
+			setup:   "CREATE TABLE SQLiteRecords (id INTEGER);",
+			want:    []string{"2"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			db := openDB(t)
+			seed, err := New(db, "sqlite", WithTable(tc.history))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := seed.Up(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if tc.setup != "" {
+				if _, err := db.ExecContext(ctx, tc.setup); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			m := newM(t, db, fsys, WithTable("mixed_history"), WithBaselineOnMigrate("1"))
+			plan, err := m.Plan(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			planned := make([]string, len(plan))
+			for i, migration := range plan {
+				planned[i] = migration.Version
+			}
+			eq(t, planned, tc.want)
+			applied, err := m.Up(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			eq(t, versions(applied), tc.want)
+		})
+	}
+}
+
 func TestCancelledContextReleasesLock(t *testing.T) {
 	db := openDB(t)
 	m := newM(t, db, basic)
