@@ -1,0 +1,77 @@
+# gomigrate GitHub Action: lint, gate and apply database migrations.
+#
+#   - uses: go-gen-ecosystem/go-migrate@v1
+#     with:
+#       command: lint            # PR annotations for risky SQL
+#       driver: postgres
+#
+#   - uses: go-gen-ecosystem/go-migrate@v1
+#     with:
+#       command: up
+#       dsn: ${{ secrets.DATABASE_URL }}
+#
+# @author Admilson B. F. Cossa
+name: gomigrate
+description: Lint, validate, plan and apply versioned SQL migrations (PostgreSQL, MySQL, SQLite) with go-migrate
+author: Admilson B. F. Cossa
+branding:
+  icon: database
+  color: blue
+
+inputs:
+  command:
+    description: "gomigrate command and flags, e.g. 'lint', 'status --fail-on-pending', 'up --sql', 'up'"
+    required: false
+    default: lint
+  dsn:
+    description: Database DSN or URL (pass a secret). Not needed for lint.
+    required: false
+    default: ""
+  driver:
+    description: postgres | mysql | sqlite (inferred from the DSN when omitted; required for lint without a DSN)
+    required: false
+    default: ""
+  dir:
+    description: Migrations directory
+    required: false
+    default: migrations
+  version:
+    description: gomigrate version to install
+    required: false
+    default: latest
+
+outputs:
+  exit-code:
+    description: "0 ok, 1 error, 2 pending migrations (status --fail-on-pending), 3 lint findings (lint --fail-on)"
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+        cache: false
+    - name: Install gomigrate
+      shell: bash
+      run: go install "github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@${INPUT_VERSION}"
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+    - name: Run gomigrate
+      id: run
+      shell: bash
+      env:
+        GOMIGRATE_DSN: ${{ inputs.dsn }}
+        GOMIGRATE_DRIVER: ${{ inputs.driver }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_DIR: ${{ inputs.dir }}
+      run: |
+        set +e
+        # Lint findings become inline pull-request annotations.
+        output=()
+        case "$INPUT_COMMAND" in lint*) output=(-o github) ;; esac
+        # shellcheck disable=SC2086 # the command is intentionally word-split into arguments
+        gomigrate --dir "$INPUT_DIR" "${output[@]}" $INPUT_COMMAND
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit $code

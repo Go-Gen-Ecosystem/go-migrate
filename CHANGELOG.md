@@ -32,9 +32,20 @@ kept under `_parked/v0` for reference.
   runs; opt-in `WithAllowOutOfOrder` / `WithAllowMissing`.
 - Hooks, halolog structured logging, sentinel errors for `errors.Is`.
 - `gomigrate` CLI: `init`, `create`, `up`, `down`, `redo`, `status`
-  (`--json`, `--fail-on-pending` → exit 2), `validate`, `repair`,
+  (`--fail-on-pending` → exit 2), `validate`, `repair`,
   `mark-applied`, `baseline`; YAML config with `${ENV}` expansion;
   distroless container image.
+- Flyway/Liquibase features as SQL directives: placeholders, contexts,
+  labels, DBMS filters, preconditions (HALT/MARK_RAN/CONTINUE), RunAlways,
+  SQL callback files, baselineOnMigrate, tags with `down --to-tag`, and
+  `--sql` dry runs printing the exact statements.
+- `gomigrate lint` / `migrate.Lint`: database-free, dialect-aware risk
+  analysis (16 rules) with text, JSON and GitHub-annotation output.
+- Machine contract: `-o json` envelope on every command, stable error codes
+  (`migrate.ErrorCodes`), exit codes 0/1/2/3.
+- `gomigrate mcp`: Model Context Protocol server for AI agents, with
+  confirmation-gated `apply`/`rollback` and a lint gate; `AGENTS.md`.
+- GitHub Action (`action.yml`) for lint annotations, gates and deploys.
 - Dialect conformance suite on real PostgreSQL 17 and MySQL 8.4 (CI job),
   fuzzed SQL splitter, benchmarks including a comparison with goose and
   golang-migrate (`benchmarks/compare`).

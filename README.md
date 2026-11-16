@@ -3,10 +3,11 @@
 -->
 # go-migrate
 
-Versioned SQL **and Go** migrations for **PostgreSQL, MySQL/MariaDB and SQLite**:
-a library and a single static CLI (`gomigrate`). It brings Flyway's safety model
-(checksums, repeatable migrations, baseline, repair) to Go without a JVM, and
-makes each migration safe to run from many replicas at once.
+**Database migrations for Go teams, CI pipelines and AI agents.** Versioned SQL and
+Go migrations for PostgreSQL, MySQL/MariaDB and SQLite, delivered as a driver-free library
+and one static CLI. It has Flyway's safety model and Liquibase's targeting, needs no JVM,
+lints migration SQL for production risks, and includes an MCP server so agents can
+migrate safely.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-gen-ecosystem/go-migrate.svg)](https://pkg.go.dev/github.com/go-gen-ecosystem/go-migrate)
 
@@ -18,35 +19,37 @@ go install github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@latest
 
 | | go-migrate | golang-migrate v4 | goose v3 |
 |---|---|---|---|
-| Each migration + its history row commit atomically (PG/SQLite) | ✅ | ❌ (row written separately) | ✅ |
-| Detects edited applied migrations (checksums) | ✅ | ❌ | ❌ |
-| Repeatable migrations (`R__views.sql`) | ✅ | ❌ | ❌ |
+| Migration + history row commit atomically (PG/SQLite) | ✅ | ❌ | ✅ |
+| Checksums detect edited applied migrations | ✅ | ❌ | ❌ |
+| Repeatable migrations, baseline, repair (Flyway) | ✅ | ❌ | ❌ |
+| Contexts, labels, preconditions, tags (Liquibase) | ✅ | ❌ | ❌ |
+| Placeholders and SQL callbacks (Flyway) | ✅ | ❌ | ❌ |
 | Go migrations in the same ordered sequence | ✅ | ❌ | ✅ |
-| Out-of-order apply (late-merged branches), opt-in | ✅ | ❌ | ✅ |
-| Baseline an existing database | ✅ | ❌ | ❌ |
-| Dry run (`--dry-run`, `Plan`) | ✅ | ❌ | ❌ |
-| "Nothing to do" is not an error | ✅ | ❌ (`ErrNoChange`) | ✅ |
+| Out-of-order apply, opt-in | ✅ | ❌ | ✅ |
+| Dry run with the exact SQL | ✅ | ❌ | ❌ |
+| Static risk linter (locks, rewrites, data loss) | ✅ | ❌ | ❌ |
+| Stable JSON output and error codes for CI and agents | ✅ | ❌ | ❌ |
+| MCP server for AI agents | ✅ | ❌ | ❌ |
 | Cross-process lock on PG, MySQL **and** SQLite | ✅ | partial | partial |
-| Reads golang-migrate (`.up.sql/.down.sql`) and goose (`-- +goose Up`) files | ✅ | — | — |
-| CGO-free binary incl. SQLite | ✅ | depends on build | depends on build |
+| Reads golang-migrate and goose file formats | ✅ | — | — |
+| CGO-free binary including SQLite | ✅ | depends on build | depends on build |
 
 **Memory per 100 migrations** (same SQL, same pure-Go SQLite, `benchmarks/compare`, Linux,
 Go 1.26, 6 runs, `benchstat`): go-migrate **596 KiB**, goose 1.14 MiB, golang-migrate
-10.66 MiB, with a similar number of allocations. Wall time is dominated by the database
-and is within noise between tools.
+10.66 MiB, with a similar number of allocations. Wall time is dominated by the database and
+is within noise between tools.
 
-## Quick start (CLI)
+## Quick start
 
 ```bash
-gomigrate init                                 # writes .gomigrate.yaml and migrations/
-gomigrate create add_users                     # migrations/20261116120000_add_users.sql
-gomigrate up --dry-run                         # show the plan, change nothing
-gomigrate up                                   # apply everything pending
-gomigrate status                               # table; --json for scripts
-gomigrate down                                 # roll back the last one (--steps N, --to V, --all)
+gomigrate init                       # .gomigrate.yaml + migrations/
+gomigrate create add_users           # migrations/20261116120000_add_users.sql
+gomigrate lint                       # risky SQL? (no database needed)
+gomigrate up --sql                   # dry run: the exact SQL that would run
+gomigrate up                         # apply
+gomigrate status                     # table; -o json for scripts
+gomigrate down                       # roll back the last one (--steps, --to, --to-tag, --all)
 ```
-
-A migration file:
 
 ```sql
 -- +migrate Up
@@ -56,143 +59,203 @@ CREATE TABLE users (id INTEGER PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE);
 DROP TABLE users;
 ```
 
-The DSN can come from the config file, `GOMIGRATE_DSN`, `DATABASE_URL` or `--dsn`, so CI
-and containers need no config file at all:
-
-```bash
-DATABASE_URL=postgres://app:secret@db:5432/app?sslmode=disable gomigrate up
-docker build -t gomigrate . && docker run --rm -v "$PWD/migrations:/migrations" -e GOMIGRATE_DSN=... gomigrate up
-```
-
 ## Library
 
 ```go
-import (
-	"embed"
-	"io/fs"
-
-	migrate "github.com/go-gen-ecosystem/go-migrate"
-	_ "github.com/jackc/pgx/v5/stdlib"
-)
-
 //go:embed migrations
 var migrations embed.FS
 
-func migrateDB(ctx context.Context, db *sql.DB) error {
-	dir, _ := fs.Sub(migrations, "migrations")
-	m, err := migrate.New(db, "postgres", migrate.WithFS(dir)) // + migrate.WithLogger(halologLogger)
-	if err != nil {
-		return err // malformed files and duplicate versions fail here, not mid-run
-	}
-	_, err = m.Up(ctx)
+dir, _ := fs.Sub(migrations, "migrations")
+m, err := migrate.New(db, "postgres", migrate.WithFS(dir)) // malformed files fail here, not mid-run
+if err != nil {
 	return err
 }
+_, err = m.Up(ctx)
 ```
 
-`Migrator` methods: `Up`, `UpTo`, `Down`, `DownTo`, `Redo`, `Plan`, `PlanDown`, `PlanDownTo`,
-`Status`, `Validate`, `Repair`, `MarkApplied`, `Baseline`. Every error is testable with
-`errors.Is` (`ErrDirty`, `ErrChecksumMismatch`, `ErrOutOfOrder`, `ErrLockTimeout`, …). Options: `WithFS`, `WithGoMigrations`,
-`WithTable`, `WithLockWait`, `WithLogger` ([halolog](https://github.com/go-gen-ecosystem/halolog)),
-`WithAllowOutOfOrder`, `WithAllowMissing`, `WithHooks`, `WithInstalledBy`.
-A `Migrator` is immutable after `New` and safe for concurrent use.
+- **Migrator methods:**
+  - apply and roll back: `Up`, `UpTo`, `Down`, `DownTo`, `DownToTag`, `Redo`;
+  - read-only: `Plan`, `PlanDown`, `PlanDownTo`, `PlanDownToTag`, `Statements`, `Status`, `Validate`, `Lint`;
+  - history administration: `Repair`, `MarkApplied`, `Baseline`, `Tag`.
+- **Options:**
+  - `WithFS`, `WithGoMigrations`, `WithTable`, `WithLockWait`;
+  - `WithLogger` ([halolog](https://github.com/go-gen-ecosystem/halolog));
+  - `WithPlaceholders`, `WithContexts`, `WithLabels`, `WithBaselineOnMigrate`;
+  - `WithAllowOutOfOrder`, `WithAllowMissing`, `WithHooks`, `WithInstalledBy`.
+- **Without a database:** `migrate.Lint(dialect, opts...)` analyzes migrations with no connection.
+- **Errors:** every error works with `errors.Is`, and `migrate.ErrorCodes(err)` gives stable codes.
+- **Concurrency:** a `Migrator` is immutable after `New` and safe for concurrent use.
 
 ## Migration files
 
-| File name | Meaning |
+| File | Meaning |
 |---|---|
-| `001_create_users.sql`, `V1.2__add_index.sql` | versioned; `-- +migrate Up` / `Down` markers (or `-- +goose ...`) |
-| `20240101120000_seed.up.sql` + `.down.sql` | versioned pair (golang-migrate layout) |
-| `R__user_views.sql` | repeatable: re-applied after versioned migrations whenever it changes |
-| file without markers | the whole file is the Up section (irreversible) |
+| `001_users.sql`, `V1.2__index.sql` | versioned; `-- +migrate Up` / `Down` markers (or `-- +goose …`) |
+| `2024…_seed.up.sql` + `.down.sql` | versioned pair (golang-migrate layout) |
+| `R__views.sql` | repeatable: re-applied whenever it changes, and after rollbacks |
+| `beforeMigrate.sql`, `afterEachMigrate__x.sql`, … | SQL callbacks (Flyway names) |
 
-- Versions compare **numerically per dotted segment**: `9 < 10`, `1.9 < 1.10`, `001 == 1 == 1.0`.
-  Flyway's `V1_2__x.sql` is version `1.2`.
-- Duplicate versions, SQL before the first marker, unbalanced blocks and `BEGIN`/`COMMIT`
-  inside a transactional migration are load errors.
-- Statements split on `;` outside strings, quoted identifiers, comments, PostgreSQL
-  `$tag$` bodies and MySQL backticks. Wrap anything else (e.g. SQLite triggers) in
-  `-- +migrate StatementBegin` / `StatementEnd`.
-- `-- +migrate Up notransaction` runs a migration outside a transaction
-  (e.g. `CREATE INDEX CONCURRENTLY`).
-- The checksum covers the Up section only and ignores BOMs, CRLF vs LF and trailing
-  whitespace, so Windows and Linux checkouts agree and fixing a Down section is not drift.
-  The SQL itself is executed exactly as written.
+Directives:
+
+```sql
+-- +migrate Up notransaction                   -- e.g. CREATE INDEX CONCURRENTLY
+-- +migrate Context dev,test                   -- run only with --context dev or test
+-- +migrate Labels billing                     -- run only with --label billing
+-- +migrate DBMS postgres                      -- run only on PostgreSQL
+-- +migrate RunAlways                          -- repeatable: run on every up
+-- +migrate Precondition onFail=MARK_RAN expect=0 SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'legacy'
+-- +migrate Lint ignore=drop-table             -- accept a reviewed lint finding
+-- +migrate StatementBegin / StatementEnd      -- keep a block as one statement
+```
+
+Supporting rules:
+
+- **Placeholders:** `${name}` is replaced from `--placeholder name=value` or the `placeholders:` config. Built-ins are `${migrate:dialect}`, `${migrate:table}` and `${migrate:user}`.
+- **Versions** compare numerically: `9 < 10`, `1.9 < 1.10`, `001 == 1 == 1.0`.
+- **Checksums** cover the Up section and ignore line endings, BOMs and trailing whitespace. The SQL runs exactly as written.
+- **Preconditions:** `HALT` fails the run, `MARK_RAN` records the migration without running it, and `CONTINUE` leaves it pending.
 
 ## Safety model
 
-- **Locking.** Changing operations hold a cross-process lock keyed by the schema-qualified
-  history table: `pg_advisory_lock` / `GET_LOCK` (released by the server if the process
-  dies) and, on SQLite, a lease renewed inside every migration's own transaction. Ten
-  replicas can run `up` at boot; each migration runs exactly once. The lock is released on
-  Ctrl-C, timeouts and panics.
-- **One connection per run.** Every statement of a run executes on the lock's connection,
-  so a one-connection pool works, losing the session fails the run instead of continuing
-  unprotected, and history writes are schema-qualified: a migration's `SET search_path` or
-  `USE` cannot redirect them. Session-lock connections are discarded afterwards, never
-  pooled. Migrations within one run share that session: prefer `SET LOCAL`.
-- **Atomicity.** On PostgreSQL and SQLite a migration and its history row commit together:
-  a failure leaves no trace. MySQL cannot roll back DDL, so the row is written as *dirty*
-  first; a failure blocks further runs (`ErrDirty`). Restore the schema by hand, then run
-  `gomigrate repair` (you undid the partial change) or `gomigrate mark-applied V` (you
-  completed it), instead of silently re-running half-applied SQL.
-- **Rollbacks** check the requested count, the baseline and every target's down section
-  before running anything, and mark repeatable migrations for re-application.
-- **Validation before execution.** Edited applied files (`ErrChecksumMismatch`), applied
-  versions missing from the source (`ErrMissingMigration`), pending versions older than the
-  latest applied one (`ErrOutOfOrder`), unknown targets and irreversible rollbacks are all
-  detected before any SQL runs.
-- **Read-only means read-only.** `status`, `validate` and `--dry-run` never create tables.
-- **No secrets in output.** DSNs and passwords never appear in errors; failing SQL is
-  quoted as a short, one-line excerpt.
+- **Locking:** a cross-process lock keyed by the schema-qualified history table.
+  - PostgreSQL and MySQL: `pg_advisory_lock` / `GET_LOCK`, which the server releases if the process dies.
+  - SQLite: a lease renewed inside every migration's own transaction.
+  - Ten replicas can run `up` at boot, and each migration still runs exactly once.
+- **One connection per run.**
+  - All statements run on the lock's connection, so one-connection pools work.
+  - If the session is lost, the run fails instead of continuing unprotected.
+  - History writes are schema-qualified, so `SET search_path` or `USE` in a migration cannot redirect them.
+  - Session-lock connections are discarded afterwards, never returned to the pool.
+- **Atomicity.**
+  - PostgreSQL and SQLite commit each migration with its history row.
+  - MySQL cannot roll back DDL, so the row is marked dirty first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
+- **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
+- **Read-only means read-only:** `status`, `validate`, `lint` and dry runs never create tables.
+- **No secrets in output:** DSNs and passwords never appear in errors or logs.
+
+## Lint
+
+`gomigrate lint` needs no database. Its findings, with the rule IDs:
+
+| Severity | Rule IDs |
+|---|---|
+| error | `add-not-null-without-default`, `concurrently-in-transaction`, `sqlite-unsupported-alter` |
+| warning | `index-not-concurrent`, `column-type-change`, `foreign-key-not-valid`, `check-not-valid`, `set-not-null`, `rename`, `drop-table`, `drop-column`, `truncate`, `unbounded-write`, `full-table-rewrite` |
+| info | `missing-lock-timeout`, `irreversible` |
+
+How it works:
+
+- Rules know the dialect.
+- They ignore text inside strings and comments.
+- They skip tables created in the same migration.
+- `-o github` turns findings into pull-request annotations.
+- `--fail-on error|warning|info|never` exits with code 3.
+
+## AI agents (MCP)
+
+```bash
+claude mcp add gomigrate -- gomigrate mcp
+```
+
+- **Read-only tools:** `status`, `validate`, `plan` (with SQL) and `lint`.
+- **`create_migration`:** writes the file, then validates and lints it.
+- **`apply` and `rollback`:** they require `confirm: true`. Without it, they return the exact plan for the user to approve. `apply` also refuses while pending migrations have lint errors.
+
+See [AGENTS.md](AGENTS.md) for the workflow and error codes.
+
+## CI/CD
+
+```yaml
+# Pull requests: annotate risky SQL, fail on errors
+- uses: go-gen-ecosystem/go-migrate@v1
+  with: { command: lint, driver: postgres }
+
+# Deploy: apply, after a gate that shows the plan
+- uses: go-gen-ecosystem/go-migrate@v1
+  with: { command: up --sql, dsn: "${{ secrets.DATABASE_URL }}" }
+- uses: go-gen-ecosystem/go-migrate@v1
+  with: { command: up, dsn: "${{ secrets.DATABASE_URL }}" }
+```
+
+- **JSON envelope:** every command accepts `-o json` and prints one envelope, `{ok, command, data | error{code, codes, message}}`.
+- **Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | ok |
+| `1` | error |
+| `2` | pending migrations (`status --fail-on-pending`) |
+| `3` | lint findings at the `--fail-on` level |
+
+- **Container image:** `docker build -t gomigrate .` produces a 27 MB distroless image.
 
 ## Configuration
 
-`.gomigrate.yaml` (any value may use `${ENV}` or `${ENV:-default}`):
+`.gomigrate.yaml`, where values may use `${ENV}` or `${ENV:-default}`:
 
 ```yaml
 database:
-  driver: postgres            # postgres | mysql | sqlite (inferred from the DSN if omitted)
+  driver: postgres            # inferred from the DSN when omitted
   dsn: ${DATABASE_URL}        # or host, port, name, user, password, sslmode, params
-  connect_timeout: 10s
 migrations:
   dir: migrations
   table: gomigrate_history    # or schema.table
   lock_timeout: 5m
+  contexts: [prod]
+  placeholders: { owner: app_owner }
+  baseline_on_migrate: ""     # e.g. "5" to adopt an existing schema
   allow_out_of_order: false
   allow_missing: false
 ```
 
-Precedence: flags > `GOMIGRATE_DSN`/`GOMIGRATE_DRIVER` > `DATABASE_URL` > file > defaults.
-A DSN that overrides the file brings its own driver (`postgres://`, `mysql://`, `sqlite://`).
-An explicit `--config` must exist and is never retargeted by `DATABASE_URL`. Prefer the
-environment over `--dsn` for credentials: command lines are visible to other processes.
+Settings are applied in this order of precedence:
+
+1. flags;
+2. `GOMIGRATE_DSN` / `GOMIGRATE_DRIVER`;
+3. `DATABASE_URL`;
+4. the config file;
+5. defaults.
+
+Additional rules:
+
+- A DSN that overrides the file brings its own driver.
+- An explicit `--config` must exist, and `DATABASE_URL` never retargets it.
+- Prefer the environment over `--dsn` for credentials, because command lines are visible to other processes.
 
 ## Commands
 
-| Command | |
+| Command | Purpose |
 |---|---|
-| `init` | write a starter config and `migrations/` |
-| `create NAME [--seq] [--pair]` | new migration (UTC timestamp or next sequence number) |
-| `up [--to V] [--dry-run]` | apply pending migrations |
-| `down [--steps N \| --to V \| --all] [--dry-run]` | roll back |
-| `redo` | roll back the last migration and apply it again |
-| `status [--json] [--fail-on-pending]` | state of every migration; CI gate |
-| `validate` | drift, missing, out-of-order and failed migrations |
-| `repair` | clear failed rows, accept edited checksums |
-| `mark-applied V` | record V as applied without running it (finish a dirty migration) |
+| `init` | write a config and `migrations/` |
+| `create NAME [--seq] [--pair]` | create a migration |
+| `lint [--fail-on LEVEL]` | static risk analysis |
+| `up [--to V] [--dry-run \| --sql]` | apply pending migrations |
+| `down [--steps N \| --to V \| --to-tag T \| --all] [--dry-run \| --sql]` | roll back |
+| `redo` | roll back and re-apply the last migration |
+| `status [--fail-on-pending]` | show state; doubles as a CI gate |
+| `validate` | check drift, missing, out-of-order and failed migrations |
+| `repair` | clear failed rows and accept edited checksums |
+| `mark-applied V` | record V as applied without running it |
 | `baseline --version V` | adopt an existing database |
+| `tag NAME` | tag the current version |
+| `mcp` | serve AI agents over the Model Context Protocol |
 
-Global: `--config`, `--dsn`, `--driver`, `--dir`, `--table`, `--log-level`, `--log-format text|json`.
-Results go to stdout (`status --json` has a stable snake_case schema), logs to stderr.
-Exit codes: `0` success, `1` error, `2` pending migrations with `--fail-on-pending`.
+Global flags:
+
+| Purpose | Flags |
+|---|---|
+| Connection | `--config`, `--dsn`, `--driver` |
+| Migrations | `--dir`, `--table`, `--context`, `--label`, `--placeholder`, `--baseline-on-migrate` |
+| Output | `-o text\|json` |
+| Logging | `--log-level`, `--log-format` |
 
 ## Development
 
 ```bash
 make check             # lint + tests + govulncheck
 make test-race         # race detector (needs cgo)
-make test-integration  # conformance suite on real PostgreSQL 17 and MySQL 8.4 (Docker)
+make test-integration  # conformance on real PostgreSQL 17 and MySQL 8.4 (Docker)
 make bench             # benchmarks; see also benchmarks/compare
 ```
 
-Licensed under Apache-2.0.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the design. Licensed under Apache-2.0.
