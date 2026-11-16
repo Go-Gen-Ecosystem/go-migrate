@@ -29,6 +29,7 @@ var (
 	ErrDuplicateMarker     = errors.New("duplicate Up/Down marker")
 	ErrUnbalancedBlock     = errors.New("unbalanced StatementBegin/StatementEnd")
 	ErrUnknownDirective    = errors.New("unknown directive")
+	ErrTSQLBatch           = errors.New("expected GO on its own line outside StatementBegin; GO counts are unsupported")
 )
 
 // Section is one direction of a migration: an ordered list of chunks. A chunk
@@ -49,6 +50,9 @@ type chunk struct {
 
 // Empty reports whether the section has no executable SQL under lx.
 func (s Section) Empty(lx Lexical) bool {
+	if lx.TSQL {
+		return len(s.Statements(lx)) == 0
+	}
 	for _, c := range s.chunks {
 		if c.verbatim && strings.TrimSpace(c.sql) != "" {
 			return false
@@ -92,8 +96,15 @@ func (s Section) Statements(lx Lexical) []string {
 	for _, c := range s.chunks {
 		if c.verbatim {
 			if stmt := strings.TrimSpace(c.sql); stmt != "" {
-				out = append(out, strings.TrimSuffix(stmt, ";"))
+				if !lx.TSQL {
+					stmt = strings.TrimSuffix(stmt, ";")
+				}
+				out = append(out, stmt)
 			}
+			continue
+		}
+		if lx.TSQL {
+			out = appendTSQLBatches(out, c.sql, lx)
 			continue
 		}
 		out = append(out, Split(c.sql, lx)...)
@@ -198,9 +209,16 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 		return &sc.Up
 	}
 	cur = sectionFor(def)
+	preamble := preambleLexical
+	preamble.TSQL = lx.TSQL
 
 	for n, line := range strings.Split(text, "\n") {
 		lineNo := n + 1
+		if lx.TSQL && st.inCode() {
+			if goLine, valid := tsqlGoLine(line); goLine && (!valid || inBlock) {
+				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrTSQLBatch)
+			}
+		}
 		var m []string
 		if st.inCode() && mayBeDirective(line) {
 			m = directive.FindStringSubmatch(line)
@@ -230,7 +248,7 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 			if seen[d] {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrDuplicateMarker)
 			}
-			if !markers && HasStatement(buf.String(), preambleLexical) {
+			if !markers && HasStatement(buf.String(), preamble) {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrContentBeforeMarker)
 			}
 			if !markers {
@@ -293,6 +311,44 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 	return sc, nil
 }
 
+// tsqlGoLine recognizes a standalone client-side batch separator, optionally
+// followed by a line comment. Flag unsupported count or semicolon forms at
+// load time so they cannot be confused with a single execution.
+func tsqlGoLine(line string) (goLine, valid bool) {
+	line = strings.TrimSpace(line)
+	if len(line) < 2 || !strings.EqualFold(line[:2], "GO") {
+		return false, false
+	}
+	if len(line) > 2 && !isSpace(line[2]) && line[2] != ';' && !strings.HasPrefix(line[2:], "--") {
+		return false, false
+	}
+	tail := strings.TrimSpace(line[2:])
+	return true, tail == "" || strings.HasPrefix(tail, "--")
+}
+
+func appendTSQLBatches(out []string, sql string, lx Lexical) []string {
+	var st lexState
+	start, offset := 0, 0
+	for line := range strings.SplitSeq(sql, "\n") {
+		if st.inCode() {
+			if goLine, valid := tsqlGoLine(line); goLine && valid {
+				out = appendTSQLBatch(out, sql[start:offset], lx)
+				start = min(offset+len(line)+1, len(sql))
+			}
+		}
+		st = st.line(line, lx).newline()
+		offset += len(line) + 1
+	}
+	return appendTSQLBatch(out, sql[start:], lx)
+}
+
+func appendTSQLBatch(out []string, batch string, lx Lexical) []string {
+	if HasStatement(batch, lx) {
+		return append(out, strings.TrimSpace(batch))
+	}
+	return out
+}
+
 // mayBeDirective is a cheap prefilter so the directive regex only runs on
 // comment lines that contain '+', not on every line of SQL.
 func mayBeDirective(line string) bool {
@@ -320,6 +376,9 @@ func lineEndings(content []byte) []byte {
 // Keywords are read from the code under lx, so comments anywhere (BEGIN/**/)
 // and literals never hide or fake one.
 func IsTransactionControl(stmt string, lx Lexical) bool {
+	if lx.TSQL {
+		return tsqlTransactionControl.MatchString(code(stmt, lx, false))
+	}
 	words := strings.FieldsFunc(strings.ToUpper(Code(stmt, lx)), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
 	})
@@ -341,6 +400,10 @@ func IsTransactionControl(stmt string, lx Lexical) bool {
 	}
 	return false
 }
+
+// T-SQL batches can contain several statements, even without semicolons.
+// BEGIN / END of a regular code block is distinct from BEGIN TRANSACTION.
+var tsqlTransactionControl = regexp.MustCompile(`(?i)(?:^|[^\pL\pN_@$#])(?:COMMIT|ROLLBACK|BEGIN\s+(?:DISTRIBUTED\s+)?TRAN(?:SACTION)?|SET\s+IMPLICIT_TRANSACTIONS\s+ON)\b`)
 
 // list splits a comma- or space-separated directive value (lower-cased).
 func list(s string) []string {

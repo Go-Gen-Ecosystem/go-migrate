@@ -15,8 +15,9 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib" // registers "pgx"
-	_ "modernc.org/sqlite"             // registers "sqlite" (pure Go, no cgo)
+	_ "github.com/jackc/pgx/v5/stdlib"      // registers "pgx"
+	mssql "github.com/microsoft/go-mssqldb" // registers "sqlserver"
+	_ "modernc.org/sqlite"                  // registers "sqlite" (pure Go, no cgo)
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 )
@@ -27,15 +28,17 @@ const (
 	defaultMaxOpenConns   = 4
 	defaultPostgresPort   = 5432
 	defaultMySQLPort      = 3306
+	defaultSQLServerPort  = 1433
 	defaultHost           = "localhost"
 	sqliteBusyTimeoutMS   = 10000
 )
 
 // driverNames maps a dialect to its registered database/sql driver.
 var driverNames = map[string]string{
-	dialect.Postgres: "pgx",
-	dialect.MySQL:    "mysql",
-	dialect.SQLite:   "sqlite",
+	dialect.Postgres:  "pgx",
+	dialect.MySQL:     "mysql",
+	dialect.SQLite:    "sqlite",
+	dialect.SQLServer: "sqlserver",
 }
 
 // Open resolves the dialect and DSN, opens the pool and verifies it with a
@@ -47,6 +50,9 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 	}
 	conn, err := sql.Open(driverNames[name], dsn)
 	if err != nil {
+		if name == dialect.SQLServer {
+			return nil, "", errors.New("invalid SQL Server connection configuration")
+		}
 		return nil, "", fmt.Errorf("open %s database: %w", name, err)
 	}
 	maxOpen := db.MaxOpenConns
@@ -67,6 +73,9 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 	defer cancel()
 	if err := conn.PingContext(pctx); err != nil {
 		_ = conn.Close()
+		if name == dialect.SQLServer {
+			return nil, "", sqlServerConnectError(pctx, err)
+		}
 		return nil, "", fmt.Errorf("connect to %s database: %w", name, scrub(err, db.Password))
 	}
 	return conn, name, nil
@@ -74,7 +83,7 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 
 // Resolve returns the dialect name and driver DSN for db. The driver is
 // taken from db.Driver or inferred from the DSN (postgres://, mysql://,
-// sqlite://, file:, *.db).
+// sqlserver://, sqlite://, file:, *.db).
 func Resolve(db Database) (string, string, error) {
 	d, err := resolveDialect(db)
 	if err != nil {
@@ -86,6 +95,8 @@ func Resolve(db Database) (string, string, error) {
 		dsn, err = postgresDSN(db)
 	case dialect.MySQL:
 		dsn, err = mysqlDSN(db)
+	case dialect.SQLServer:
+		dsn, err = sqlServerDSN(db)
 	default:
 		dsn, err = sqliteDSN(db)
 	}
@@ -111,7 +122,7 @@ func resolveDialect(db Database) (*dialect.Dialect, error) {
 		if db.DSN == "" && db.Name == "" {
 			return nil, ErrNoDatabase
 		}
-		return nil, errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite)")
+		return nil, errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite, sqlserver)")
 	}
 	return dialect.Lookup(driver)
 }
@@ -123,12 +134,87 @@ func inferDriver(dsn string) string {
 		return dialect.Postgres
 	case strings.HasPrefix(lower, "mysql://"):
 		return dialect.MySQL
+	case strings.HasPrefix(lower, "sqlserver://"):
+		return dialect.SQLServer
 	case strings.HasPrefix(lower, "sqlite://"), strings.HasPrefix(lower, "sqlite3://"), strings.HasPrefix(lower, "file:"),
 		strings.HasSuffix(lower, ".db"), strings.HasSuffix(lower, ".sqlite"), strings.HasSuffix(lower, ".sqlite3"),
 		lower == ":memory:":
 		return dialect.SQLite
 	}
 	return ""
+}
+
+func sqlServerDSN(db Database) (string, error) {
+	if db.SSLMode != "" {
+		return "", errors.New("set SQL Server TLS options in the sqlserver:// URL or database.params")
+	}
+	u := &url.URL{Scheme: "sqlserver"}
+	if db.DSN != "" {
+		parsed, err := url.Parse(db.DSN)
+		if err != nil || !strings.EqualFold(parsed.Scheme, "sqlserver") || parsed.Hostname() == "" || parsed.Fragment != "" {
+			return "", errors.New("invalid sqlserver:// URL")
+		}
+		u = parsed
+		u.Scheme = "sqlserver"
+	} else {
+		if db.Name == "" {
+			return "", ErrNoDatabase
+		}
+		u.Host = net.JoinHostPort(or(db.Host, defaultHost), strconv.Itoa(orInt(db.Port, defaultSQLServerPort)))
+		if db.User != "" {
+			u.User = url.UserPassword(db.User, db.Password)
+		}
+	}
+	params, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", errors.New("invalid sqlserver:// URL parameters")
+	}
+	q := url.Values{"encrypt": {"true"}, "trustservercertificate": {"false"}}
+	if db.Name != "" && db.DSN == "" {
+		q.Set("database", db.Name)
+	}
+	if err := mergeSQLServerParams(q, db.Params, params); err != nil {
+		return "", err
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func mergeSQLServerParams(q url.Values, config map[string]string, dsn url.Values) error {
+	seen := make(map[string]bool, len(config)+len(dsn))
+	for k, values := range dsn {
+		k = strings.ToLower(k)
+		if len(values) != 1 || seen[k] {
+			return errors.New("duplicate SQL Server URL parameter")
+		}
+		seen[k] = true
+		q.Set(k, values[0])
+	}
+	configured := make(map[string]bool, len(config))
+	for k, value := range config {
+		k = strings.ToLower(k)
+		if configured[k] {
+			return errors.New("duplicate SQL Server configuration parameter")
+		}
+		configured[k] = true
+		if !seen[k] {
+			q.Set(k, value)
+		}
+	}
+	return nil
+}
+
+func sqlServerConnectError(ctx context.Context, err error) error {
+	if cause := ctx.Err(); cause != nil {
+		return fmt.Errorf("connect to SQL Server: %w", cause)
+	}
+	var serverError mssql.Error
+	if errors.As(err, &serverError) {
+		return fmt.Errorf("connect to SQL Server: server error %d", serverError.Number)
+	}
+	// Never include a driver diagnostic containing user information, startup
+	// parameters, or a URL whose query string may carry additional credentials.
+	return errors.New("connect to SQL Server: check server address, database, credentials, and TLS settings")
 }
 
 func postgresDSN(db Database) (string, error) {

@@ -2,12 +2,12 @@
 // @author Admilson B. F. Cossa
 
 // Package migrate applies versioned SQL and Go migrations to PostgreSQL,
-// MySQL/MariaDB and SQLite.
+// MySQL/MariaDB, SQLite, and SQL Server.
 //
 // A Migrator is built once from a *sql.DB and a migration source and is then
 // immutable and safe for concurrent use. Runs that change the database (Up,
 // Down, Repair, Baseline) hold a cross-process lock: a session advisory lock
-// on PostgreSQL and MySQL and a run-lifetime file lock with a lease on SQLite.
+// on PostgreSQL, MySQL, and SQL Server and a run-lifetime file lock with a lease on SQLite.
 // In-memory SQLite databases coordinate within the process. Transactional
 // migrations and their history row commit together. A failed nontransactional
 // migration leaves a "dirty" row that blocks further runs until Repair.
@@ -16,6 +16,7 @@
 //
 //	import _ "github.com/jackc/pgx/v5/stdlib" // "pgx"
 //	import _ "github.com/go-sql-driver/mysql" // "mysql"
+//	import _ "github.com/microsoft/go-mssqldb" // "sqlserver"
 //	import _ "modernc.org/sqlite"             // "sqlite", pure Go
 package migrate
 
@@ -52,8 +53,8 @@ const (
 	maxVersionKey = 128
 )
 
-// New builds a Migrator for db. dialectName is "postgres", "mysql" or
-// "sqlite" (aliases such as "pgx", "mariadb" and "sqlite3" are accepted).
+// New builds a Migrator for db. dialectName is "postgres", "mysql", "sqlite",
+// or "sqlserver" (aliases such as "pgx", "mariadb", "sqlite3", and "mssql" are accepted).
 // The migration source is loaded and validated immediately, so malformed
 // files and duplicate versions fail here rather than mid-run.
 func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {

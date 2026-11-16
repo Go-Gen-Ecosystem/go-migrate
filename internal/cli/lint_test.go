@@ -71,3 +71,15 @@ func TestGitHubEscaping(t *testing.T) {
 		t.Fatalf("ghData = %q", got)
 	}
 }
+
+func TestSQLServerCLIReportsBatchFindings(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("migrations", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, "migrations/1_change.sql", "DECLARE @value int = 42;\nDELETE FROM [items];\nGO\nSELECT 1;")
+	out, exit := runCLI(t, map[string]string{"GOMIGRATE_DSN": "sqlserver://localhost?database=unused"}, "lint")
+	if exit != ExitOK || !strings.Contains(out, "unbounded-write") {
+		t.Fatalf("SQL Server lint = %d\n%s", exit, out)
+	}
+}

@@ -24,6 +24,8 @@ type Lexical struct {
 	// MySQLComments makes "--" a comment only when followed by whitespace,
 	// and treats /*! ... */ and /*+ ... */ as executable (MySQL rules).
 	MySQLComments bool
+	// TSQL enables bracketed identifiers, nested comments, and GO batches.
+	TSQL bool
 }
 
 // Split returns the statements in sql, trimmed, without the terminating ';'.
@@ -72,6 +74,9 @@ func (s *splitter) run() []string {
 		case c == '`' && s.lx.Backticks:
 			s.hasCode = true
 			i = skipQuoted(src, i, '`', false)
+		case c == '[' && s.lx.TSQL:
+			s.hasCode = true
+			i = skipQuoted(src, i, ']', false)
 		case c == '-' && i+1 < len(src) && src[i+1] == '-' &&
 			(!s.lx.MySQLComments || i+2 >= len(src) || isSpace(src[i+2])):
 			i = skipLine(src, i)
@@ -81,7 +86,7 @@ func (s *splitter) run() []string {
 			if s.lx.MySQLComments && i+2 < len(src) && (src[i+2] == '!' || src[i+2] == '+') {
 				s.hasCode = true // executable comment or optimizer hint
 			}
-			i = skipBlock(src, i)
+			i = skipBlock(src, i, s.lx.TSQL)
 		case c == '$' && s.lx.DollarQuotes:
 			s.hasCode = true
 			i = skipDollar(src, i)
@@ -133,7 +138,11 @@ func skipLine(src string, i int) int {
 	return len(src)
 }
 
-func skipBlock(src string, i int) int {
+func skipBlock(src string, i int, nested bool) int {
+	if nested {
+		end, _ := blockComment(true).inside(src, i+2)
+		return end
+	}
 	if j := strings.Index(src[i+2:], "*/"); j >= 0 {
 		return i + 2 + j + 2
 	}
@@ -178,9 +187,18 @@ type lexState struct {
 	closer    string // what ends the open token; "" in code
 	backslash bool   // '\' escapes the next byte inside the open quote
 	escaped   bool   // the previous byte was an escaping '\'
+	depth     int    // nested block comment depth, or 0 for flat comments
 }
 
 func (st lexState) inCode() bool { return st.closer == "" }
+
+func blockComment(nested bool) lexState {
+	st := lexState{closer: "*/"}
+	if nested {
+		st.depth = 1
+	}
+	return st
+}
 
 // line advances st over one line, given without its line break.
 func (st lexState) line(s string, lx Lexical) lexState {
@@ -200,11 +218,14 @@ func (st lexState) line(s string, lx Lexical) lexState {
 		case c == '`' && lx.Backticks:
 			st = lexState{closer: "`"}
 			i++
+		case c == '[' && lx.TSQL:
+			st = lexState{closer: "]"}
+			i++
 		case c == '-' && i+1 < len(s) && s[i+1] == '-' && (!lx.MySQLComments || i+2 >= len(s) || isSpace(s[i+2])),
 			c == '#' && lx.HashComments:
 			return st // a line comment ends with the line
 		case c == '/' && i+1 < len(s) && s[i+1] == '*':
-			st = lexState{closer: "*/"}
+			st = blockComment(lx.TSQL)
 			i += 2
 		case c == '$' && lx.DollarQuotes:
 			if tag := dollarTag(s, i); tag != "" {
@@ -223,6 +244,9 @@ func (st lexState) line(s string, lx Lexical) lexState {
 // inside consumes s from i while a token is open and returns where code
 // resumes (len(s) if the token continues on the next line).
 func (st lexState) inside(s string, i int) (int, lexState) {
+	if st.depth > 0 {
+		return st.nestedComment(s, i)
+	}
 	if len(st.closer) > 1 { // block comment or dollar-quoted body
 		if j := strings.Index(s[i:], st.closer); j >= 0 {
 			return i + j + len(st.closer), lexState{}
@@ -244,6 +268,25 @@ func (st lexState) inside(s string, i int) (int, lexState) {
 				continue
 			}
 			return i + 1, lexState{}
+		}
+	}
+	return len(s), st
+}
+
+func (st lexState) nestedComment(s string, i int) (int, lexState) {
+	for i+1 < len(s) {
+		switch s[i : i+2] {
+		case "/*":
+			st.depth++
+			i += 2
+		case "*/":
+			st.depth--
+			i += 2
+			if st.depth == 0 {
+				return i, lexState{}
+			}
+		default:
+			i++
 		}
 	}
 	return len(s), st
@@ -277,7 +320,9 @@ func isSpace(c byte) bool {
 // Code returns sql with comments removed and string-literal contents
 // blanked (quotes kept), for pattern analysis that must never match text
 // inside comments or literals. Quoted identifiers are kept as written.
-func Code(sql string, lx Lexical) string {
+func Code(sql string, lx Lexical) string { return code(sql, lx, true) }
+
+func code(sql string, lx Lexical, identifiers bool) string {
 	var b strings.Builder
 	b.Grow(len(sql))
 	for i := 0; i < len(sql); {
@@ -287,9 +332,16 @@ func Code(sql string, lx Lexical) string {
 			backslash := lx.BackslashEscapes || (lx.DollarQuotes && isEStringPrefix(sql, i))
 			i = skipQuoted(sql, i, '\'', backslash)
 			b.WriteString("''")
-		case c == '"' || (c == '`' && lx.Backticks):
+		case c == '"' || (c == '`' && lx.Backticks) || (c == '[' && lx.TSQL):
+			if c == '[' {
+				c = ']'
+			}
 			j := skipQuoted(sql, i, c, false)
-			b.WriteString(sql[i:j])
+			if identifiers {
+				b.WriteString(sql[i:j])
+			} else {
+				b.WriteByte(' ')
+			}
 			i = j
 		case c == '-' && i+1 < len(sql) && sql[i+1] == '-' &&
 			(!lx.MySQLComments || i+2 >= len(sql) || isSpace(sql[i+2])):
@@ -299,7 +351,7 @@ func Code(sql string, lx Lexical) string {
 			i = skipLine(sql, i)
 			b.WriteByte(' ')
 		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
-			i = skipBlock(sql, i)
+			i = skipBlock(sql, i, lx.TSQL)
 			b.WriteByte(' ')
 		case c == '$' && lx.DollarQuotes:
 			j := skipDollar(sql, i)

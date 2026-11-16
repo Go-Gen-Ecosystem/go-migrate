@@ -20,12 +20,14 @@ kept under `_parked/v0` for reference.
   `Status`, `Validate`, `Repair`, `MarkApplied`, `Baseline`.
 - PostgreSQL, MySQL/MariaDB and SQLite (pure-Go `modernc.org/sqlite` in the
   CLI: CGO-free binaries for linux/darwin/windows × amd64/arm64).
+- SQL Server 2022 migration support with Microsoft's pure-Go driver, T-SQL
+  batches, database-scoped application locking, and verified TLS by default.
 - Migration formats: `001_x.sql` / `V1.2__x.sql` with `-- +migrate` or
   `-- +goose` markers, golang-migrate `.up.sql`/`.down.sql` pairs, Flyway
   `R__x.sql` repeatable migrations, Go migrations, `fs.FS` / `embed.FS`.
 - Cross-process locking: PostgreSQL advisory locks, MySQL `GET_LOCK`,
   fenced lease on SQLite; every run executes on the lock's own connection.
-- Per-migration transactions with the history row (PostgreSQL, SQLite);
+- Per-migration transactions with the history row (PostgreSQL, SQLite, SQL Server);
   dirty-row protocol plus `repair` / `mark-applied` where DDL cannot be
   rolled back (MySQL, `notransaction`).
 - Checksum drift, missing-migration and out-of-order detection before any SQL

@@ -21,9 +21,10 @@ import (
 
 // Names of the supported dialects.
 const (
-	Postgres = "postgres"
-	MySQL    = "mysql"
-	SQLite   = "sqlite"
+	Postgres  = "postgres"
+	MySQL     = "mysql"
+	SQLite    = "sqlite"
+	SQLServer = "sqlserver"
 )
 
 // ErrUnsupported is returned by Lookup for an unknown dialect name.
@@ -40,7 +41,7 @@ type Dialect struct {
 	lexical          script.Lexical
 	transactionalDDL bool
 	quote            byte
-	numbered         bool
+	bindPrefix       string
 	tsType           string
 	tableSuffix      string
 	exists           func(Table) (string, []any)
@@ -55,7 +56,7 @@ var dialects = map[string]*Dialect{
 		lexical:          script.Lexical{DollarQuotes: true},
 		transactionalDDL: true,
 		quote:            '"',
-		numbered:         true,
+		bindPrefix:       "$",
 		tsType:           "TIMESTAMP",
 		exists:           infoSchemaExists("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE($1, current_schema()) AND table_name = $2"),
 		schemaSQL:        "SELECT current_schema()",
@@ -85,10 +86,21 @@ var dialects = map[string]*Dialect{
 		tables:           sqliteTables,
 		locker:           (*Dialect).sqliteLock,
 	},
+	SQLServer: {
+		name:             SQLServer,
+		lexical:          script.Lexical{TSQL: true},
+		transactionalDDL: true,
+		quote:            '[',
+		bindPrefix:       "@p",
+		tsType:           "DATETIME2(6)",
+		exists:           sqlServerExists,
+		schemaSQL:        "SELECT SCHEMA_NAME()",
+		locker:           (*Dialect).sqlServerLock,
+	},
 }
 
 // Lookup returns the dialect for a driver or dialect name. Common aliases
-// (postgresql, pgx, mariadb, sqlite3) are accepted.
+// (postgresql, pgx, mariadb, sqlite3, mssql) are accepted.
 func Lookup(name string) (*Dialect, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "postgres", "postgresql", "pgx":
@@ -97,6 +109,8 @@ func Lookup(name string) (*Dialect, error) {
 		return dialects[MySQL], nil
 	case "sqlite", "sqlite3":
 		return dialects[SQLite], nil
+	case "sqlserver", "mssql":
+		return dialects[SQLServer], nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupported, name)
 	}
@@ -114,8 +128,8 @@ func (d *Dialect) TransactionalDDL() bool { return d.transactionalDDL }
 
 // Placeholder returns the bind placeholder for the n-th (1-based) argument.
 func (d *Dialect) Placeholder(n int) string {
-	if d.numbered {
-		return "$" + strconv.Itoa(n)
+	if d.bindPrefix != "" {
+		return d.bindPrefix + strconv.Itoa(n)
 	}
 	return "?"
 }
@@ -131,10 +145,11 @@ func (d *Dialect) Placeholders(n int) string {
 
 var identPart = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
-// Table contains a table name and its optional schema as separate identifiers.
+// Table contains a table name and its resolved schema and catalog, when used.
 type Table struct {
-	Schema string
-	Name   string
+	Catalog string
+	Schema  string
+	Name    string
 }
 
 // ParseTable validates name ("table" or "schema.table"). Only letters,
@@ -157,42 +172,51 @@ func ParseTable(name string) (Table, error) {
 }
 
 // String returns the unquoted, dotted name.
-func (t Table) String() string {
-	if t.Schema == "" {
-		return t.Name
-	}
-	return t.Schema + "." + t.Name
-}
+func (t Table) String() string { return t.qualified(func(s string) string { return s }) }
 
 // Quote returns t quoted for this dialect.
-func (d *Dialect) Quote(t Table) string {
-	if t.Schema == "" {
-		return d.quoteIdentifier(t.Name)
+func (d *Dialect) Quote(t Table) string { return t.qualified(d.quoteIdentifier) }
+
+func (t Table) qualified(quote func(string) string) string {
+	name := quote(t.Name)
+	if t.Schema != "" {
+		name = quote(t.Schema) + "." + name
 	}
-	return d.quoteIdentifier(t.Schema) + "." + d.quoteIdentifier(t.Name)
+	if t.Catalog != "" {
+		name = quote(t.Catalog) + "." + name
+	}
+	return name
 }
 
 func (d *Dialect) quoteIdentifier(name string) string {
+	if d.quote == '[' {
+		return sqlServerQuoteIdentifier(name)
+	}
 	q := string(d.quote)
 	return q + strings.ReplaceAll(name, q, q+q) + q
 }
 
 // HistoryDDL returns the statement that creates the history table if absent.
-// Version uniqueness is a named table constraint, which is portable across
-// all three dialects (unlike partial or IF NOT EXISTS indexes).
+// Version uniqueness is a named table constraint.
 func (d *Dialect) HistoryDDL(t Table) string {
-	return "CREATE TABLE IF NOT EXISTS " + d.Quote(t) + " (\n" +
+	table := d.Quote(t)
+	prefix, textType, boolType, keyCollation := "CREATE TABLE IF NOT EXISTS ", "VARCHAR", "BOOLEAN", ""
+	if d.name == SQLServer {
+		prefix = sqlServerHistoryGuard(table)
+		textType, boolType, keyCollation = "NVARCHAR", "BIT", " COLLATE Latin1_General_100_BIN2"
+	}
+	return prefix + table + " (\n" +
 		"  installed_rank INTEGER NOT NULL PRIMARY KEY,\n" +
-		"  version VARCHAR(128) NOT NULL,\n" +
-		"  description VARCHAR(255) NOT NULL,\n" +
+		"  version " + textType + "(128)" + keyCollation + " NOT NULL,\n" +
+		"  description " + textType + "(255) NOT NULL,\n" +
 		"  kind VARCHAR(16) NOT NULL,\n" +
-		"  script VARCHAR(1024) NOT NULL,\n" +
+		"  script " + textType + "(1024) NOT NULL,\n" +
 		"  checksum VARCHAR(64) NOT NULL,\n" +
-		"  installed_by VARCHAR(255) NOT NULL,\n" +
+		"  installed_by " + textType + "(255) NOT NULL,\n" +
 		"  installed_on " + d.tsType + " NOT NULL,\n" +
 		"  execution_ms BIGINT NOT NULL,\n" +
-		"  success BOOLEAN NOT NULL,\n" +
-		"  tag VARCHAR(255) NULL,\n" +
+		"  success " + boolType + " NOT NULL,\n" +
+		"  tag " + textType + "(255)" + keyCollation + " NULL,\n" +
 		"  CONSTRAINT " + d.quoteIdentifier(t.Name+"_version_uk") + " UNIQUE (version)\n" +
 		")" + d.tableSuffix
 }
@@ -225,6 +249,9 @@ func (d *Dialect) CurrentSchema(ctx context.Context, q Querier) (string, error) 
 
 // ResolveTable qualifies an unqualified table using the pinned session.
 func (d *Dialect) ResolveTable(ctx context.Context, conn *sql.Conn, table Table) (Table, error) {
+	if d.name == SQLServer {
+		return resolveSQLServerTable(ctx, conn, table)
+	}
 	if table.Schema != "" {
 		return table, nil
 	}
@@ -258,6 +285,9 @@ func sqliteExists(t Table) (string, []any) {
 // (the history and lock tables): it tells an empty schema from one that
 // already holds an application's tables.
 func (d *Dialect) CountTables(ctx context.Context, q Querier, schema string, exclude ...string) (int, error) {
+	if d.name == SQLServer {
+		return d.countSQLServerTables(ctx, q, schema, exclude)
+	}
 	query, args := d.tables(schema)
 	if d.name == SQLite {
 		// sqliteTables returns folded names. Exclusions are validated ASCII identifiers.

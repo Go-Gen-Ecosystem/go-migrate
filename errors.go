@@ -79,6 +79,7 @@ var (
 	ErrDuplicateMarker     = script.ErrDuplicateMarker
 	ErrUnbalancedBlock     = script.ErrUnbalancedBlock
 	ErrUnknownDirective    = script.ErrUnknownDirective
+	ErrTSQLBatch           = script.ErrTSQLBatch
 	ErrUnsupportedDialect  = dialect.ErrUnsupported
 	ErrInvalidIdentifier   = dialect.ErrInvalidIdentifier
 	ErrHistoryRowNotFound  = history.ErrNotFound

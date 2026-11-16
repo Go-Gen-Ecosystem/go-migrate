@@ -77,6 +77,11 @@ type queries struct {
 // New returns a store for table t on dialect d.
 func New(d *dialect.Dialect, t dialect.Table) *Store {
 	q, p := d.Quote(t), d.Placeholder
+	clearTag := "UPDATE " + q + " SET tag = NULL WHERE tag = " + p(1)
+	if d.Name() == dialect.SQLServer {
+		// Even binary collations pad strings before comparing them.
+		clearTag += " AND DATALENGTH(tag) = DATALENGTH(" + p(1) + ")"
+	}
 	return &Store{d: d, table: t, sql: queries{
 		list:      "SELECT " + columns + ", tag FROM " + q + " ORDER BY installed_rank",
 		nextRank:  "SELECT COALESCE(MAX(installed_rank), 0) + 1 FROM " + q,
@@ -90,7 +95,7 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 		invalidate:   "UPDATE " + q + " SET checksum = '' WHERE kind = " + p(1),
 		delete:       "DELETE FROM " + q + " WHERE version = " + p(1),
 		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
-		clearTag:     "UPDATE " + q + " SET tag = NULL WHERE tag = " + p(1),
+		clearTag:     clearTag,
 		setTag:       "UPDATE " + q + " SET tag = " + p(1) + " WHERE version = " + p(2),
 		has:          "SELECT COUNT(*) FROM " + q + " WHERE version = " + p(1),
 	}}
@@ -205,22 +210,18 @@ func (s *Store) Delete(ctx context.Context, q Querier, version string) error {
 
 // DeleteFailed removes every row with success = false and returns how many.
 func (s *Store) DeleteFailed(ctx context.Context, q Querier) (int64, error) {
-	res, err := q.ExecContext(ctx, s.sql.deleteFailed, false)
+	n, err := s.affected(ctx, q, s.sql.deleteFailed, false)
 	if err != nil {
 		return 0, fmt.Errorf("delete failed history rows: %w", err)
 	}
-	return res.RowsAffected()
+	return n, nil
 }
 
 // exec runs a single-row write whose last argument is the version, and
 // reports ErrNotFound when that row does not exist. Zero affected rows alone
 // does not prove that: MySQL counts only rows whose values changed.
 func (s *Store) exec(ctx context.Context, q Querier, query string, args ...any) error {
-	res, err := q.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("update history: %w", err)
-	}
-	n, err := res.RowsAffected()
+	n, err := s.affected(ctx, q, query, args...)
 	if err != nil {
 		return fmt.Errorf("update history: %w", err)
 	}
@@ -235,6 +236,21 @@ func (s *Store) exec(ctx context.Context, q Querier, query string, args ...any) 
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) affected(ctx context.Context, q Querier, query string, args ...any) (int64, error) {
+	if s.d.Name() == dialect.SQLServer {
+		// SET NOCOUNT ON can survive migration statements on the pinned
+		// session, suppressing the row count in the driver's result.
+		var n int64
+		err := q.QueryRowContext(ctx, query+"; SELECT ROWCOUNT_BIG();", args...).Scan(&n)
+		return n, err
+	}
+	res, err := q.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // Now returns the current time in the precision every dialect can store.

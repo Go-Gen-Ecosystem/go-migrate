@@ -90,7 +90,7 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 	g := &globals{stderr: stderr, getenv: getenv}
 	root := &cobra.Command{
 		Use:           "gomigrate",
-		Short:         "Versioned SQL and Go migrations for PostgreSQL, MySQL and SQLite",
+		Short:         "Versioned SQL and Go migrations for PostgreSQL, MySQL, SQLite and SQL Server",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -100,7 +100,7 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 	pf := root.PersistentFlags()
 	pf.StringVarP(&g.configPath, "config", "c", "", "config file (default "+config.DefaultPath+")")
 	pf.StringVar(&g.overrides.DSN, "dsn", "", "database DSN or URL (prefer GOMIGRATE_DSN: command lines are visible to other processes)")
-	pf.StringVar(&g.overrides.Driver, "driver", "", "postgres | mysql | sqlite (inferred from the DSN when omitted)")
+	pf.StringVar(&g.overrides.Driver, "driver", "", "postgres | mysql | sqlite | sqlserver (inferred from the DSN when omitted)")
 	pf.StringVar(&g.overrides.Dir, "dir", "", "migrations directory")
 	pf.StringVar(&g.overrides.Table, "table", "", "history table (name or schema.name)")
 	pf.StringSliceVar(&g.overrides.Contexts, "context", nil, "active contexts for Context-targeted migrations (repeatable)")
@@ -121,9 +121,10 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 
 // session is an opened database plus a Migrator for one command.
 type session struct {
-	db  *sql.DB
-	m   *migrate.Migrator
-	cfg config.Config
+	db      *sql.DB
+	m       *migrate.Migrator
+	cfg     config.Config
+	dialect string
 }
 
 func (s *session) Close() error { return s.db.Close() }
@@ -166,7 +167,7 @@ func (g *globals) open(ctx context.Context) (*session, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &session{db: db, m: m, cfg: cfg}, nil
+	return &session{db: db, m: m, cfg: cfg, dialect: dialectName}, nil
 }
 
 func migratorOptions(cfg config.Config, logger halolog.Logger) []migrate.Option {

@@ -45,3 +45,31 @@ jobs:
         run: go test ./... -race -count=1 -coverpkg=./... -coverprofile=coverage.out
       - name: Coverage
         run: go tool cover -func=coverage.out | tail -1
+
+  sqlserver-conformance:
+    # Enable only after the repository owner accepts Microsoft's license
+    # terms for the Developer Edition CI service.
+    if: vars.GOMIGRATE_CI_SQLSERVER_ACCEPT_EULA == 'Y'
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GOMIGRATE_TEST_SQLSERVER_DSN: sqlserver://sa:Gomigrate-Only-Test-2022%21@localhost:1433?database=master&trustservercertificate=true
+      GOMIGRATE_TEST_SQLSERVER_SELF_SIGNED: "1"
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_PID: Developer
+          MSSQL_SA_PASSWORD: "Gomigrate-Only-Test-2022!"
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd 'SQLCMDPASSWORD="$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q "SELECT 1" -b'
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: SQL Server 2022 conformance with race detector
+        run: go test . -race -count=1 -v -run '^TestConformance$/^sqlserver$'

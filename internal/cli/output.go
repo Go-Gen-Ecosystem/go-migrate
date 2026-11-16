@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	migrate "github.com/go-gen-ecosystem/go-migrate"
+	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 )
 
 // printer renders a command's result (see model.go) as text or as the JSON
@@ -75,7 +76,7 @@ func (p *printer) plan(s *session, dir migrate.Direction, ms []migrate.Migration
 			}
 			p.printf("  %s\t%s%s\n", mj.label(), mj.Source, note)
 			for _, stmt := range mj.Statements {
-				p.printf("    %s;\n", stmt)
+				p.planSQL(s.dialect, stmt)
 			}
 		}
 		if len(data.Callbacks) > 0 {
@@ -84,11 +85,19 @@ func (p *printer) plan(s *session, dir migrate.Direction, ms []migrate.Migration
 		for _, cb := range data.Callbacks {
 			p.printf("  %s\t%s\n", cb.Event, cb.Source)
 			for _, stmt := range cb.Statements {
-				p.printf("    %s;\n", stmt)
+				p.planSQL(s.dialect, stmt)
 			}
 		}
 		p.printf("Plan ID: %s (pass --expect-plan to run exactly this plan)\n", data.PlanID)
 	})
+}
+
+func (p *printer) planSQL(dialectName, stmt string) {
+	if dialectName == dialect.SQLServer {
+		p.printf("    %s\n    GO\n", stmt)
+		return
+	}
+	p.printf("    %s;\n", stmt)
 }
 
 // run renders what a run did. It is also called when the run failed part-way,

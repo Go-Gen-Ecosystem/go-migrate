@@ -43,7 +43,7 @@ type Issue struct {
 
 // Migration is the input to Check.
 type Migration struct {
-	Dialect    string // postgres | mysql | sqlite
+	Dialect    string // canonical dialect name
 	Up, Down   []string
 	NoTx       bool
 	Versioned  bool
@@ -232,25 +232,31 @@ func Check(m Migration) []Issue {
 
 	created := map[string]bool{}
 	hasDDL, hasTimeout := false, false
-	for i, stmt := range m.Up {
-		c := newStmtCtx(m, stmt, created)
-		if mt := reCreateTable.FindStringSubmatch(c.norm); mt != nil {
-			created[ident(mt[1])] = true
-			continue
+	for i, payload := range m.Up {
+		statements := []string{payload}
+		if m.Lexical.TSQL {
+			statements = script.Split(payload, m.Lexical)
 		}
-		if tm := reLockTimeout.FindStringSubmatch(c.norm); tm != nil && (!m.NoTx || tm[1] != "LOCAL ") {
-			hasTimeout = true // SET LOCAL does nothing outside a transaction
-		}
-		hasDDL = hasDDL || (reDDL.MatchString(c.norm) && c.existing())
-		for _, r := range statementRules {
-			if r.appliesTo(m.Dialect) && r.match(c) {
-				add(r, i+1, stmt)
+		for _, stmt := range statements {
+			c := newStmtCtx(m, stmt, created)
+			if mt := reCreateTable.FindStringSubmatch(c.norm); mt != nil {
+				created[ident(mt[1])] = true
+				continue
 			}
-		}
-		for _, a := range c.actions {
-			for _, r := range actionRules {
-				if r.appliesTo(m.Dialect) && r.action(c, a) {
+			if tm := reLockTimeout.FindStringSubmatch(c.norm); tm != nil && (!m.NoTx || tm[1] != "LOCAL ") {
+				hasTimeout = true // SET LOCAL does nothing outside a transaction
+			}
+			hasDDL = hasDDL || (reDDL.MatchString(c.norm) && c.existing())
+			for _, r := range statementRules {
+				if r.appliesTo(m.Dialect) && r.match(c) {
 					add(r, i+1, stmt)
+				}
+			}
+			for _, a := range c.actions {
+				for _, r := range actionRules {
+					if r.appliesTo(m.Dialect) && r.action(c, a) {
+						add(r, i+1, stmt)
+					}
 				}
 			}
 		}

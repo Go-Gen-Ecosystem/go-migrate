@@ -4,7 +4,7 @@
 # go-migrate
 
 **Database migrations for Go teams, CI pipelines and AI agents.** Versioned SQL and
-Go migrations for PostgreSQL, MySQL/MariaDB and SQLite, delivered as a driver-free library
+Go migrations for PostgreSQL, MySQL/MariaDB, SQLite and SQL Server, delivered as a driver-free library
 and one static CLI. It has Flyway's safety model and Liquibase's targeting, needs no JVM,
 lints migration SQL for production risks, and includes an MCP server so agents can
 migrate safely.
@@ -19,7 +19,7 @@ go install github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@latest
 
 | | go-migrate | golang-migrate v4 | goose v3 |
 |---|---|---|---|
-| Migration + history row commit atomically (PG/SQLite) | ✅ | ❌ | ✅ |
+| Migration + history row commit atomically (PostgreSQL, SQLite, SQL Server) | ✅ | ❌ | ✅ |
 | Checksums detect edited applied migrations | ✅ | ❌ | ❌ |
 | Repeatable migrations, baseline, repair (Flyway) | ✅ | ❌ | ❌ |
 | Contexts, labels, preconditions, tags (Liquibase) | ✅ | ❌ | ❌ |
@@ -30,7 +30,7 @@ go install github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@latest
 | Static risk linter (locks, rewrites, data loss) | ✅ | ❌ | ❌ |
 | Stable JSON output and error codes for CI and agents | ✅ | ❌ | ❌ |
 | MCP server for AI agents | ✅ | ❌ | ❌ |
-| Cross-process lock on PG, MySQL **and** SQLite | ✅ | partial | partial |
+| Cross-process lock on every supported database | ✅ | partial | partial |
 | Reads golang-migrate and goose file formats | ✅ | — | — |
 | CGO-free binary including SQLite | ✅ | depends on build | depends on build |
 
@@ -117,20 +117,45 @@ Supporting rules:
 - **Preconditions:** `HALT` fails the run, `MARK_RAN` records the migration without running it, and `CONTINUE` leaves it pending. Plans flag such migrations as `conditional`.
 - **Callbacks** appear in `--sql` plans (they run even when nothing is pending), are covered by the plan ID and are linted.
 
+## SQL Server
+
+Use `sqlserver` as the dialect or a `sqlserver://` URL in `GOMIGRATE_DSN`. A library
+caller opens its `*sql.DB` using the `sqlserver` driver registered by
+`github.com/microsoft/go-mssqldb`. The CLI includes that driver and remains CGO-free.
+Choose the target database with the URL's `database` parameter or the YAML
+`database.name` field. The CLI enables TLS and verifies the server certificate by
+default. Supply driver TLS options via the URL or `database.params`. A disposable
+local fixture with a self-signed certificate can set `trustservercertificate=true`.
+
+Each migration direction runs as a T-SQL batch by default. Put `GO` on its own
+line to begin a new batch. A trailing `--` comment is allowed. `GO` inside a
+quoted identifier, string, or block comment stays in the SQL. Use separate
+batches when a statement such as `CREATE PROCEDURE` must be first in its batch.
+`GO N` repetition and SQLCMD commands such as `:r` are outside the supported
+script format. `StatementBegin`/`StatementEnd` can also set explicit batch
+boundaries. The text dry run prints `GO` between batches and the JSON plan lists
+the exact payload of each batch.
+
+SQL Server 2022 is the conformance target. The migration login needs access to
+the configured history schema and permission to create and modify history and
+application objects there. An unqualified history table uses the login's default
+schema. See [the SQL Server example](examples/sqlserver).
+
 ## Safety model
 
-- **Locking:** a cross-process lock keyed by the schema-qualified history table.
+- **Locking:** a cross-process lock scoped to the configured migration history.
   - PostgreSQL and MySQL: `pg_advisory_lock` / `GET_LOCK`, which the server releases if the process dies.
+  - SQL Server: a session-owned `sp_getapplock` per database. Distinct history tables in the same database share that lock so aliases of a table under a case-insensitive or accent-insensitive collation cannot bypass it.
   - SQLite: a run-lifetime OS lock on `<database>.gomigrate-<history-table>.lock` beside the database file, with a fenced lease row. The containing directory must allow creation of that coordination file, and each migrator must be able to open it. Keep the file in place while any migrator might use it. In-memory SQLite databases coordinate within the process.
   - After a SQLite process exits, the OS lock is released and an abandoned lease can be reclaimed once it expires. Drain older versions before rolling out the SQLite lock change so all running migrators use the same coordination protocol.
   - Ten replicas can run `up` at boot, and each migration still runs exactly once.
 - **One connection per run.**
   - All statements run on the lock's connection, so one-connection pools work.
   - If the session is lost, the run fails instead of continuing unprotected.
-  - History writes are schema-qualified, so `SET search_path` or `USE` in a migration cannot redirect them.
+  - History writes use the schema selected before the run. SQL Server also qualifies them with the starting database, so `SET search_path` or `USE` in a migration cannot redirect history writes.
   - Session-lock connections are discarded afterwards, never returned to the pool.
 - **Atomicity.**
-  - PostgreSQL and SQLite normally commit each migration with its history row.
+  - PostgreSQL, SQLite and SQL Server normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
   - MySQL and migrations marked `notransaction` commit a dirty row first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
 - **Approval binds execution:** a plan ID hashes the dialect, history table, direction, versions, checksums, exact statements and the SQL callbacks that will run. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
@@ -264,5 +289,13 @@ make test-race         # race detector (needs cgo)
 make test-integration  # conformance on real PostgreSQL 17 and MySQL 8.4 (Docker)
 make bench             # benchmarks; see also benchmarks/compare
 ```
+
+To include SQL Server in the normal suite, set `GOMIGRATE_TEST_SQLSERVER_DSN`
+to an isolated test instance with permission to create and drop disposable
+databases, then run `go test ./...`. Set `GOMIGRATE_TEST_SQLSERVER_SELF_SIGNED=1`
+for a self-signed fixture to also verify the default certificate rejection.
+Repository owners can enable the SQL Server Developer Edition CI job by setting
+`GOMIGRATE_CI_SQLSERVER_ACCEPT_EULA` to `Y` after accepting Microsoft's license
+terms for that CI service.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design. Licensed under Apache-2.0.

@@ -29,6 +29,7 @@ func TestLookup(t *testing.T) {
 	for in, want := range map[string]string{
 		"postgres": Postgres, "PostgreSQL": Postgres, "pgx": Postgres,
 		"mysql": MySQL, "mariadb": MySQL, "sqlite": SQLite, "sqlite3": SQLite,
+		"sqlserver": SQLServer, "mssql": SQLServer,
 	} {
 		d, err := Lookup(in)
 		if err != nil || d.Name() != want {
@@ -37,6 +38,26 @@ func TestLookup(t *testing.T) {
 	}
 	if _, err := Lookup("oracle"); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestSQLServerHistorySQL(t *testing.T) {
+	d, err := Lookup(SQLServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Placeholders(3); got != "@p1, @p2, @p3" {
+		t.Errorf("placeholders = %s", got)
+	}
+	table := Table{Catalog: "db]s'", Schema: "sales", Name: "history"}
+	if got := d.Quote(table); got != "[db]]s'].[sales].[history]" {
+		t.Errorf("quoted history table = %s", got)
+	}
+	ddl := d.HistoryDDL(table)
+	for _, part := range []string{"OBJECT_ID(N'[db]]s''].[sales].[history]', N'U')", "DATETIME2(6)", "BIT NOT NULL", "NVARCHAR(128) COLLATE Latin1_General_100_BIN2"} {
+		if !strings.Contains(ddl, part) {
+			t.Errorf("history DDL missing %q", part)
+		}
 	}
 }
 

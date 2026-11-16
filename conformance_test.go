@@ -4,10 +4,11 @@
 package migrate
 
 // Dialect conformance suite: the same scenarios run against every database.
-// SQLite always runs; PostgreSQL and MySQL run when these are set, e.g.
+// SQLite always runs; other engines run when their fixture DSNs are set, e.g.
 //
 //	GOMIGRATE_TEST_POSTGRES_DSN=postgres://postgres:pw@localhost:5432/postgres?sslmode=disable
 //	GOMIGRATE_TEST_MYSQL_DSN=root:pw@tcp(localhost:3306)/
+//	GOMIGRATE_TEST_SQLSERVER_DSN=sqlserver://sa:<password>@localhost:1433?database=master&trustservercertificate=true
 //
 // (see `make test-integration`). Each test gets its own schema/database.
 
@@ -26,6 +27,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 )
 
 type target struct {
@@ -80,6 +83,7 @@ func targets() []target {
 			},
 			specialCheck: "SELECT COUNT(*) FROM `audit`",
 		},
+		sqlServerTarget(),
 	}
 }
 
@@ -168,6 +172,12 @@ func TestConformance(t *testing.T) {
 			t.Run("session state isolation", func(t *testing.T) { conformSessionState(t, tg) })
 			t.Run("baseline on migrate", func(t *testing.T) { conformBaselineOnMigrate(t, tg) })
 			t.Run("history identity and rollbacks", func(t *testing.T) { conformIdentity(t, tg) })
+			if tg.dialect == dialect.SQLServer {
+				t.Run("engine version", conformSQLServerVersion)
+				t.Run("application lock identity", conformSQLServerLockIdentity)
+				t.Run("nontransactional failure", conformSQLServerDirty)
+				t.Run("TLS defaults", conformSQLServerTLS)
+			}
 		})
 	}
 }
@@ -233,8 +243,13 @@ func conformFailure(t *testing.T, tg target) {
 		if rr, err := m.Repair(ctx); err != nil || rr.RemovedFailed != 1 {
 			t.Fatalf("Repair = %+v, %v", rr, err)
 		}
-	} else if errors.Is(err, ErrDirty) || st.Dirty || st.Current != "1" {
-		t.Fatalf("transactional failure must leave no trace: err=%v status=%+v", err, st)
+	} else {
+		if errors.Is(err, ErrDirty) || st.Dirty || st.Current != "1" {
+			t.Fatalf("transactional failure must leave no trace: err=%v status=%+v", err, st)
+		}
+		if exists, err := m.dialect.TableExists(ctx, db, dialect.Table{Name: "half"}); err != nil || exists {
+			t.Fatalf("transactional failure left a partial object: exists=%v err=%v", exists, err)
+		}
 	}
 	if n := count(t, db, "SELECT COUNT(*) FROM "+historyTable(tg)+" WHERE version = '2'"); n != 0 {
 		t.Fatalf("failed migration recorded: %d rows", n)
@@ -242,10 +257,8 @@ func conformFailure(t *testing.T, tg target) {
 }
 
 func historyTable(tg target) string {
-	if tg.dialect == "mysql" {
-		return "`" + DefaultTable + "`"
-	}
-	return `"` + DefaultTable + `"`
+	d, _ := dialect.Lookup(tg.dialect)
+	return d.Quote(dialect.Table{Name: DefaultTable})
 }
 
 func conformSpecial(t *testing.T, tg target) {
@@ -353,6 +366,9 @@ func conformSessionState(t *testing.T, tg target) {
 	case "mysql":
 		switchTo = "CREATE DATABASE elsewhere_%s;\nUSE elsewhere_%s;\nCREATE TABLE moved (id INT);"
 		cleanup = "DROP DATABASE IF EXISTS elsewhere_%s"
+	case dialect.SQLServer:
+		switchTo = "CREATE DATABASE elsewhere_%s;\nGO\nUSE elsewhere_%s;\nGO\nCREATE TABLE moved (id INT);"
+		cleanup = "DROP DATABASE IF EXISTS elsewhere_%s"
 	default:
 		t.Skip("no session-level schema switch on SQLite")
 	}
@@ -410,11 +426,15 @@ func conformBaselineOnMigrate(t *testing.T, tg target) {
 func conformIdentity(t *testing.T, tg target) {
 	ctx := context.Background()
 	db := tg.open(t)
+	repeat := "CREATE TABLE IF NOT EXISTS %s (id INT);"
+	if tg.dialect == dialect.SQLServer {
+		repeat = "IF OBJECT_ID(N'%[1]s', N'U') IS NULL CREATE TABLE %[1]s (id INT);"
+	}
 	fsys := files(
 		"1_a.sql", "-- +migrate Up\nCREATE TABLE a (id INT);\n-- +migrate Down\nDROP TABLE a;",
 		"2_b.sql", "-- +migrate Up\nCREATE TABLE b (id INT);\n-- +migrate Down\nDROP TABLE b;",
-		"R__cafe.sql", "CREATE TABLE IF NOT EXISTS r_plain (id INT);",
-		"R__café.sql", "CREATE TABLE IF NOT EXISTS r_accent (id INT);",
+		"R__cafe.sql", fmt.Sprintf(repeat, "r_plain"),
+		"R__café.sql", fmt.Sprintf(repeat, "r_accent"),
 	)
 	m, err := New(db, tg.dialect, WithFS(fsys))
 	if err != nil {
@@ -434,6 +454,11 @@ func conformIdentity(t *testing.T, tg target) {
 	if err := m.Tag(ctx, "Rel"); err != nil { // a different tag: must not move "rel"
 		t.Fatal(err)
 	}
+	if tg.dialect == dialect.SQLServer {
+		if err := m.Tag(ctx, "rel "); err != nil { // SQL Server pads strings in comparisons.
+			t.Fatal(err)
+		}
+	}
 	if res, err = m.Down(ctx, DownTarget{Tag: "rel"}); err != nil {
 		t.Fatalf("Down to tag rel: %v", err)
 	}
@@ -448,12 +473,15 @@ func conformIdentity(t *testing.T, tg target) {
 	eq(t, versions(res), []string{"1", "2", "R:cafe", "R:café"})
 }
 
-// conformExamples proves examples/migrations is portable: it applies and
-// fully reverts on every dialect.
+// conformExamples applies and fully reverts the shipped example for the target.
 func conformExamples(t *testing.T, tg target) {
 	ctx := context.Background()
 	db := tg.open(t)
-	m, err := New(db, tg.dialect, WithFS(os.DirFS("examples/migrations")))
+	dir := "examples/migrations"
+	if tg.dialect == dialect.SQLServer {
+		dir = "examples/sqlserver"
+	}
+	m, err := New(db, tg.dialect, WithFS(os.DirFS(dir)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,6 +509,9 @@ func conformReadOnly(t *testing.T, tg target) {
 	}
 	if plan, err := m.Plan(ctx, "2"); err != nil || len(plan) != 2 {
 		t.Fatalf("Plan = %v, %v", plan, err)
+	}
+	if err := m.Validate(ctx); err != nil {
+		t.Fatalf("Validate = %v", err)
 	}
 	ok, err := m.dialect.TableExists(ctx, db, m.table)
 	if err != nil || ok {

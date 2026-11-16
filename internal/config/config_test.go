@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,55 @@ import (
 
 func env(m map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
+}
+
+func TestSQLServerConnectionConfiguration(t *testing.T) {
+	tests := []struct {
+		name string
+		db   Database
+		want url.Values
+	}{
+		{"inferred URL", Database{DSN: "sqlserver://user:p%40ss@localhost?database=app"},
+			url.Values{"database": {"app"}, "encrypt": {"true"}, "trustservercertificate": {"false"}}},
+		{"structured fields", Database{Driver: "mssql", Host: "::1", User: "user", Password: "p@ss", Name: "app"},
+			url.Values{"database": {"app"}, "encrypt": {"true"}, "trustservercertificate": {"false"}}},
+		{"explicit URL takes precedence", Database{DSN: "SQLSERVER://user:p%40ss@localhost?database=app&Encrypt=strict", Params: map[string]string{"Encrypt": "true"}},
+			url.Values{"database": {"app"}, "encrypt": {"strict"}, "trustservercertificate": {"false"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, dsn, err := Resolve(tt.db)
+			if err != nil || name != "sqlserver" {
+				t.Fatalf("dialect = %q, %v", name, err)
+			}
+			u, err := url.Parse(dsn)
+			if err != nil || u.RawQuery != tt.want.Encode() {
+				t.Fatalf("unexpected SQL Server parameters: %v", err)
+			}
+			if password, _ := u.User.Password(); password != "p@ss" {
+				t.Fatal("password was not URL-encoded correctly")
+			}
+		})
+	}
+}
+
+func TestSQLServerConnectionErrorsKeepCredentialsPrivate(t *testing.T) {
+	for _, dsn := range []string{
+		"sqlserver://login:secret%40pass@localhost?encrypt=%ZZ",
+		"sqlserver://login:secret%40pass@localhost?encrypt=invalid",
+		"sqlserver://login:secret%40pass@localhost?Encrypt=true&encrypt=false",
+	} {
+		_, _, err := Open(t.Context(), Database{DSN: dsn})
+		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "login") {
+			t.Fatal("invalid SQL Server connection did not return a credential-safe error")
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, err := Open(ctx, Database{DSN: "sqlserver://login:secret%40pass@localhost?database=app"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled connection = %v", err)
+	}
 }
 
 func TestExpandEnv(t *testing.T) {
