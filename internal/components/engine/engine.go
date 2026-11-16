@@ -104,15 +104,7 @@ func NewMigrationEngineWithFactory(config types.Config, dryRun bool) (*Migration
 	}
 
 	// Initialize DB connection
-	dbConf := &dbcore.Config{
-		Driver:          config.Database.Driver,
-		DSN:             config.Database.DSN,
-		MaxOpenConns:    max(config.Database.MaxConnections, 10),
-		MaxIdleConns:    max(config.Database.MaxConnections/2, 5),
-		ConnMaxLifetime: config.Database.MaxLifetime,
-		LogLevel:        0,
-	}
-	db, err := dbcore.Connect(dbConf)
+	db, err := dbcore.Connect(context.Background(), config.Database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect database: %w", err)
 	}
@@ -582,15 +574,7 @@ func (e *MigrationEngine) Initialize(ctx context.Context) error {
 	e.adoptBuilderComponents()
 
 	// Initialize DB connection
-	dbConf := &dbcore.Config{
-		Driver:          e.config.Database.Driver,
-		DSN:             e.config.Database.DSN,
-		MaxOpenConns:    max(e.config.Database.MaxConnections, 10),
-		MaxIdleConns:    max(e.config.Database.MaxConnections/2, 5),
-		ConnMaxLifetime: e.config.Database.MaxLifetime,
-		LogLevel:        0,
-	}
-	db, err := dbcore.Connect(dbConf)
+	db, err := dbcore.Connect(ctx, e.config.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect database: %w", err)
 	}
