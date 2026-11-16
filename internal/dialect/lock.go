@@ -56,10 +56,11 @@ type locker func(d *Dialect, ctx context.Context, conn *sql.Conn, table Table, o
 // letting it continue unprotected, and a pool limited to one connection
 // cannot deadlock.
 type Lock struct {
-	Conn   *sql.Conn
-	Table  Table
-	fence  func(ctx context.Context, q Querier) error
-	unlock func(ctx context.Context) error
+	Conn       *sql.Conn
+	Table      Table
+	fence      func(ctx context.Context, q Querier) error
+	unlock     func(ctx context.Context) error
+	afterClose func() error
 	// discard closes the connection on release instead of pooling it.
 	discard bool
 	once    sync.Once
@@ -85,6 +86,9 @@ func (l *Lock) Fence(ctx context.Context, q Querier) error {
 func (l *Lock) Release(ctx context.Context) error {
 	var err error
 	l.once.Do(func() {
+		if l.afterClose != nil {
+			defer func() { err = errors.Join(err, l.afterClose()) }()
+		}
 		cleanup, cancel := lockCleanupContext(ctx)
 		defer cancel()
 		err = l.unlock(cleanup)
@@ -220,29 +224,47 @@ func sessionLock(ctx context.Context, conn *sql.Conn, once bool, try tryFunc, un
 	return &Lock{discard: true, unlock: unlock}, nil
 }
 
-// sqliteLock uses a single-row lease table. There is no heartbeat
-// goroutine: each migration renews the lease inside its own transaction
-// (Fence), which SQLite's single-writer model makes atomic with the change.
-// A crashed holder's lease expires after leaseTTL.
-func (d *Dialect) sqliteLock(ctx context.Context, conn *sql.Conn, table Table, once bool) (*Lock, error) {
+// sqliteOwners holds the owners of all live SQLite runs in this process.
+// An in-memory database can be shared by multiple pools, all of which see
+// the same lease owner even when they use different attachment names.
+var sqliteOwners sync.Map
+
+// sqliteLock holds a file guard for the lifetime of a file-backed run. The
+// row lease is still fenced and remains recoverable after its expiry.
+func (d *Dialect) sqliteLock(ctx context.Context, conn *sql.Conn, table Table, once bool) (held *Lock, err error) {
+	closeGuard, err := sqliteFileGuard(ctx, conn, table, once)
+	if err != nil {
+		return nil, err
+	}
+	owner := ownerID()
+	sqliteOwners.Store(owner, struct{}{})
+	closeLock := func() error {
+		sqliteOwners.Delete(owner)
+		return closeGuard()
+	}
+	defer func() {
+		if held == nil {
+			err = errors.Join(err, closeLock())
+		}
+	}()
+
 	table.Name += "_lock"
 	tbl := d.Quote(table)
 	ddl := "CREATE TABLE IF NOT EXISTS " + tbl + " (id INTEGER PRIMARY KEY CHECK (id = 1), owner TEXT NOT NULL, expires_at INTEGER NOT NULL)"
 	if _, err := conn.ExecContext(ctx, ddl); err != nil {
 		return nil, fmt.Errorf("create lock table: %w", err)
 	}
-	owner := ownerID()
-	clear := func(ctx context.Context) (int64, error) {
-		res, err := conn.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE id = 1 AND owner = ?", owner)
+	clear := func(ctx context.Context, q Querier) (int64, error) {
+		res, err := q.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE id = 1 AND owner = ?", owner)
 		if err != nil {
 			return 0, fmt.Errorf("delete migration lease: %w", err)
 		}
 		return res.RowsAffected()
 	}
 	uncertain := false
-	err := poll(ctx, once, func(ctx context.Context) (bool, error) {
+	err = poll(ctx, once, func(ctx context.Context) (bool, error) {
 		now := time.Now().UnixMilli()
-		if _, err := conn.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE expires_at < ?", now); err != nil {
+		if err := sqliteClearExpired(ctx, conn, tbl, now); err != nil {
 			return false, transient(err)
 		}
 		res, err := conn.ExecContext(ctx, "INSERT INTO "+tbl+" (id, owner, expires_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING",
@@ -261,13 +283,14 @@ func (d *Dialect) sqliteLock(ctx context.Context, conn *sql.Conn, table Table, o
 	if uncertain {
 		cleanup, cancel := lockCleanupContext(ctx)
 		defer cancel()
-		_, clearErr := clear(cleanup)
+		_, clearErr := clear(cleanup, conn)
 		err = errors.Join(err, clearErr)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return &Lock{
+		afterClose: closeLock,
 		fence: func(ctx context.Context, q Querier) error {
 			res, err := q.ExecContext(ctx, "UPDATE "+tbl+" SET expires_at = ? WHERE id = 1 AND owner = ?",
 				time.Now().Add(leaseTTL).UnixMilli(), owner)
@@ -280,16 +303,44 @@ func (d *Dialect) sqliteLock(ctx context.Context, conn *sql.Conn, table Table, o
 			return nil
 		},
 		unlock: func(ctx context.Context) error {
-			n, err := clear(ctx)
+			// A failed NoTx script can leave a transaction open. ROLLBACK
+			// also errors in autocommit mode. A new transaction proves that
+			// the lease cleanup cannot run within an abandoned transaction.
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+			tx, err := conn.BeginTx(ctx, nil)
+			if err != nil {
+				discardSession(conn)
+				return fmt.Errorf("begin SQLite lease cleanup: %w", err)
+			}
+			defer func() { _ = tx.Rollback() }()
+			n, err := clear(ctx, tx)
 			if err != nil {
 				return err
 			}
 			if n != 1 {
 				return ErrLockLost
 			}
-			return nil
+			return tx.Commit()
 		},
 	}, nil
+}
+
+func sqliteClearExpired(ctx context.Context, conn *sql.Conn, table string, now int64) error {
+	var owner string
+	err := conn.QueryRowContext(ctx, "SELECT owner FROM "+table+" WHERE id = 1 AND expires_at < ?", now).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, live := sqliteOwners.Load(owner); live {
+		return nil
+	}
+	// Recheck identity and expiry after the read so a newer holder or
+	// a renewal between statements cannot be removed.
+	_, err = conn.ExecContext(ctx, "DELETE FROM "+table+" WHERE id = 1 AND owner = ? AND expires_at < ?", owner, now)
+	return err
 }
 
 // transient maps "database is busy/locked" to "not acquired yet", so a

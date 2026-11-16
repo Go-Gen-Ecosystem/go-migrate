@@ -7,9 +7,9 @@
 // A Migrator is built once from a *sql.DB and a migration source and is then
 // immutable and safe for concurrent use. Runs that change the database (Up,
 // Down, Repair, Baseline) hold a cross-process lock: a session advisory lock
-// on PostgreSQL and MySQL (released by the server if the process dies) and a
-// heartbeat-renewed lease on SQLite. On databases with transactional DDL each
-// migration and its history row commit atomically; otherwise a failed
+// on PostgreSQL and MySQL and a run-lifetime file lock with a lease on SQLite.
+// In-memory SQLite databases coordinate within the process. Transactional
+// migrations and their history row commit together. A failed nontransactional
 // migration leaves a "dirty" row that blocks further runs until Repair.
 //
 // The package itself imports no SQL driver; register the one you use, e.g.

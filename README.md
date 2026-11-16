@@ -121,7 +121,8 @@ Supporting rules:
 
 - **Locking:** a cross-process lock keyed by the schema-qualified history table.
   - PostgreSQL and MySQL: `pg_advisory_lock` / `GET_LOCK`, which the server releases if the process dies.
-  - SQLite: a lease renewed inside every migration's own transaction.
+  - SQLite: a run-lifetime OS lock on `<database>.gomigrate-<history-table>.lock` beside the database file, with a fenced lease row. The containing directory must allow creation of that coordination file, and each migrator must be able to open it. Keep the file in place while any migrator might use it. In-memory SQLite databases coordinate within the process.
+  - After a SQLite process exits, the OS lock is released and an abandoned lease can be reclaimed once it expires. Drain older versions before rolling out the SQLite lock change so all running migrators use the same coordination protocol.
   - Ten replicas can run `up` at boot, and each migration still runs exactly once.
 - **One connection per run.**
   - All statements run on the lock's connection, so one-connection pools work.
@@ -129,8 +130,8 @@ Supporting rules:
   - History writes are schema-qualified, so `SET search_path` or `USE` in a migration cannot redirect them.
   - Session-lock connections are discarded afterwards, never returned to the pool.
 - **Atomicity.**
-  - PostgreSQL and SQLite commit each migration with its history row.
-  - MySQL cannot roll back DDL, so the row is marked dirty first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
+  - PostgreSQL and SQLite normally commit each migration with its history row.
+  - MySQL and migrations marked `notransaction` commit a dirty row first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
 - **Approval binds execution:** a plan ID hashes the dialect, history table, direction, versions, checksums, exact statements and the SQL callbacks that will run. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
 - **Read-only means read-only:** `status`, `validate`, `lint` and dry runs never create tables.

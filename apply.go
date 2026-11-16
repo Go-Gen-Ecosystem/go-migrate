@@ -157,10 +157,7 @@ func (a *applier) atomic(ctx context.Context, u *unit, dir Direction, st step) e
 func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st step) error {
 	q, tr, ev := a.conn, transitions[dir], eachEvents[dir]
 	fence := func(ctx context.Context) error { return a.lock.Fence(ctx, q) }
-	if err := fence(ctx); err != nil {
-		return err
-	}
-	if err := tr.begin(a, ctx, q, u, st); err != nil {
+	if err := a.dirtyTransition(ctx, tr.begin, u, st); err != nil {
 		return err
 	}
 	if err := a.callbacks(ctx, q, ev.before); err != nil {
@@ -180,10 +177,30 @@ func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st 
 	// the last statement, rather than leaving a completed migration dirty.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	if err := tr.finish(a, cctx, q, u, st); err != nil {
-		return fmt.Errorf("migration %s %s applied but its history row could not be updated: %w: %w", u.Label(), dir, err, ErrDirty)
+	if err := a.dirtyTransition(cctx, tr.finish, u, st); err != nil {
+		return fmt.Errorf("migration %s %s history row could not be finalized: %w: %w", u.Label(), dir, err, ErrDirty)
 	}
 	return nil
+}
+
+// dirtyTransition commits SQLite history independently of NoTx statements.
+// In particular, an unfinished user transaction cannot record success.
+func (a *applier) dirtyTransition(ctx context.Context, change transition, u *unit, st step) error {
+	if a.d.Name() != dialect.SQLite {
+		return change(a, ctx, a.conn, u, st)
+	}
+	tx, err := a.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin dirty history transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := a.lock.Fence(ctx, tx); err != nil {
+		return err
+	}
+	if err := change(a, ctx, tx, u, st); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // markRan records u as applied without executing it (precondition
