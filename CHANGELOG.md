@@ -40,11 +40,16 @@ kept under `_parked/v0` for reference.
   SQL callback files, baselineOnMigrate, tags with `down --to-tag`, and
   `--sql` dry runs printing the exact statements.
 - `gomigrate lint` / `migrate.Lint`: database-free, dialect-aware risk
-  analysis (16 rules) with text, JSON and GitHub-annotation output.
+  analysis (17 rules, ALTER TABLE judged per action) with text, JSON and
+  GitHub-annotation output.
 - Machine contract: `-o json` envelope on every command, stable error codes
   (`migrate.ErrorCodes`), exit codes 0/1/2/3.
 - `gomigrate mcp`: Model Context Protocol server for AI agents, with
-  confirmation-gated `apply`/`rollback` and a lint gate; `AGENTS.md`.
+  `apply`/`rollback` gated on `confirm` plus the approved `plan_id`, a lint
+  gate, and directive-free typed migration authoring; `AGENTS.md`.
+- Plan binding: `PlanID`, `ExpectPlan` and `--expect-plan` re-check the plan
+  under the migration lock and fail with `plan_changed` instead of running
+  anything the reviewer did not see.
 - GitHub Action (`action.yml`) for lint annotations, gates and deploys.
 - Dialect conformance suite on real PostgreSQL 17 and MySQL 8.4 (CI job),
   fuzzed SQL splitter, benchmarks including a comparison with goose and
@@ -55,3 +60,7 @@ kept under `_parked/v0` for reference.
   reports no vulnerabilities.
 - History table names are validated identifiers; DSNs and passwords never
   appear in errors; config files are written owner-only.
+- File directives in `.down.sql` and callback files are rejected
+  (`misplaced_directive`) instead of being silently ignored.
+- The GitHub Action splits `command` without glob expansion, passes `--dir`
+  only when set and installs the version matching the action ref.

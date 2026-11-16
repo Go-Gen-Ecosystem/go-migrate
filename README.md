@@ -45,8 +45,8 @@ is within noise between tools.
 gomigrate init                       # .gomigrate.yaml + migrations/
 gomigrate create add_users           # migrations/20261116120000_add_users.sql
 gomigrate lint                       # risky SQL? (no database needed)
-gomigrate up --sql                   # dry run: the exact SQL that would run
-gomigrate up                         # apply
+gomigrate up --sql                   # dry run: the exact SQL that would run, and its plan ID
+gomigrate up --expect-plan <id>      # apply exactly the reviewed plan, or fail with plan_changed
 gomigrate status                     # table; -o json for scripts
 gomigrate down                       # roll back the last one (--steps, --to, --to-tag, --all)
 ```
@@ -74,9 +74,10 @@ _, err = m.Up(ctx)
 ```
 
 - **Migrator methods:**
-  - apply and roll back: `Up`, `UpTo`, `Down`, `DownTo`, `DownToTag`, `Redo`;
-  - read-only: `Plan`, `PlanDown`, `PlanDownTo`, `PlanDownToTag`, `Statements`, `Status`, `Validate`, `Lint`;
+  - apply and roll back: `Up`, `UpTo`, `Down(ctx, migrate.DownTarget{Steps: 1})` (or `To: "3"`, or `Tag: "v1"`), `Redo`;
+  - read-only: `Plan`, `PlanDown`, `PlanID`, `Statements`, `Status`, `Validate`, `Lint`, `Migrations`;
   - history administration: `Repair`, `MarkApplied`, `Baseline`, `Tag`.
+- **Approved plans:** `m.Up(ctx, migrate.ExpectPlan(id))` runs only if the plan, computed again under the lock, still has the ID that was reviewed; otherwise it fails with `ErrPlanChanged` and runs nothing.
 - **Options:**
   - `WithFS`, `WithGoMigrations`, `WithTable`, `WithLockWait`;
   - `WithLogger` ([halolog](https://github.com/go-gen-ecosystem/halolog));
@@ -130,8 +131,9 @@ Supporting rules:
   - PostgreSQL and SQLite commit each migration with its history row.
   - MySQL cannot roll back DDL, so the row is marked dirty first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
+- **Approval binds execution:** a plan ID hashes the direction, versions, checksums and exact statements. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
 - **Read-only means read-only:** `status`, `validate`, `lint` and dry runs never create tables.
-- **No secrets in output:** DSNs and passwords never appear in errors or logs.
+- **No connection secrets in output:** DSNs and passwords never appear in errors or logs. Placeholder values do appear in `--sql` plans and SQL excerpts, as they are part of the SQL; do not put secrets in placeholders.
 
 ## Lint
 
@@ -161,7 +163,8 @@ claude mcp add gomigrate -- gomigrate mcp
 
 - **Read-only tools:** `status`, `validate`, `plan` (with SQL) and `lint`.
 - **`create_migration`:** writes the file, then validates and lints it.
-- **`apply` and `rollback`:** they require `confirm: true`. Without it, they return the exact plan for the user to approve. `apply` also refuses while pending migrations have lint errors.
+- **`apply` and `rollback`:** they require `confirm: true` and the `plan_id` of the plan the user approved. Without them they return the exact plan; if anything changed since approval they fail with `plan_changed`. `apply` also refuses while pending migrations have lint errors.
+- **`create_migration`** takes typed inputs (`no_transaction`, `sequential`) and rejects `-- +migrate` directives in the SQL, so an agent cannot suppress lint or retarget a migration.
 
 See [AGENTS.md](AGENTS.md) for the workflow and error codes.
 
@@ -172,14 +175,14 @@ See [AGENTS.md](AGENTS.md) for the workflow and error codes.
 - uses: go-gen-ecosystem/go-migrate@v1
   with: { command: lint, driver: postgres }
 
-# Deploy: apply, after a gate that shows the plan
+# Deploy: show the plan, then apply exactly that plan
 - uses: go-gen-ecosystem/go-migrate@v1
   with: { command: up --sql, dsn: "${{ secrets.DATABASE_URL }}" }
 - uses: go-gen-ecosystem/go-migrate@v1
-  with: { command: up, dsn: "${{ secrets.DATABASE_URL }}" }
+  with: { command: "up --expect-plan ${{ vars.APPROVED_PLAN_ID }}", dsn: "${{ secrets.DATABASE_URL }}" }
 ```
 
-- **JSON envelope:** every command accepts `-o json` and prints one envelope, `{ok, command, data | error{code, codes, message}}`.
+- **JSON envelope:** every command accepts `-o json` and prints one envelope, `{ok, command, data | error{code, codes, message}}`. A run that fails part-way still reports what it applied in `data`.
 - **Exit codes:**
 
 | Code | Meaning |
@@ -231,8 +234,8 @@ Additional rules:
 | `init` | write a config and `migrations/` |
 | `create NAME [--seq] [--pair]` | create a migration |
 | `lint [--fail-on LEVEL]` | static risk analysis |
-| `up [--to V] [--dry-run \| --sql]` | apply pending migrations |
-| `down [--steps N \| --to V \| --to-tag T \| --all] [--dry-run \| --sql]` | roll back |
+| `up [--to V] [--dry-run \| --sql] [--expect-plan ID]` | apply pending migrations |
+| `down [--steps N \| --to V \| --to-tag T \| --all] [--dry-run \| --sql] [--expect-plan ID]` | roll back |
 | `redo` | roll back and re-apply the last migration |
 | `status [--fail-on-pending]` | show state; doubles as a CI gate |
 | `validate` | check drift, missing, out-of-order and failed migrations |

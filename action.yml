@@ -32,13 +32,13 @@ inputs:
     required: false
     default: ""
   dir:
-    description: Migrations directory
+    description: Migrations directory (default from gomigrate.yaml, else ./migrations)
     required: false
-    default: migrations
+    default: ""
   version:
-    description: gomigrate version to install
+    description: gomigrate version to install (default the ref this action was used at, e.g. v1.0.0)
     required: false
-    default: latest
+    default: ""
 
 outputs:
   exit-code:
@@ -54,9 +54,10 @@ runs:
         cache: false
     - name: Install gomigrate
       shell: bash
-      run: go install "github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@${INPUT_VERSION}"
+      run: go install "github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@${INPUT_VERSION:-${ACTION_REF:-latest}}"
       env:
         INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
     - name: Run gomigrate
       id: run
       shell: bash
@@ -66,12 +67,14 @@ runs:
         INPUT_COMMAND: ${{ inputs.command }}
         INPUT_DIR: ${{ inputs.dir }}
       run: |
-        set +e
+        set +e -f
+        # Split the command into arguments without glob expansion.
+        read -ra args <<< "$INPUT_COMMAND"
+        flags=()
+        [ -n "$INPUT_DIR" ] && flags+=(--dir "$INPUT_DIR")
         # Lint findings become inline pull-request annotations.
-        output=()
-        case "$INPUT_COMMAND" in lint*) output=(-o github) ;; esac
-        # shellcheck disable=SC2086 # the command is intentionally word-split into arguments
-        gomigrate --dir "$INPUT_DIR" "${output[@]}" $INPUT_COMMAND
+        [ "${args[0]}" = lint ] && flags+=(-o github)
+        gomigrate "${flags[@]}" "${args[@]}"
         code=$?
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         exit $code
