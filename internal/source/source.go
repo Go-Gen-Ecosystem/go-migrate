@@ -64,7 +64,49 @@ type pair struct {
 // directories) and returns versioned migrations in ascending version order
 // followed by repeatable migrations ordered by description.
 func Load(fsys fs.FS) ([]*File, error) {
+	set, err := LoadAll(fsys)
+	if err != nil {
+		return nil, err
+	}
+	return set.Files, nil
+}
+
+// Callback events, named as in Flyway so existing callback files load as-is.
+const (
+	BeforeMigrate     = "beforeMigrate"
+	BeforeEachMigrate = "beforeEachMigrate"
+	AfterEachMigrate  = "afterEachMigrate"
+	AfterMigrate      = "afterMigrate"
+	AfterMigrateError = "afterMigrateError"
+)
+
+var callbackName = regexp.MustCompile(`(?i)^(beforeMigrate|beforeEachMigrate|afterEachMigrate|afterMigrate|afterMigrateError)(?:__(.+?))?\.sql$`)
+
+// canonicalEvent maps a case-insensitively matched event to its constant.
+var canonicalEvent = map[string]string{
+	"beforemigrate": BeforeMigrate, "beforeeachmigrate": BeforeEachMigrate,
+	"aftereachmigrate": AfterEachMigrate, "aftermigrate": AfterMigrate, "aftermigrateerror": AfterMigrateError,
+}
+
+// Callback is an SQL file run around migrations (beforeMigrate.sql,
+// afterEachMigrate__grants.sql, ...). Several files may share an event; they
+// run in file-name order.
+type Callback struct {
+	Event  string
+	Name   string
+	Script script.Script
+}
+
+// Set is everything found in a migration source.
+type Set struct {
+	Files     []*File
+	Callbacks []*Callback
+}
+
+// LoadAll is Load plus SQL callback files.
+func LoadAll(fsys fs.FS) (*Set, error) {
 	groups := map[string]*pair{}
+	set := &Set{}
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -79,22 +121,43 @@ func Load(fsys fs.FS) ([]*File, error) {
 		if !strings.EqualFold(path.Ext(p), ".sql") || strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
+		if m := callbackName.FindStringSubmatch(d.Name()); m != nil {
+			cb, err := loadCallback(fsys, p, canonicalEvent[strings.ToLower(m[1])])
+			if err != nil {
+				return err
+			}
+			set.Callbacks = append(set.Callbacks, cb)
+			return nil
+		}
 		return addFile(fsys, p, groups)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	files := make([]*File, 0, len(groups))
+	set.Files = make([]*File, 0, len(groups))
 	for _, g := range groups {
 		f, err := g.build()
 		if err != nil {
 			return nil, err
 		}
-		files = append(files, f)
+		set.Files = append(set.Files, f)
 	}
-	sort.SliceStable(files, func(i, j int) bool { return less(files[i], files[j]) })
-	return files, nil
+	sort.SliceStable(set.Files, func(i, j int) bool { return less(set.Files[i], set.Files[j]) })
+	sort.SliceStable(set.Callbacks, func(i, j int) bool { return set.Callbacks[i].Name < set.Callbacks[j].Name })
+	return set, nil
+}
+
+func loadCallback(fsys fs.FS, p, event string) (*Callback, error) {
+	content, err := fs.ReadFile(fsys, p)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", p, err)
+	}
+	sc, err := script.Parse(content, script.Up)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	return &Callback{Event: event, Name: p, Script: sc}, nil
 }
 
 func addFile(fsys fs.FS, p string, groups map[string]*pair) error {

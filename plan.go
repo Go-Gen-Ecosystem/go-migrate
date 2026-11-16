@@ -83,6 +83,11 @@ func (m *Migrator) inspect(s *snapshot) inspection {
 			info.State = StateFailed
 		case rec != nil && rec.Kind == history.KindBaseline:
 			info.State = StateBaseline
+		case u.skipped && (rec == nil || u.Repeatable):
+			info.State = StateSkipped
+		case u.Repeatable && u.runAlways:
+			info.State = StatePending
+			in.pending = append(in.pending, u)
 		case u.Repeatable && rec == nil:
 			info.State = StatePending
 			in.pending = append(in.pending, u)

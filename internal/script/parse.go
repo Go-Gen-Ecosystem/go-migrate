@@ -9,6 +9,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Direction selects the up or down half of a migration.
@@ -85,7 +86,48 @@ type Script struct {
 	// NoTx disables the per-migration transaction (needed for statements such
 	// as PostgreSQL CREATE INDEX CONCURRENTLY).
 	NoTx bool
+	Meta Meta
 }
+
+// Meta holds the targeting and control directives of a migration file
+// (Liquibase-style):
+//
+//	-- +migrate Context dev,test          run only in these contexts
+//	-- +migrate Labels billing            run only when a label is selected
+//	-- +migrate DBMS postgres,sqlite      run only on these databases
+//	-- +migrate RunAlways                 repeatable: re-run on every Up
+//	-- +migrate Precondition onFail=MARK_RAN expect=0 SELECT COUNT(*) FROM t
+type Meta struct {
+	Contexts      []string
+	Labels        []string
+	DBMS          []string
+	RunAlways     bool
+	Preconditions []Precondition
+}
+
+// OnFail says what happens when a precondition does not hold.
+type OnFail string
+
+// Precondition outcomes (Liquibase semantics).
+const (
+	// Halt fails the run (default).
+	Halt OnFail = "HALT"
+	// MarkRan records the migration as applied without running it.
+	MarkRan OnFail = "MARK_RAN"
+	// Continue skips the migration for this run; it stays pending.
+	Continue OnFail = "CONTINUE"
+)
+
+// Precondition is a single-value SQL check: the migration runs only if the
+// query's result equals Expect.
+type Precondition struct {
+	SQL    string
+	Expect string
+	OnFail OnFail
+}
+
+// ErrBadPrecondition is returned for a malformed Precondition directive.
+var ErrBadPrecondition = errors.New("malformed precondition (want: Precondition [onFail=HALT|MARK_RAN|CONTINUE] expect=<value> <SQL>)")
 
 // directive matches "-- +migrate <word> [opts]" and "-- +goose <word> [opts]",
 // case-insensitively, so files written for sql-migrate or goose load as-is.
@@ -171,6 +213,20 @@ func Parse(content []byte, def Direction) (Script, error) {
 			}
 			flush(true)
 			inBlock = false
+		case "context", "contexts":
+			sc.Meta.Contexts = append(sc.Meta.Contexts, list(opts)...)
+		case "label", "labels":
+			sc.Meta.Labels = append(sc.Meta.Labels, list(opts)...)
+		case "dbms":
+			sc.Meta.DBMS = append(sc.Meta.DBMS, list(opts)...)
+		case "runalways":
+			sc.Meta.RunAlways = true
+		case "precondition":
+			pc, err := parsePrecondition(m[2])
+			if err != nil {
+				return Script{}, fmt.Errorf("line %d: %w", lineNo, err)
+			}
+			sc.Meta.Preconditions = append(sc.Meta.Preconditions, pc)
 		case "no":
 			if opts == "transaction" {
 				sc.NoTx = true
@@ -312,4 +368,43 @@ func skipLeadingComments(s string) string {
 			return s
 		}
 	}
+}
+
+// list splits a comma- or space-separated directive value (lower-cased).
+func list(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+}
+
+// parsePrecondition parses "[onFail=X] expect=V <SQL>" (options in any order,
+// before the SQL). The SQL keeps its original case.
+func parsePrecondition(raw string) (Precondition, error) {
+	pc := Precondition{OnFail: Halt}
+	rest := strings.TrimSpace(raw)
+	hasExpect := false
+	for {
+		tok, tail, _ := strings.Cut(rest, " ")
+		key, val, ok := strings.Cut(tok, "=")
+		if !ok {
+			break
+		}
+		switch strings.ToLower(key) {
+		case "onfail":
+			switch OnFail(strings.ToUpper(val)) {
+			case Halt, MarkRan, Continue:
+				pc.OnFail = OnFail(strings.ToUpper(val))
+			default:
+				return Precondition{}, ErrBadPrecondition
+			}
+		case "expect":
+			pc.Expect, hasExpect = val, true
+		default:
+			return Precondition{}, ErrBadPrecondition
+		}
+		rest = strings.TrimSpace(tail)
+	}
+	pc.SQL = rest
+	if !hasExpect || pc.SQL == "" {
+		return Precondition{}, ErrBadPrecondition
+	}
+	return pc, nil
 }

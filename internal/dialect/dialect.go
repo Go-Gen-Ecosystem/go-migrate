@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,7 @@ type Dialect struct {
 	tableSuffix      string
 	exists           func(Table) (string, []any)
 	schemaSQL        string // query for the session's current schema/database
+	tables           func(schema string) (string, []any)
 	locker           Locker
 }
 
@@ -54,6 +56,7 @@ var dialects = map[string]*Dialect{
 		tsType:           "TIMESTAMP",
 		exists:           infoSchemaExists("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE($1, current_schema()) AND table_name = $2"),
 		schemaSQL:        "SELECT current_schema()",
+		tables:           infoSchemaTables("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE'"),
 		locker:           pgLocker{},
 	},
 	MySQL: {
@@ -64,6 +67,7 @@ var dialects = map[string]*Dialect{
 		tableSuffix: " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 		exists:      infoSchemaExists("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ?"),
 		schemaSQL:   "SELECT DATABASE()",
+		tables:      infoSchemaTables("SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'"),
 		locker:      mysqlLocker{},
 	},
 	SQLite: {
@@ -73,6 +77,7 @@ var dialects = map[string]*Dialect{
 		quote:            '"',
 		tsType:           "DATETIME",
 		exists:           sqliteExists,
+		tables:           sqliteTables,
 		locker:           sqliteLocker{},
 	},
 }
@@ -240,4 +245,35 @@ func sqliteExists(t Table) (string, []any) {
 		master = `"` + t.Schema + `".sqlite_master`
 	}
 	return "SELECT COUNT(*) FROM " + master + " WHERE type = 'table' AND name = ?", []any{t.Name}
+}
+
+// CountTables counts base tables in schema, ignoring the names in exclude
+// (the history and lock tables): it tells an empty schema from one that
+// already holds an application's tables.
+func (d *Dialect) CountTables(ctx context.Context, q Querier, schema string, exclude ...string) (int, error) {
+	query, args := d.tables(schema)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("list tables in %s: %w", schema, err)
+	}
+	defer func() { _ = rows.Close() }()
+	n := 0
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return 0, fmt.Errorf("list tables in %s: %w", schema, err)
+		}
+		if !slices.Contains(exclude, name) {
+			n++
+		}
+	}
+	return n, rows.Err()
+}
+
+func infoSchemaTables(query string) func(string) (string, []any) {
+	return func(schema string) (string, []any) { return query, []any{schema} }
+}
+
+func sqliteTables(schema string) (string, []any) {
+	return `SELECT name FROM "` + schema + `".sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`, nil
 }

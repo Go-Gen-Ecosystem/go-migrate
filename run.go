@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
+	"github.com/go-gen-ecosystem/go-migrate/internal/script"
+	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
 // cleanupTimeout bounds work that must finish even after ctx is cancelled:
@@ -110,13 +112,50 @@ func (m *Migrator) up(ctx context.Context, target string) (*Result, error) {
 		if err != nil {
 			return err
 		}
+		if s, err = r.baselineOnMigrate(ctx, s); err != nil {
+			return err
+		}
 		plan, err := m.planUp(s, target)
 		if err != nil {
 			return err
 		}
-		return r.execute(ctx, plan, Up, s, res)
+		if err := m.runCallbacks(ctx, r.conn, source.BeforeMigrate); err != nil {
+			return err
+		}
+		if err := r.execute(ctx, plan, Up, s, res); err != nil {
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			defer cancel()
+			return errors.Join(err, m.runCallbacks(cctx, r.conn, source.AfterMigrateError))
+		}
+		return m.runCallbacks(ctx, r.conn, source.AfterMigrate)
 	})
 	return res, err
+}
+
+// baselineOnMigrate inserts the configured baseline when the history is
+// empty but the schema already holds tables (WithBaselineOnMigrate).
+func (r *runner) baselineOnMigrate(ctx context.Context, s *snapshot) (*snapshot, error) {
+	m := r.m
+	if m.opts.baselineOnUp == "" || len(s.records) > 0 {
+		return s, nil
+	}
+	n, err := m.dialect.CountTables(ctx, r.conn, r.table.Schema, r.table.Name, r.table.Name+"_lock")
+	if err != nil || n == 0 {
+		return s, err
+	}
+	if !goVersion.MatchString(m.opts.baselineOnUp) {
+		return nil, fmt.Errorf("baseline version %q: %w", m.opts.baselineOnUp, ErrInvalidVersion)
+	}
+	rec := m.newRecord(&unit{
+		Migration: Migration{Description: "baseline on migrate", Source: "baseline"},
+		key:       source.Canonical(m.opts.baselineOnUp),
+		kind:      history.KindBaseline,
+	}, s.nextRank, 0, true)
+	if _, err := r.store.Insert(ctx, r.conn, rec); err != nil {
+		return nil, err
+	}
+	m.opts.logger.Typed().Str(logVersion, rec.Version).Info("baselined existing schema")
+	return r.snapshot(ctx)
 }
 
 func (m *Migrator) down(ctx context.Context, sel downSelector) (*Result, error) {
@@ -187,6 +226,7 @@ func (m *Migrator) MarkApplied(ctx context.Context, version string) error {
 type runner struct {
 	m     *Migrator
 	conn  *sql.Conn
+	table dialect.Table
 	store *history.Store
 	lock  *dialect.Lock
 }
@@ -211,7 +251,7 @@ func (m *Migrator) locked(ctx context.Context, fn func(context.Context, *runner)
 			err = errors.Join(err, fmt.Errorf("release migration lock: %w", rerr))
 		}
 	}()
-	return fn(ctx, &runner{m: m, conn: lock.Conn, store: history.New(m.dialect, table), lock: lock})
+	return fn(ctx, &runner{m: m, conn: lock.Conn, table: table, store: history.New(m.dialect, table), lock: lock})
 }
 
 func (r *runner) snapshot(ctx context.Context) (*snapshot, error) {
@@ -239,6 +279,25 @@ func readSnapshot(ctx context.Context, q history.Querier, store *history.Store) 
 // the first failure.
 func (r *runner) execute(ctx context.Context, plan []*unit, dir Direction, s *snapshot, res *Result) error {
 	for _, u := range plan {
+		if dir == Up && len(u.pre) > 0 {
+			outcome, err := checkPreconditions(ctx, r.conn, u.pre)
+			if err != nil {
+				return &MigrationError{Version: u.label(), Direction: dir, Err: err}
+			}
+			switch outcome {
+			case script.Halt:
+				return fmt.Errorf("migration %s: %w", u.label(), ErrPreconditionFailed)
+			case script.Continue:
+				r.m.opts.logger.Typed().Str(logVersion, u.label()).Info("precondition not met: skipped for this run")
+				continue
+			case script.MarkRan:
+				if err := r.markRan(ctx, u, s); err != nil {
+					return err
+				}
+				res.Applied = append(res.Applied, Applied{Migration: u.Migration, MarkedRan: true})
+				continue
+			}
+		}
 		d, err := r.run(ctx, u, dir, s)
 		if err != nil {
 			return err
@@ -246,6 +305,22 @@ func (r *runner) execute(ctx context.Context, plan []*unit, dir Direction, s *sn
 		res.Applied = append(res.Applied, Applied{Migration: u.Migration, Duration: d})
 	}
 	r.m.opts.logger.Typed().Int(logCount, len(res.Applied)).Str(logDirection, dir.String()).Info("migration run complete")
+	return nil
+}
+
+// markRan records u as applied without executing it (precondition
+// onFail=MARK_RAN).
+func (r *runner) markRan(ctx context.Context, u *unit, s *snapshot) error {
+	if err := r.lock.Fence(ctx, r.conn); err != nil {
+		return err
+	}
+	existing := s.byKey[u.key]
+	if err := r.saveRecord(ctx, r.conn, r.m.newRecord(u, s.nextRank, 0, true), existing); err != nil {
+		return err
+	}
+	if existing == nil {
+		s.nextRank++
+	}
 	return nil
 }
 
@@ -298,7 +373,13 @@ func (r *runner) runTx(ctx context.Context, u *unit, dir Direction, existing *hi
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
+	if err := r.eachCallback(ctx, tx, dir, source.BeforeEachMigrate); err != nil {
+		return err
+	}
 	if err := u.exec(ctx, tx, dir, nil); err != nil {
+		return err
+	}
+	if err := r.eachCallback(ctx, tx, dir, source.AfterEachMigrate); err != nil {
 		return err
 	}
 	if err := r.lock.Fence(ctx, tx); err != nil {
@@ -337,12 +418,18 @@ func (r *runner) runNoTx(ctx context.Context, u *unit, dir Direction, existing *
 	if err != nil {
 		return err
 	}
+	if err := r.eachCallback(ctx, q, dir, source.BeforeEachMigrate); err != nil {
+		return err
+	}
 	if err := u.exec(ctx, q, dir, fence); err != nil {
 		var me *MigrationError
 		if errors.As(err, &me) {
 			me.Dirty = true
 		}
 		return err
+	}
+	if err := r.eachCallback(ctx, q, dir, source.AfterEachMigrate); err != nil {
+		return fmt.Errorf("%w: %w", err, ErrDirty)
 	}
 	// The change is fully applied: record it even if ctx was cancelled after
 	// the last statement, rather than leaving a completed migration dirty.
@@ -412,4 +499,12 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n])
+}
+
+// eachCallback runs a per-migration callback event for Up runs.
+func (r *runner) eachCallback(ctx context.Context, q Executor, dir Direction, event string) error {
+	if dir != Up {
+		return nil
+	}
+	return r.m.runCallbacks(ctx, q, event)
 }

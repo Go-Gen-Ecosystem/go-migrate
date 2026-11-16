@@ -40,6 +40,8 @@ type Migrator struct {
 	opts    options
 	units   []*unit          // versioned in version order, then repeatables
 	byKey   map[string]*unit // history key -> unit, for O(1) lookups
+	// callbacks maps a callback event to its SQL files, in file-name order.
+	callbacks map[string][]callback
 }
 
 // unit is a migration plus the means to execute it.
@@ -48,7 +50,11 @@ type unit struct {
 	key   string
 	kind  history.Kind
 	stmts [2][]string
-	fns   [2]func(ctx context.Context, ex Executor) error
+	// skipped: excluded by DBMS/Context/Labels for this Migrator.
+	skipped   bool
+	runAlways bool
+	pre       []precondition
+	fns       [2]func(ctx context.Context, ex Executor) error
 }
 
 var goVersion = regexp.MustCompile(`^\d+(\.\d+)*$`)
@@ -91,6 +97,14 @@ func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {
 		return nil, fmt.Errorf("migrate: history table name %q is longer than %d characters", tbl.Name, maxTableName)
 	}
 
+	if o.placeholders != nil {
+		builtins := map[string]string{"migrate:dialect": d.Name(), "migrate:table": tbl.String(), "migrate:user": o.installedBy}
+		for k, v := range builtins {
+			if _, set := o.placeholders[k]; !set {
+				o.placeholders[k] = v
+			}
+		}
+	}
 	m := &Migrator{db: db, dialect: d, table: tbl, store: history.New(d, tbl), opts: o, byKey: map[string]*unit{}}
 	if err := m.load(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -102,35 +116,24 @@ func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {
 func (m *Migrator) Migrations() []Migration { return migrationsOf(m.units) }
 
 func (m *Migrator) load() error {
-	var files []*source.File
+	set := &source.Set{}
 	if m.opts.fsys != nil {
 		var err error
-		if files, err = source.Load(m.opts.fsys); err != nil {
+		if set, err = source.LoadAll(m.opts.fsys); err != nil {
 			return err
 		}
 	}
-	lx := m.dialect.Lexical()
-	for _, f := range files {
-		stmts := [2][]string{f.Script.Up.Statements(lx), f.Script.Down.Statements(lx)}
-		if len(stmts[Up]) == 0 {
-			return fmt.Errorf("%s: %w", f.Name, source.ErrEmptyUp)
-		}
-		if err := m.checkTxControl(f, stmts); err != nil {
+	for _, f := range set.Files {
+		u, err := m.sqlUnit(f)
+		if err != nil {
 			return err
 		}
-		u := &unit{
-			Migration: Migration{
-				Version: f.Version, Description: f.Description, Repeatable: f.Repeatable,
-				Source: f.Name, Checksum: f.Checksum, NoTx: f.Script.NoTx,
-				Reversible: len(stmts[Down]) > 0,
-			},
-			kind:  history.KindSQL,
-			stmts: stmts,
-		}
-		if f.Repeatable {
-			u.kind = history.KindRepeatable
-		}
 		if err := m.add(u); err != nil {
+			return err
+		}
+	}
+	for _, cb := range set.Callbacks {
+		if err := m.addCallback(cb); err != nil {
 			return err
 		}
 	}
@@ -175,6 +178,53 @@ func currentUser() string {
 		return u.Username
 	}
 	return "unknown"
+}
+
+// sqlUnit turns a loaded file into an executable unit: dialect-aware
+// splitting, placeholder substitution, targeting and preconditions.
+func (m *Migrator) sqlUnit(f *source.File) (*unit, error) {
+	lx := m.dialect.Lexical()
+	stmts := [2][]string{f.Script.Up.Statements(lx), f.Script.Down.Statements(lx)}
+	if len(stmts[Up]) == 0 {
+		return nil, fmt.Errorf("%s: %w", f.Name, source.ErrEmptyUp)
+	}
+	if err := m.checkTxControl(f, stmts); err != nil {
+		return nil, err
+	}
+	for dir := range stmts {
+		var err error
+		if stmts[dir], err = expandAll(stmts[dir], m.opts.placeholders); err != nil {
+			return nil, fmt.Errorf("%s: %w", f.Name, err)
+		}
+	}
+	meta := f.Script.Meta
+	if meta.RunAlways && !f.Repeatable {
+		return nil, fmt.Errorf("%s: RunAlways is only valid on repeatable (R__) migrations", f.Name)
+	}
+	selected, err := m.selected(meta)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+	pre, err := resolvePreconditions(meta.Preconditions, m.opts.placeholders)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+	u := &unit{
+		Migration: Migration{
+			Version: f.Version, Description: f.Description, Repeatable: f.Repeatable,
+			Source: f.Name, Checksum: f.Checksum, NoTx: f.Script.NoTx,
+			Reversible: len(stmts[Down]) > 0,
+		},
+		kind:      history.KindSQL,
+		stmts:     stmts,
+		skipped:   !selected,
+		runAlways: meta.RunAlways,
+		pre:       pre,
+	}
+	if f.Repeatable {
+		u.kind = history.KindRepeatable
+	}
+	return u, nil
 }
 
 // checkTxControl rejects BEGIN/COMMIT/ROLLBACK/... in migrations that run

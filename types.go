@@ -81,6 +81,7 @@ const (
 	StateBaseline   State = "baseline" // the baseline marker row
 	StateBelowBase  State = "below baseline"
 	StateOutOfOrder State = "out of order" // pending, older than the latest applied
+	StateSkipped    State = "skipped"      // excluded by DBMS, Context or Labels
 )
 
 // Info is a migration together with its state and history row (if any).
@@ -114,6 +115,9 @@ type Result struct {
 type Applied struct {
 	Migration
 	Duration time.Duration
+	// MarkedRan is true when a precondition with onFail=MARK_RAN failed: the
+	// migration was recorded as applied without running.
+	MarkedRan bool
 }
 
 // Event is passed to hooks around each migration.

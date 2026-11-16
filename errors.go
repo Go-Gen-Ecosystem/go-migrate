@@ -33,6 +33,12 @@ var (
 	// ErrTransactionControl means a migration that runs in a transaction
 	// contains BEGIN/COMMIT/ROLLBACK; mark it "-- +migrate Up notransaction".
 	ErrTransactionControl = errors.New("transaction control statement in a transactional migration (use notransaction)")
+	// ErrUnresolvedPlaceholder means an SQL file references ${name} that was
+	// not provided via WithPlaceholders.
+	ErrUnresolvedPlaceholder = errors.New("unresolved placeholder")
+	// ErrPreconditionFailed means a migration's precondition with
+	// onFail=HALT did not hold; nothing of that migration ran.
+	ErrPreconditionFailed = errors.New("precondition failed")
 	// ErrInvalidVersion means a version is not numeric (digits, optionally dot-separated).
 	ErrInvalidVersion = errors.New("invalid version")
 	// ErrVersionNotFound means a requested target version does not exist.
@@ -52,6 +58,7 @@ var (
 // Errors from loading migrations (New) and from the database layer,
 // re-exported so callers can test for them with errors.Is.
 var (
+	ErrBadPrecondition     = script.ErrBadPrecondition
 	ErrBadFileName         = source.ErrBadFileName
 	ErrDuplicateVersion    = source.ErrDuplicateVersion
 	ErrMissingUp           = source.ErrMissingUp

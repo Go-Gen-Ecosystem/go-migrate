@@ -163,6 +163,7 @@ func TestConformance(t *testing.T) {
 			t.Run("shipped examples", func(t *testing.T) { conformExamples(t, tg) })
 			t.Run("one-connection pool", func(t *testing.T) { conformSingleConn(t, tg) })
 			t.Run("session state isolation", func(t *testing.T) { conformSessionState(t, tg) })
+			t.Run("baseline on migrate", func(t *testing.T) { conformBaselineOnMigrate(t, tg) })
 		})
 	}
 }
@@ -375,6 +376,26 @@ func conformSessionState(t *testing.T, tg target) {
 	if n := count(t, db, "SELECT COUNT(*) FROM "+historyTable(tg)); n != 2 {
 		t.Fatalf("history rows visible from the pool = %d", n)
 	}
+}
+
+// conformBaselineOnMigrate: an existing schema is detected through the
+// dialect's catalog and baselined before pending migrations run.
+func conformBaselineOnMigrate(t *testing.T, tg target) {
+	ctx := context.Background()
+	db := tg.open(t)
+	if _, err := db.Exec("CREATE TABLE a (id INT)"); err != nil {
+		t.Fatal(err)
+	}
+	fsys := files("1_a.sql", "CREATE TABLE a (id INT);", "2_b.sql", "CREATE TABLE b (id INT);")
+	m, err := New(db, tg.dialect, WithFS(fsys), WithBaselineOnMigrate("1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Up(ctx)
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	eq(t, versions(res), []string{"2"})
 }
 
 // conformExamples proves examples/migrations is portable: it applies and
