@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -41,7 +42,15 @@ type chunk struct {
 
 // Empty reports whether the section has no executable SQL.
 func (s Section) Empty() bool {
-	return len(s.Statements(Lexical{})) == 0
+	for _, c := range s.chunks {
+		if c.verbatim && strings.TrimSpace(c.sql) != "" {
+			return false
+		}
+		if !c.verbatim && HasStatement(c.sql, Lexical{}) {
+			return false
+		}
+	}
+	return true
 }
 
 // Statements returns the section's statements in execution order.
@@ -102,7 +111,10 @@ func Parse(content []byte, def Direction) (Script, error) {
 
 	for n, line := range strings.Split(text, "\n") {
 		lineNo := n + 1
-		m := directive.FindStringSubmatch(line)
+		var m []string
+		if mayBeDirective(line) {
+			m = directive.FindStringSubmatch(line)
+		}
 		if m == nil {
 			buf.WriteString(line)
 			buf.WriteByte('\n')
@@ -164,10 +176,19 @@ func Parse(content []byte, def Direction) (Script, error) {
 	return sc, nil
 }
 
+// mayBeDirective is a cheap prefilter so the directive regex only runs on
+// comment lines that contain '+', not on every line of SQL.
+func mayBeDirective(line string) bool {
+	t := strings.TrimLeft(line, " \t")
+	return strings.HasPrefix(t, "--") && strings.IndexByte(t, '+') >= 0
+}
+
 // hasCode reports whether text contains anything other than whitespace and
 // '--' line comments.
 func hasCode(text string) bool {
-	for _, line := range strings.Split(text, "\n") {
+	for text != "" {
+		var line string
+		line, text, _ = strings.Cut(text, "\n")
 		t := strings.TrimSpace(line)
 		if t != "" && !strings.HasPrefix(t, "--") {
 			return true
@@ -200,7 +221,39 @@ func Checksum(parts ...[]byte) string {
 		if i > 0 {
 			h.Write([]byte{0})
 		}
-		h.Write(Normalize(p))
+		writeNormalized(h, p)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// writeNormalized streams Normalize(p) into w without building the
+// normalized copy: one pass, no allocations. Line breaks are buffered and
+// only written before the next non-empty line, which drops trailing blank
+// lines exactly as Normalize does.
+func writeNormalized(w io.Writer, p []byte) {
+	p = bytes.TrimPrefix(p, bom)
+	pending := 0
+	for len(p) > 0 {
+		end := bytes.IndexAny(p, "\r\n")
+		line, rest := p, []byte(nil)
+		if end >= 0 {
+			line, rest = p[:end], p[end+1:]
+			if p[end] == '\r' && len(rest) > 0 && rest[0] == '\n' {
+				rest = rest[1:]
+			}
+		}
+		if line = bytes.TrimRight(line, " \t"); len(line) > 0 {
+			for ; pending > 0; pending-- {
+				_, _ = w.Write(newline)
+			}
+			_, _ = w.Write(line)
+		}
+		if end < 0 {
+			break
+		}
+		pending++
+		p = rest
+	}
+}
+
+var newline = []byte{'\n'}

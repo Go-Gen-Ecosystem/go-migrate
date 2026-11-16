@@ -58,19 +58,35 @@ type Record struct {
 const columns = "installed_rank, version, description, kind, script, checksum, installed_by, installed_on, execution_ms, success"
 
 // Store reads and writes one history table. It is immutable and safe for
-// concurrent use.
+// concurrent use. Every statement is built once, in New, so the per-migration
+// path does no string assembly.
 type Store struct {
 	d     *dialect.Dialect
 	table dialect.Table
-	q     string // quoted table name
+	sql   queries
+}
+
+type queries struct {
+	list, nextRank, insert, complete, markDirty, reapply, setChecksum, delete, deleteFailed string
 }
 
 // New returns a store for table t on dialect d.
 func New(d *dialect.Dialect, t dialect.Table) *Store {
-	return &Store{d: d, table: t, q: d.Quote(t)}
+	q, p := d.Quote(t), d.Placeholder
+	return &Store{d: d, table: t, sql: queries{
+		list:      "SELECT " + columns + " FROM " + q + " ORDER BY installed_rank",
+		nextRank:  "SELECT COALESCE(MAX(installed_rank), 0) + 1 FROM " + q,
+		insert:    "INSERT INTO " + q + " (" + columns + ") VALUES (" + d.Placeholders(10) + ")",
+		complete:  "UPDATE " + q + " SET success = " + p(1) + ", execution_ms = " + p(2) + " WHERE version = " + p(3),
+		markDirty: "UPDATE " + q + " SET success = " + p(1) + " WHERE version = " + p(2),
+		reapply: "UPDATE " + q + " SET description = " + p(1) + ", script = " + p(2) + ", checksum = " + p(3) +
+			", installed_by = " + p(4) + ", installed_on = " + p(5) + ", execution_ms = " + p(6) + ", success = " + p(7) +
+			" WHERE version = " + p(8),
+		setChecksum:  "UPDATE " + q + " SET checksum = " + p(1) + " WHERE version = " + p(2),
+		delete:       "DELETE FROM " + q + " WHERE version = " + p(1),
+		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
+	}}
 }
-
-func (s *Store) ph(n int) string { return s.d.Placeholder(n) }
 
 // Ensure creates the history table if it does not exist.
 func (s *Store) Ensure(ctx context.Context, q Querier) error {
@@ -88,7 +104,7 @@ func (s *Store) Exists(ctx context.Context, db *sql.DB) (bool, error) {
 
 // List returns all rows in installed_rank order with a single query.
 func (s *Store) List(ctx context.Context, q Querier) ([]Record, error) {
-	rows, err := q.QueryContext(ctx, "SELECT "+columns+" FROM "+s.q+" ORDER BY installed_rank")
+	rows, err := q.QueryContext(ctx, s.sql.list)
 	if err != nil {
 		return nil, fmt.Errorf("read history: %w", err)
 	}
@@ -112,17 +128,21 @@ func (s *Store) List(ctx context.Context, q Querier) ([]Record, error) {
 	return out, nil
 }
 
-// Insert appends r with the next installed_rank and returns the rank used.
+// Insert appends r and returns the installed_rank used. A zero r.Rank means
+// "next": it is read with MAX()+1. Callers that hold the migration lock and
+// already know the next rank pass it to save a round-trip per migration.
 // InstalledOn defaults to now (UTC, microsecond precision).
 func (s *Store) Insert(ctx context.Context, q Querier, r Record) (int64, error) {
-	var rank int64
-	if err := q.QueryRowContext(ctx, "SELECT COALESCE(MAX(installed_rank), 0) + 1 FROM "+s.q).Scan(&rank); err != nil {
-		return 0, fmt.Errorf("next installed_rank: %w", err)
+	rank := r.Rank
+	if rank <= 0 {
+		if err := q.QueryRowContext(ctx, s.sql.nextRank).Scan(&rank); err != nil {
+			return 0, fmt.Errorf("next installed_rank: %w", err)
+		}
 	}
 	if r.InstalledOn.IsZero() {
 		r.InstalledOn = Now()
 	}
-	_, err := q.ExecContext(ctx, "INSERT INTO "+s.q+" ("+columns+") VALUES ("+s.d.Placeholders(10)+")",
+	_, err := q.ExecContext(ctx, s.sql.insert,
 		rank, r.Version, r.Description, string(r.Kind), r.Script, r.Checksum,
 		r.InstalledBy, r.InstalledOn, r.ExecutionMS, r.Success)
 	if err != nil {
@@ -133,14 +153,13 @@ func (s *Store) Insert(ctx context.Context, q Querier, r Record) (int64, error) 
 
 // Complete marks version as successfully applied in executionMS.
 func (s *Store) Complete(ctx context.Context, q Querier, version string, executionMS int64) error {
-	return s.exec(ctx, q, "UPDATE "+s.q+" SET success = "+s.ph(1)+", execution_ms = "+s.ph(2)+" WHERE version = "+s.ph(3),
-		true, executionMS, version)
+	return s.exec(ctx, q, s.sql.complete, true, executionMS, version)
 }
 
 // MarkDirty sets success = false on version before a non-transactional
 // change starts, so a crash part-way is detectable on the next run.
 func (s *Store) MarkDirty(ctx context.Context, q Querier, version string) error {
-	return s.exec(ctx, q, "UPDATE "+s.q+" SET success = "+s.ph(1)+" WHERE version = "+s.ph(2), false, version)
+	return s.exec(ctx, q, s.sql.markDirty, false, version)
 }
 
 // Reapply overwrites a repeatable migration's row after it ran again.
@@ -148,25 +167,23 @@ func (s *Store) Reapply(ctx context.Context, q Querier, r Record) error {
 	if r.InstalledOn.IsZero() {
 		r.InstalledOn = Now()
 	}
-	return s.exec(ctx, q, "UPDATE "+s.q+" SET description = "+s.ph(1)+", script = "+s.ph(2)+", checksum = "+s.ph(3)+
-		", installed_by = "+s.ph(4)+", installed_on = "+s.ph(5)+", execution_ms = "+s.ph(6)+", success = "+s.ph(7)+
-		" WHERE version = "+s.ph(8),
+	return s.exec(ctx, q, s.sql.reapply,
 		r.Description, r.Script, r.Checksum, r.InstalledBy, r.InstalledOn, r.ExecutionMS, r.Success, r.Version)
 }
 
 // SetChecksum realigns the stored checksum of version (used by repair).
 func (s *Store) SetChecksum(ctx context.Context, q Querier, version, checksum string) error {
-	return s.exec(ctx, q, "UPDATE "+s.q+" SET checksum = "+s.ph(1)+" WHERE version = "+s.ph(2), checksum, version)
+	return s.exec(ctx, q, s.sql.setChecksum, checksum, version)
 }
 
 // Delete removes the row for version.
 func (s *Store) Delete(ctx context.Context, q Querier, version string) error {
-	return s.exec(ctx, q, "DELETE FROM "+s.q+" WHERE version = "+s.ph(1), version)
+	return s.exec(ctx, q, s.sql.delete, version)
 }
 
 // DeleteFailed removes every row with success = false and returns how many.
 func (s *Store) DeleteFailed(ctx context.Context, q Querier) (int64, error) {
-	res, err := q.ExecContext(ctx, "DELETE FROM "+s.q+" WHERE success = "+s.ph(1), false)
+	res, err := q.ExecContext(ctx, s.sql.deleteFailed, false)
 	if err != nil {
 		return 0, fmt.Errorf("delete failed history rows: %w", err)
 	}

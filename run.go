@@ -104,7 +104,7 @@ func (m *Migrator) down(ctx context.Context, sel downSelector) (*Result, error) 
 // the first failure.
 func (m *Migrator) execute(ctx context.Context, plan []*unit, dir Direction, s *snapshot, res *Result) error {
 	for _, u := range plan {
-		d, err := m.run(ctx, u, dir, s.byKey[u.key])
+		d, err := m.run(ctx, u, dir, s)
 		if err != nil {
 			return err
 		}
@@ -148,8 +148,11 @@ func (m *Migrator) snapshot(ctx context.Context) (*snapshot, error) {
 	return newSnapshot(rs), nil
 }
 
-// run executes one migration in one direction, with hooks and logging.
-func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, existing *history.Record) (time.Duration, error) {
+// run executes one migration in one direction, with hooks and logging. It
+// assigns new history rows the snapshot's next rank (safe: the lock is held)
+// and advances it on success.
+func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, s *snapshot) (time.Duration, error) {
+	existing := s.byKey[u.key]
 	ev := Event{Migration: u.Migration, Direction: dir}
 	if h := m.opts.hooks.Before; h != nil {
 		if err := h(ctx, ev); err != nil {
@@ -162,9 +165,12 @@ func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, existing *hi
 	start := time.Now()
 	var err error
 	if !u.NoTx && m.dialect.TransactionalDDL() {
-		err = m.runTx(ctx, u, dir, existing, start)
+		err = m.runTx(ctx, u, dir, existing, s.nextRank, start)
 	} else {
-		err = m.runNoTx(ctx, u, dir, existing, start)
+		err = m.runNoTx(ctx, u, dir, existing, s.nextRank, start)
+	}
+	if err == nil && dir == Up && existing == nil {
+		s.nextRank++
 	}
 	d := time.Since(start)
 
@@ -182,7 +188,7 @@ func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, existing *hi
 
 // runTx executes the migration and its history change in one transaction:
 // on failure nothing is applied and nothing is recorded.
-func (m *Migrator) runTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, start time.Time) error {
+func (m *Migrator) runTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, rank int64, start time.Time) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction for %s: %w", u.label(), err)
@@ -195,7 +201,7 @@ func (m *Migrator) runTx(ctx context.Context, u *unit, dir Direction, existing *
 	if dir == Down {
 		err = m.store.Delete(ctx, tx, u.key)
 	} else {
-		err = m.saveRecord(ctx, tx, m.newRecord(u, time.Since(start), true), existing)
+		err = m.saveRecord(ctx, tx, m.newRecord(u, rank, time.Since(start), true), existing)
 	}
 	if err != nil {
 		return err
@@ -210,7 +216,7 @@ func (m *Migrator) runTx(ctx context.Context, u *unit, dir Direction, existing *
 // is marked dirty first, so a failure or crash part-way is detected by the
 // next run (ErrDirty) instead of being silently re-applied. All statements
 // share one connection, so session settings (SET search_path, ...) carry over.
-func (m *Migrator) runNoTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, start time.Time) error {
+func (m *Migrator) runNoTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, rank int64, start time.Time) error {
 	conn, err := m.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve connection for %s: %w", u.label(), err)
@@ -220,7 +226,7 @@ func (m *Migrator) runNoTx(ctx context.Context, u *unit, dir Direction, existing
 	if dir == Down {
 		err = m.store.MarkDirty(ctx, conn, u.key)
 	} else {
-		err = m.saveRecord(ctx, conn, m.newRecord(u, 0, false), existing)
+		err = m.saveRecord(ctx, conn, m.newRecord(u, rank, 0, false), existing)
 	}
 	if err != nil {
 		return err
@@ -246,8 +252,9 @@ func (m *Migrator) saveRecord(ctx context.Context, q history.Querier, r history.
 	return err
 }
 
-func (m *Migrator) newRecord(u *unit, elapsed time.Duration, success bool) history.Record {
+func (m *Migrator) newRecord(u *unit, rank int64, elapsed time.Duration, success bool) history.Record {
 	return history.Record{
+		Rank:        rank,
 		Version:     u.key,
 		Description: clip(u.Description, maxDescription),
 		Kind:        u.kind,

@@ -27,17 +27,29 @@ func Split(sql string, lx Lexical) []string {
 	return s.run()
 }
 
+// HasStatement reports whether sql contains at least one executable
+// statement. It stops at the first non-comment token and never allocates.
+func HasStatement(sql string, lx Lexical) bool {
+	s := splitter{src: sql, lx: lx, probe: true}
+	s.run()
+	return s.hasCode
+}
+
 type splitter struct {
 	src     string
 	lx      Lexical
 	start   int
 	hasCode bool
+	probe   bool // stop at the first code token (HasStatement)
 	out     []string
 }
 
 func (s *splitter) run() []string {
 	src := s.src
 	for i := 0; i < len(src); {
+		if s.probe && s.hasCode {
+			return nil
+		}
 		c := src[i]
 		switch {
 		case c == ';':

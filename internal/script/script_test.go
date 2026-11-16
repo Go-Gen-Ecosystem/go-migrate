@@ -1,6 +1,8 @@
 package script
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -173,4 +175,32 @@ func TestChecksumStableAcrossLineEndings(t *testing.T) {
 	if Checksum([]byte("a"), []byte("b")) == Checksum([]byte("ab")) {
 		t.Fatal("part boundary must affect the checksum")
 	}
+}
+
+func TestChecksumMatchesNormalize(t *testing.T) {
+	inputs := []string{
+		"", "a", "\n\na\n\n", "a  \r\nb\t\r\n\r\n", "\xEF\xBB\xBFx\ry\r\n\nz  ", "  \n \n", "a\n\n\nb",
+	}
+	for _, in := range inputs {
+		want := sha256Hex(Normalize([]byte(in)))
+		if got := Checksum([]byte(in)); got != want {
+			t.Errorf("Checksum(%q) = %s, want %s (streaming must equal Normalize)", in, got, want)
+		}
+	}
+}
+
+func FuzzChecksumMatchesNormalize(f *testing.F) {
+	for _, s := range []string{"a\r\nb", "\n\n", " \t\r", "\xEF\xBB\xBFq"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		if Checksum([]byte(in)) != sha256Hex(Normalize([]byte(in))) {
+			t.Fatalf("streaming checksum diverges from Normalize for %q", in)
+		}
+	})
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

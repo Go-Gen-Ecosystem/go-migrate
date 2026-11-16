@@ -213,15 +213,19 @@ func Canonical(v string) string {
 // Compare orders two canonical versions numerically per segment without
 // integer conversion, so arbitrarily long timestamps never overflow.
 // Missing trailing segments compare as zero (1 == 1.0).
+//
+// It walks both strings segment by segment without allocating, because it
+// runs O(n log n) times while sorting.
 func Compare(a, b string) int {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(as) || i < len(bs); i++ {
-		x, y := "0", "0"
-		if i < len(as) {
-			x = as[i]
+	for a != "" || b != "" {
+		var x, y string
+		x, a, _ = strings.Cut(a, ".")
+		y, b, _ = strings.Cut(b, ".")
+		if x == "" {
+			x = "0"
 		}
-		if i < len(bs) {
-			y = bs[i]
+		if y == "" {
+			y = "0"
 		}
 		if len(x) != len(y) {
 			if len(x) < len(y) {

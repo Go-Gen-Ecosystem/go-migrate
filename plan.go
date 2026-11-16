@@ -33,13 +33,15 @@ type snapshot struct {
 	baseline string   // version of the baseline row, if any
 	latest   string   // highest successfully applied version (incl. baseline)
 	dirty    []string // versions with success = false
+	nextRank int64    // installed_rank for the next inserted row
 }
 
 func newSnapshot(rs []history.Record) *snapshot {
-	s := &snapshot{records: rs, byKey: make(map[string]*history.Record, len(rs))}
+	s := &snapshot{records: rs, byKey: make(map[string]*history.Record, len(rs)), nextRank: 1}
 	for i := range rs {
 		r := &rs[i]
 		s.byKey[r.Version] = r
+		s.nextRank = max(s.nextRank, r.Rank+1)
 		switch {
 		case !r.Success:
 			s.dirty = append(s.dirty, r.Version)
@@ -66,7 +68,7 @@ type inspection struct {
 // inspect is a pure function of the units and the snapshot: O(n) with map
 // lookups, no I/O.
 func (m *Migrator) inspect(s *snapshot) inspection {
-	var in inspection
+	in := inspection{infos: make([]Info, 0, len(m.units)+len(s.records))}
 	for _, v := range s.dirty {
 		in.problems = append(in.problems, fmt.Errorf("version %s: %w", v, ErrDirty))
 	}
