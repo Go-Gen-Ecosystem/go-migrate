@@ -81,38 +81,10 @@ func newCreateCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			name := strings.Trim(nameSanitizer.ReplaceAllString(strings.ToLower(args[0]), "_"), "_")
-			if name == "" {
-				return fmt.Errorf("invalid migration name %q", args[0])
-			}
-			dir := cfg.Migrations.Dir
-			if err := os.MkdirAll(dir, dirPerm); err != nil {
-				return err
-			}
-			used, maxSeq, err := scanVersions(dir)
+			name := args[0]
+			version, written, err := createMigration(cfg.Migrations.Dir, name, seq, pair, "", "")
 			if err != nil {
 				return err
-			}
-			version := fmt.Sprintf("%0*d", seqWidth, maxSeq+1)
-			if !seq {
-				version = uniqueTimestamp(time.Now().UTC(), used)
-			}
-			type file struct{ name, body string }
-			files := []file{{version + "_" + name + ".sql", "-- +migrate Up\n\n\n-- +migrate Down\n\n"}}
-			if pair {
-				files = []file{{version + "_" + name + ".up.sql", "\n"}, {version + "_" + name + ".down.sql", "\n"}}
-			}
-			// All-or-nothing: a failure removes the files already written.
-			written := make([]string, 0, len(files))
-			for _, f := range files {
-				path := filepath.Join(dir, f.name)
-				if err := writeNew(path, f.body, migrationPerm); err != nil {
-					for _, w := range written {
-						_ = os.Remove(w)
-					}
-					return fmt.Errorf("create %s: %w", path, err)
-				}
-				written = append(written, path)
 			}
 			p := newPrinter(cmd, g)
 			p.emit(map[string]any{"version": version, "files": written}, func() {
@@ -126,6 +98,48 @@ func newCreateCmd(g *globals) *cobra.Command {
 	cmd.Flags().BoolVar(&seq, "seq", false, "use the next sequential number instead of a UTC timestamp")
 	cmd.Flags().BoolVar(&pair, "pair", false, "create separate .up.sql and .down.sql files")
 	return cmd
+}
+
+// createMigration writes a new migration named name to dir and returns its
+// version and files. up and down prefill the sections (empty: a scaffold).
+// Writing is all-or-nothing: a failure removes the files already written.
+func createMigration(dir, name string, seq, pair bool, up, down string) (string, []string, error) {
+	name = strings.Trim(nameSanitizer.ReplaceAllString(strings.ToLower(name), "_"), "_")
+	if name == "" {
+		return "", nil, errors.New("invalid migration name")
+	}
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return "", nil, err
+	}
+	used, maxSeq, err := scanVersions(dir)
+	if err != nil {
+		return "", nil, err
+	}
+	version := fmt.Sprintf("%0*d", seqWidth, maxSeq+1)
+	if !seq {
+		version = uniqueTimestamp(time.Now().UTC(), used)
+	}
+	type file struct{ name, body string }
+	files := []file{{version + "_" + name + ".sql", "-- +migrate Up\n" + up + "\n\n-- +migrate Down\n" + down + "\n"}}
+	if pair {
+		files = []file{{version + "_" + name + ".up.sql", up + "\n"}, {version + "_" + name + ".down.sql", down + "\n"}}
+	}
+	written := make([]string, 0, len(files))
+	for _, f := range files {
+		path := filepath.Join(dir, f.name)
+		if err := writeNew(path, f.body, migrationPerm); err != nil {
+			removeAll(written)
+			return "", nil, fmt.Errorf("create %s: %w", path, err)
+		}
+		written = append(written, path)
+	}
+	return version, written, nil
+}
+
+func removeAll(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
 }
 
 // seqPrefix captures the leading integer version of a migration file name.

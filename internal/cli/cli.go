@@ -111,7 +111,7 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 	root.AddCommand(
 		newInitCmd(g), newCreateCmd(g), newUpCmd(g), newDownCmd(g), newRedoCmd(g),
 		newStatusCmd(g), newValidateCmd(g), newRepairCmd(g), newMarkAppliedCmd(g),
-		newBaselineCmd(g), newTagCmd(g), newLintCmd(g),
+		newBaselineCmd(g), newTagCmd(g), newLintCmd(g), newMCPCmd(g, version),
 	)
 	return root, g
 }
@@ -211,9 +211,13 @@ func (g *globals) logger() (halolog.Logger, error) {
 	return core.New().Component("gomigrate").Level(lvl).Adapter(console.NewWithWriter(g.stderr, formatter)).Build()
 }
 
-// withSession opens a session, runs fn, and always closes the database.
-func (g *globals) withSession(cmd *cobra.Command, fn func(context.Context, *session) error) (err error) {
-	ctx := cmd.Context()
+// withSession runs fn with a session for a cobra command.
+func (g *globals) withSession(cmd *cobra.Command, fn func(context.Context, *session) error) error {
+	return g.session(cmd.Context(), fn)
+}
+
+// session opens a session, runs fn, and always closes the database.
+func (g *globals) session(ctx context.Context, fn func(context.Context, *session) error) (err error) {
 	s, err := g.open(ctx)
 	if err != nil {
 		return err

@@ -60,7 +60,7 @@ func newLintCmd(g *globals) *cobra.Command {
 				p.json = false
 				writeGitHub(p, cfg.Migrations.Dir, findings)
 			case "text", "json":
-				writeFindings(p, findings)
+				p.findings(findings)
 			default:
 				return fmt.Errorf("invalid --output %q for lint (text, json, github)", g.output)
 			}
@@ -74,40 +74,6 @@ func newLintCmd(g *globals) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&failOn, "fail-on", "error", "exit with code 3 when a finding has at least this severity: error | warning | info | never")
 	return cmd
-}
-
-type findingJSON struct {
-	Rule      string `json:"rule"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
-	Hint      string `json:"hint"`
-	Version   string `json:"version"`
-	Source    string `json:"source"`
-	Statement int    `json:"statement,omitempty"`
-	SQL       string `json:"sql,omitempty"`
-}
-
-func writeFindings(p *printer, findings []migrate.Finding) {
-	data := struct {
-		Findings []findingJSON `json:"findings"`
-	}{Findings: make([]findingJSON, 0, len(findings))}
-	for _, f := range findings {
-		data.Findings = append(data.Findings, findingJSON(f))
-	}
-	p.emit(data, func() {
-		if len(findings) == 0 {
-			p.printf("No findings.\n")
-			return
-		}
-		for _, f := range findings {
-			where := f.Source
-			if f.Statement > 0 {
-				where = fmt.Sprintf("%s statement %d", f.Source, f.Statement)
-			}
-			p.printf("%s [%s] %s: %s\n    hint: %s\n", where, f.Severity, f.Rule, f.Message, f.Hint)
-		}
-		p.printf("%d finding(s).\n", len(findings))
-	})
 }
 
 // writeGitHub prints GitHub Actions workflow commands, which render as
