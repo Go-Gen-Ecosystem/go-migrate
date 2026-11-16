@@ -46,6 +46,7 @@ func newSnapshot(rs []history.Record) *snapshot {
 
 // inspection classifies every migration against a snapshot.
 type inspection struct {
+	always   int // RunAlways repeatables in pending (not "behind")
 	infos    []Info
 	pending  []*unit // what Up would apply, in order
 	problems []error // what blocks Up
@@ -79,9 +80,10 @@ func (p planner) inspect(s *snapshot) inspection {
 			info.State = StateBaseline
 		case u.skipped && (rec == nil || u.Repeatable):
 			info.State = StateSkipped
-		case u.Repeatable && u.runAlways:
-			info.State = StatePending
+		case u.Repeatable && u.runAlways && rec != nil:
+			info.State = StateRunAlways
 			in.pending = append(in.pending, u)
+			in.always++
 		case u.Repeatable && rec == nil:
 			info.State = StatePending
 			in.pending = append(in.pending, u)
@@ -91,11 +93,13 @@ func (p planner) inspect(s *snapshot) inspection {
 		case rec != nil && drifted(u, rec):
 			info.State = StateModified
 			in.problems = append(in.problems, fmt.Errorf("version %s (%s): %w", u.Version, u.Source, ErrChecksumMismatch))
+		case rec != nil && rec.Kind == history.KindMarked:
+			info.State = StateMarkedRan
 		case rec != nil:
 			info.State = StateApplied
 		case s.baseline != "" && source.Compare(u.Version, s.baseline) <= 0:
 			info.State = StateBelowBase
-		case s.latest != "" && source.Compare(u.Version, s.latest) < 0 && !p.allowOOO:
+		case s.latest != "" && source.Compare(u.Version, s.latest) < 0 && !p.allowOOO && !u.retryable:
 			info.State = StateOutOfOrder
 			in.problems = append(in.problems, fmt.Errorf("version %s (latest applied %s): %w", u.Version, s.latest, ErrOutOfOrder))
 		default:
@@ -155,61 +159,22 @@ func (p planner) up(s *snapshot, target string) ([]*unit, error) {
 	return plan, nil
 }
 
-// downSelector chooses what to roll back: the last n, or everything above a version.
-type downSelector struct {
-	steps int
-	to    string
-	tag   string
-}
-
 // down returns the migrations to roll back, newest application first.
-// Every one is checked for reversibility before anything runs.
-func (p planner) down(s *snapshot, sel downSelector) ([]*unit, error) {
+// Every one is checked for drift and reversibility before anything runs.
+func (p planner) down(s *snapshot, t DownTarget) ([]*unit, error) {
 	if len(s.dirty) > 0 {
 		return nil, fmt.Errorf("version %s: %w", s.dirty[0], ErrDirty)
 	}
 	applied := make([]*history.Record, 0, len(s.records))
 	for i := len(s.records) - 1; i >= 0; i-- {
-		if r := &s.records[i]; r.Kind == history.KindSQL || r.Kind == history.KindGo {
+		if r := &s.records[i]; r.Kind == history.KindSQL || r.Kind == history.KindGo || r.Kind == history.KindMarked {
 			applied = append(applied, r)
 		}
 	}
-
-	if sel.tag != "" {
-		sel.to = ""
-		for i := range s.records {
-			if s.records[i].Tag == sel.tag {
-				sel.to = s.records[i].Version
-			}
-		}
-		if sel.to == "" {
-			return nil, fmt.Errorf("tag %q: %w", sel.tag, ErrTagNotFound)
-		}
+	chosen, err := p.selectDown(s, applied, t)
+	if err != nil {
+		return nil, err
 	}
-	var chosen []*history.Record
-	if sel.to != "" {
-		t := source.Canonical(sel.to)
-		if t != "0" && t != s.baseline {
-			var err error
-			if t, err = p.cat.lookupVersion(sel.to); err != nil {
-				return nil, err
-			}
-		}
-		if t != "0" && s.baseline != "" && source.Compare(t, s.baseline) < 0 {
-			return nil, fmt.Errorf("version %s (baseline %s): %w", sel.to, s.baseline, ErrBelowBaseline)
-		}
-		for _, r := range applied {
-			if source.Compare(r.Version, t) > 0 {
-				chosen = append(chosen, r)
-			}
-		}
-	} else {
-		if sel.steps > len(applied) {
-			return nil, fmt.Errorf("%w: asked to roll back %d, %d applied", ErrNotEnoughApplied, sel.steps, len(applied))
-		}
-		chosen = applied[:sel.steps]
-	}
-
 	plan := make([]*unit, 0, len(chosen))
 	var problems []error
 	for _, r := range chosen {
@@ -217,7 +182,9 @@ func (p planner) down(s *snapshot, sel downSelector) ([]*unit, error) {
 		switch {
 		case u == nil:
 			problems = append(problems, fmt.Errorf("version %s (%s): %w", r.Version, r.Script, ErrMissingMigration))
-		case !u.Reversible:
+		case drifted(u, r):
+			problems = append(problems, fmt.Errorf("version %s (%s): %w", u.Version, u.Source, ErrChecksumMismatch))
+		case !u.Reversible && r.Kind != history.KindMarked:
 			problems = append(problems, fmt.Errorf("version %s (%s): %w", u.Version, u.Source, ErrIrreversible))
 		default:
 			plan = append(plan, u)
@@ -229,8 +196,64 @@ func (p planner) down(s *snapshot, sel downSelector) ([]*unit, error) {
 	return plan, nil
 }
 
-// drifted reports whether an applied, non-repeatable migration no longer
-// matches its source: the content changed, or it switched between SQL and Go.
+// selectDown picks the history rows t refers to from applied (newest first).
+func (p planner) selectDown(s *snapshot, applied []*history.Record, t DownTarget) ([]*history.Record, error) {
+	switch {
+	case t.Tag != "":
+		// "Applied after the tag" is about application order, not version
+		// order (they differ once out-of-order runs happened).
+		var tagged *history.Record
+		for i := range s.records {
+			if s.records[i].Tag == t.Tag {
+				tagged = &s.records[i]
+			}
+		}
+		if tagged == nil {
+			return nil, fmt.Errorf("tag %q: %w", t.Tag, ErrTagNotFound)
+		}
+		var chosen []*history.Record
+		for _, r := range applied {
+			if r.Rank > tagged.Rank {
+				chosen = append(chosen, r)
+			}
+		}
+		return chosen, nil
+	case t.To != "":
+		v := source.Canonical(t.To)
+		if v != "0" && v != s.baseline {
+			var err error
+			if v, err = p.cat.lookupVersion(t.To); err != nil {
+				return nil, err
+			}
+		}
+		if v != "0" && s.baseline != "" && source.Compare(v, s.baseline) < 0 {
+			return nil, fmt.Errorf("version %s (baseline %s): %w", t.To, s.baseline, ErrBelowBaseline)
+		}
+		var chosen []*history.Record
+		for _, r := range applied {
+			if source.Compare(r.Version, v) > 0 {
+				chosen = append(chosen, r)
+			}
+		}
+		return chosen, nil
+	default:
+		if t.Steps > len(applied) {
+			return nil, fmt.Errorf("%w: asked to roll back %d, %d applied", ErrNotEnoughApplied, t.Steps, len(applied))
+		}
+		return applied[:t.Steps], nil
+	}
+}
+
+// drifted reports whether an applied, versioned migration no longer matches
+// its source: the content changed, or it switched between SQL and Go.
+// Repeatables are never "drifted": a change simply makes them outdated.
 func drifted(u *unit, rec *history.Record) bool {
-	return rec.Kind != history.KindBaseline && (rec.Checksum != u.Checksum || rec.Kind != u.kind)
+	kind := rec.Kind
+	switch kind {
+	case history.KindBaseline, history.KindRepeatable:
+		return false
+	case history.KindMarked:
+		kind = history.KindSQL
+	}
+	return rec.Checksum != u.Checksum || kind != u.kind
 }

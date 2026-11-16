@@ -90,6 +90,9 @@ func build(db *sql.DB, dialectName string, opts []Option) (*Migrator, error) {
 		return nil, fmt.Errorf("migrate: history table name %q is longer than %d characters", tbl.Name, maxTableName)
 	}
 
+	if o.baselineOnUp != "" && !goVersion.MatchString(o.baselineOnUp) {
+		return nil, fmt.Errorf("migrate: baseline-on-migrate version %q: %w", o.baselineOnUp, ErrInvalidVersion)
+	}
 	if o.placeholders != nil {
 		builtins := map[string]string{"migrate:dialect": d.Name(), "migrate:table": tbl.String(), "migrate:user": o.installedBy}
 		for k, v := range builtins {

@@ -6,11 +6,14 @@ package migrate
 import (
 	"context"
 	"errors"
-	"fmt"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/history"
+	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
 // Status reports every migration's state. It is read-only: it takes no lock
-// and never creates the history table.
+// and never creates the history table. Pending counts what Up would apply,
+// excluding RunAlways repeatables (they run every time and are never "behind").
 func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 	s, err := readSnapshot(ctx, m.db, m.store)
 	if err != nil {
@@ -20,7 +23,7 @@ func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 	return &Status{
 		Current:    s.latest,
 		Dirty:      len(s.dirty) > 0,
-		Pending:    len(in.pending),
+		Pending:    len(in.pending) - in.always,
 		Migrations: in.infos,
 	}, nil
 }
@@ -37,10 +40,14 @@ func (m *Migrator) Validate(ctx context.Context) error {
 }
 
 // Plan returns what Up (target == "") or UpTo(target) would apply, without
-// applying it. Use it for dry runs.
+// applying it, including the effect of WithBaselineOnMigrate. Use it for dry
+// runs and bind an approval to it with PlanID and ExpectPlan.
 func (m *Migrator) Plan(ctx context.Context, target string) ([]Migration, error) {
 	s, err := readSnapshot(ctx, m.db, m.store)
 	if err != nil {
+		return nil, err
+	}
+	if s, err = m.simulateBaseline(ctx, s); err != nil {
 		return nil, err
 	}
 	plan, err := m.plan.up(s, target)
@@ -50,28 +57,37 @@ func (m *Migrator) Plan(ctx context.Context, target string) ([]Migration, error)
 	return migrationsOf(plan), nil
 }
 
-// PlanDown returns what Down(steps) would roll back, without doing it.
-func (m *Migrator) PlanDown(ctx context.Context, steps int) ([]Migration, error) {
-	if steps <= 0 {
-		return nil, fmt.Errorf("steps must be positive, got %d", steps)
+// PlanDown returns what Down(t) would roll back, without doing it.
+func (m *Migrator) PlanDown(ctx context.Context, t DownTarget) ([]Migration, error) {
+	t, err := t.validate()
+	if err != nil {
+		return nil, err
 	}
-	return m.planDownRead(ctx, downSelector{steps: steps})
+	s, err := readSnapshot(ctx, m.db, m.store)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := m.plan.down(s, t)
+	if err != nil {
+		return nil, err
+	}
+	return migrationsOf(plan), nil
 }
 
-// PlanDownTo returns what DownTo(version) would roll back, without doing it.
-func (m *Migrator) PlanDownTo(ctx context.Context, version string) ([]Migration, error) {
-	if version == "" {
-		return nil, fmt.Errorf("empty target: %w", ErrVersionNotFound)
+// PlanID fingerprints a plan returned by Plan or PlanDown: its direction and
+// each migration's identity, checksum and exact statements. Pass it to
+// ExpectPlan so the run fails with ErrPlanChanged unless it executes exactly
+// what was approved.
+func (m *Migrator) PlanID(dir Direction, plan []Migration) string {
+	units := make([]*unit, 0, len(plan))
+	for _, mig := range plan {
+		if u, ok := m.cat.byKey[historyKey(mig)]; ok {
+			units = append(units, u)
+		} else {
+			units = append(units, &unit{Migration: mig, key: historyKey(mig)})
+		}
 	}
-	return m.planDownRead(ctx, downSelector{to: version})
-}
-
-// PlanDownToTag returns what DownToTag(tag) would roll back, without doing it.
-func (m *Migrator) PlanDownToTag(ctx context.Context, tag string) ([]Migration, error) {
-	if tag == "" {
-		return nil, fmt.Errorf("empty tag: %w", ErrTagNotFound)
-	}
-	return m.planDownRead(ctx, downSelector{tag: tag})
+	return m.cat.planID(dir, units)
 }
 
 // Statements returns the SQL that mig runs in direction dir, after
@@ -81,14 +97,21 @@ func (m *Migrator) Statements(mig Migration, dir Direction) []string {
 	return m.cat.statements(mig, dir)
 }
 
-func (m *Migrator) planDownRead(ctx context.Context, sel downSelector) ([]Migration, error) {
-	s, err := readSnapshot(ctx, m.db, m.store)
+// simulateBaseline makes a read-only snapshot reflect WithBaselineOnMigrate:
+// Up would baseline an existing, untracked schema first, so dry runs must too.
+func (m *Migrator) simulateBaseline(ctx context.Context, s *snapshot) (*snapshot, error) {
+	if m.opts.baselineOnUp == "" || len(s.records) > 0 {
+		return s, nil
+	}
+	schema, err := m.dialect.CurrentSchema(ctx, m.db)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := m.plan.down(s, sel)
-	if err != nil {
-		return nil, err
+	table := m.table.Qualify(schema)
+	n, err := m.dialect.CountTables(ctx, m.db, table.Schema, table.Name, table.Name+"_lock")
+	if err != nil || n == 0 {
+		return s, err
 	}
-	return migrationsOf(plan), nil
+	return newSnapshot([]history.Record{{Rank: 1, Version: source.Canonical(m.opts.baselineOnUp),
+		Kind: history.KindBaseline, Success: true}}), nil
 }

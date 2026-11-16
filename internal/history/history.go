@@ -29,6 +29,9 @@ const (
 	KindGo         Kind = "go"
 	KindRepeatable Kind = "repeatable"
 	KindBaseline   Kind = "baseline"
+	// KindMarked is a migration recorded without running (precondition
+	// onFail=MARK_RAN): rolling it back only removes the row.
+	KindMarked Kind = "marked"
 )
 
 // RepeatablePrefix prefixes the version key of repeatable migrations.

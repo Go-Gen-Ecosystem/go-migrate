@@ -5,6 +5,8 @@ package migrate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -21,33 +23,33 @@ type unit struct {
 	kind  history.Kind
 	stmts [2][]string
 	fns   [2]func(ctx context.Context, ex Executor) error
-	// skipped: excluded by DBMS/Context/Labels for this Migrator.
+	// skipped: excluded by DBMS/Context/Labels for this Migrator;
+	// otherDBMS: excluded by a DBMS directive (never linted for this dialect).
 	skipped    bool
+	otherDBMS  bool
+	retryable  bool // has a CONTINUE precondition: may run later than its order
 	runAlways  bool
 	pre        []precondition
 	lintIgnore []string
 }
-
-// label is how a migration is named in logs and errors.
-func (u *unit) label() string { return u.Label() }
 
 // exec runs the unit's SQL statements (or Go func) for dir on ex. before, if
 // set, runs ahead of every statement (lock fencing for non-transactional runs).
 func (u *unit) exec(ctx context.Context, ex Executor, dir Direction, before func(context.Context) error) error {
 	if fn := u.fns[dir]; fn != nil {
 		if err := fn(ctx, ex); err != nil {
-			return &MigrationError{Version: u.label(), Direction: dir, Err: err}
+			return &MigrationError{Version: u.Label(), Direction: dir, Err: err}
 		}
 		return nil
 	}
 	for i, stmt := range u.stmts[dir] {
 		if before != nil {
 			if err := before(ctx); err != nil {
-				return &MigrationError{Version: u.label(), Direction: dir, Statement: i + 1, SQL: truncateSQL(stmt), Err: err}
+				return &MigrationError{Version: u.Label(), Direction: dir, Statement: i + 1, SQL: truncateSQL(stmt), Err: err}
 			}
 		}
 		if _, err := ex.ExecContext(ctx, stmt); err != nil {
-			return &MigrationError{Version: u.label(), Direction: dir, Statement: i + 1, SQL: truncateSQL(stmt), Err: err}
+			return &MigrationError{Version: u.Label(), Direction: dir, Statement: i + 1, SQL: truncateSQL(stmt), Err: err}
 		}
 	}
 	return nil
@@ -125,4 +127,18 @@ func migrationsOf(us []*unit) []Migration {
 		out[i] = u.Migration
 	}
 	return out
+}
+
+// planID fingerprints a plan: direction, then each migration's key, checksum
+// and exact statements. Any change to what would run changes the ID.
+func (c *catalog) planID(dir Direction, plan []*unit) string {
+	h := sha256.New()
+	h.Write([]byte(dir.String()))
+	for _, u := range plan {
+		for _, part := range append([]string{u.key, u.Checksum}, u.stmts[dir]...) {
+			h.Write([]byte{0})
+			h.Write([]byte(part))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

@@ -82,7 +82,7 @@ func newCreateCmd(g *globals) *cobra.Command {
 				return err
 			}
 			name := args[0]
-			version, written, err := createMigration(cfg.Migrations.Dir, name, seq, pair, "", "")
+			version, written, err := createMigration(cfg.Migrations.Dir, name, seq, pair, false, "", "")
 			if err != nil {
 				return err
 			}
@@ -103,7 +103,7 @@ func newCreateCmd(g *globals) *cobra.Command {
 // createMigration writes a new migration named name to dir and returns its
 // version and files. up and down prefill the sections (empty: a scaffold).
 // Writing is all-or-nothing: a failure removes the files already written.
-func createMigration(dir, name string, seq, pair bool, up, down string) (string, []string, error) {
+func createMigration(dir, name string, seq, pair, noTx bool, up, down string) (string, []string, error) {
 	name = strings.Trim(nameSanitizer.ReplaceAllString(strings.ToLower(name), "_"), "_")
 	if name == "" {
 		return "", nil, errors.New("invalid migration name")
@@ -119,10 +119,14 @@ func createMigration(dir, name string, seq, pair bool, up, down string) (string,
 	if !seq {
 		version = uniqueTimestamp(time.Now().UTC(), used)
 	}
+	upMarker := "-- +migrate Up\n"
+	if noTx {
+		upMarker = "-- +migrate Up notransaction\n"
+	}
 	type file struct{ name, body string }
-	files := []file{{version + "_" + name + ".sql", "-- +migrate Up\n" + up + "\n\n-- +migrate Down\n" + down + "\n"}}
+	files := []file{{version + "_" + name + ".sql", upMarker + up + "\n\n-- +migrate Down\n" + down + "\n"}}
 	if pair {
-		files = []file{{version + "_" + name + ".up.sql", up + "\n"}, {version + "_" + name + ".down.sql", down + "\n"}}
+		files = []file{{version + "_" + name + ".up.sql", upMarker + up + "\n"}, {version + "_" + name + ".down.sql", down + "\n"}}
 	}
 	written := make([]string, 0, len(files))
 	for _, f := range files {
@@ -198,7 +202,7 @@ func writeNew(path, body string, perm os.FileMode) error {
 }
 
 func newUpCmd(g *globals) *cobra.Command {
-	var to string
+	var to, expectPlan string
 	var dryRun, showSQL bool
 	cmd := &cobra.Command{
 		Use:   "up",
@@ -218,24 +222,25 @@ func newUpCmd(g *globals) *cobra.Command {
 				var res *migrate.Result
 				var err error
 				if to != "" {
-					res, err = s.m.UpTo(ctx, to)
+					res, err = s.m.UpTo(ctx, to, migrate.ExpectPlan(expectPlan))
 				} else {
-					res, err = s.m.Up(ctx)
+					res, err = s.m.Up(ctx, migrate.ExpectPlan(expectPlan))
 				}
 				p.run("Applied", res, err)
-				return p.result(err)
+				return p.result(withData(err, newRun(res)))
 			})
 		},
 	}
 	cmd.Flags().StringVar(&to, "to", "", "apply up to and including this version")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be applied without changing anything")
 	cmd.Flags().BoolVar(&showSQL, "sql", false, "dry run that also prints the exact SQL of every migration")
+	cmd.Flags().StringVar(&expectPlan, "expect-plan", "", "plan_id from an approved dry run; fail with plan_changed if the plan differs")
 	return cmd
 }
 
 func newDownCmd(g *globals) *cobra.Command {
 	var steps int
-	var to, toTag string
+	var to, toTag, expectPlan string
 	var all, dryRun, showSQL bool
 	cmd := &cobra.Command{
 		Use:   "down",
@@ -245,40 +250,26 @@ func newDownCmd(g *globals) *cobra.Command {
 			if n := countSet(cmd, "steps", "to", "to-tag", "all"); n > 1 {
 				return errors.New("use only one of --steps, --to, --to-tag and --all")
 			}
+			target := migrate.DownTarget{To: to, Tag: toTag}
 			if all {
-				to = "0"
+				target.To = "0"
+			}
+			if cmd.Flags().Changed("steps") {
+				target.Steps = steps
 			}
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
 				p := newPrinter(cmd, g)
 				if dryRun || showSQL {
-					var plan []migrate.Migration
-					var err error
-					switch {
-					case toTag != "":
-						plan, err = s.m.PlanDownToTag(ctx, toTag)
-					case to != "":
-						plan, err = s.m.PlanDownTo(ctx, to)
-					default:
-						plan, err = s.m.PlanDown(ctx, steps)
-					}
+					plan, err := s.m.PlanDown(ctx, target)
 					if err != nil {
 						return err
 					}
 					p.plan(s, migrate.Down, plan, showSQL)
 					return p.result(nil)
 				}
-				var res *migrate.Result
-				var err error
-				switch {
-				case toTag != "":
-					res, err = s.m.DownToTag(ctx, toTag)
-				case to != "":
-					res, err = s.m.DownTo(ctx, to)
-				default:
-					res, err = s.m.Down(ctx, steps)
-				}
+				res, err := s.m.Down(ctx, target, migrate.ExpectPlan(expectPlan))
 				p.run("Rolled back", res, err)
-				return p.result(err)
+				return p.result(withData(err, newRun(res)))
 			})
 		},
 	}
@@ -288,6 +279,7 @@ func newDownCmd(g *globals) *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "roll back every migration")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be rolled back without changing anything")
 	cmd.Flags().BoolVar(&showSQL, "sql", false, "dry run that also prints the exact SQL of every rollback")
+	cmd.Flags().StringVar(&expectPlan, "expect-plan", "", "plan_id from an approved dry run; fail with plan_changed if the plan differs")
 	return cmd
 }
 
@@ -301,7 +293,7 @@ func newRedoCmd(g *globals) *cobra.Command {
 				p := newPrinter(cmd, g)
 				res, err := s.m.Redo(ctx)
 				p.run("Redid", res, err)
-				return p.result(err)
+				return p.result(withData(err, newRun(res)))
 			})
 		},
 	}

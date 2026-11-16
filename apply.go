@@ -89,11 +89,11 @@ func (a *applier) apply(ctx context.Context, u *unit, dir Direction, s *snapshot
 	ev := Event{Migration: u.Migration, Direction: dir}
 	if h := a.opts.hooks.Before; h != nil {
 		if err := h(ctx, ev); err != nil {
-			return 0, fmt.Errorf("before hook for %s: %w", u.label(), err)
+			return 0, fmt.Errorf("before hook for %s: %w", u.Label(), err)
 		}
 	}
 	log := a.opts.logger
-	log.Typed().Str(logVersion, u.label()).Str(logDirection, dir.String()).Str(logSource, u.Source).Info("running migration")
+	log.Typed().Str(logVersion, u.Label()).Str(logDirection, dir.String()).Str(logSource, u.Source).Info("running migration")
 
 	st := step{existing: s.byKey[u.key], rank: s.nextRank, start: time.Now()}
 	err := a.strategyFor(u)(a, ctx, u, dir, st)
@@ -106,10 +106,10 @@ func (a *applier) apply(ctx context.Context, u *unit, dir Direction, s *snapshot
 		h(ctx, ev)
 	}
 	if err != nil {
-		log.Typed().Str(logVersion, u.label()).Str(logDirection, dir.String()).WithError(err).Error("migration failed")
+		log.Typed().Str(logVersion, u.Label()).Str(logDirection, dir.String()).WithError(err).Error("migration failed")
 		return d, err
 	}
-	log.Typed().Str(logVersion, u.label()).Str(logDirection, dir.String()).Int64(logDuration, d.Milliseconds()).Info("migration done")
+	log.Typed().Str(logVersion, u.Label()).Str(logDirection, dir.String()).Int64(logDuration, d.Milliseconds()).Info("migration done")
 	return d, nil
 }
 
@@ -118,7 +118,7 @@ func (a *applier) apply(ctx context.Context, u *unit, dir Direction, s *snapshot
 func (a *applier) atomic(ctx context.Context, u *unit, dir Direction, st step) error {
 	tx, err := a.conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin transaction for %s: %w", u.label(), err)
+		return fmt.Errorf("begin transaction for %s: %w", u.Label(), err)
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
@@ -136,7 +136,7 @@ func (a *applier) atomic(ctx context.Context, u *unit, dir Direction, st step) e
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit %s: %w", u.label(), err)
+		return fmt.Errorf("commit %s: %w", u.Label(), err)
 	}
 	return nil
 }
@@ -172,25 +172,36 @@ func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st 
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 	if err := tr.finish(a, cctx, q, u, st); err != nil {
-		return fmt.Errorf("migration %s %s applied but its history row could not be updated: %w: %w", u.label(), dir, err, ErrDirty)
+		return fmt.Errorf("migration %s %s applied but its history row could not be updated: %w: %w", u.Label(), dir, err, ErrDirty)
 	}
 	return nil
 }
 
 // markRan records u as applied without executing it (precondition
-// onFail=MARK_RAN).
+// onFail=MARK_RAN), with the "marked" kind so a rollback never runs its Down.
 func (a *applier) markRan(ctx context.Context, u *unit, s *snapshot) error {
 	if err := a.lock.Fence(ctx, a.conn); err != nil {
 		return err
 	}
-	st := step{existing: s.byKey[u.key], rank: s.nextRank}
-	if err := a.save(ctx, a.conn, u, st, true); err != nil {
+	rec := a.record(u, s.nextRank, 0, true)
+	rec.Kind = history.KindMarked
+	if s.byKey[u.key] != nil {
+		return a.store.Reapply(ctx, a.conn, rec)
+	}
+	if _, err := a.store.Insert(ctx, a.conn, rec); err != nil {
 		return err
 	}
-	if st.existing == nil {
-		s.nextRank++
-	}
+	s.nextRank++
 	return nil
+}
+
+// forget removes u's history row without running SQL (rollback of a
+// migration that was only marked as run).
+func (a *applier) forget(ctx context.Context, u *unit) error {
+	if err := a.lock.Fence(ctx, a.conn); err != nil {
+		return err
+	}
+	return a.store.Delete(ctx, a.conn, u.key)
 }
 
 // save writes u's history row: a new row, or an update of a repeatable's.

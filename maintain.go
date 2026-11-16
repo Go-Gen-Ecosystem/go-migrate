@@ -80,7 +80,11 @@ func (mt maintenance) repair(ctx context.Context, res *RepairResult) error {
 		if !rec.Success || u == nil || !drifted(u, &rec) {
 			continue
 		}
-		if err := a.store.Realign(ctx, a.conn, rec.Version, u.Checksum, u.kind); err != nil {
+		kind := u.kind
+		if rec.Kind == history.KindMarked {
+			kind = rec.Kind // stays "recorded without running"
+		}
+		if err := a.store.Realign(ctx, a.conn, rec.Version, u.Checksum, kind); err != nil {
 			return err
 		}
 		res.Realigned = append(res.Realigned, rec.Version)

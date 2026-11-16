@@ -196,12 +196,12 @@ func conformLifecycle(t *testing.T, tg target) {
 	if n := count(t, db, "SELECT COUNT(*) FROM users"); n != 1 {
 		t.Fatalf("users = %d", n)
 	}
-	res, err = m.Down(ctx, 2)
+	res, err = m.Down(ctx, DownTarget{Steps: 2})
 	if err != nil {
 		t.Fatalf("Down: %v", err)
 	}
 	eq(t, versions(res), []string{"10", "2"})
-	if res, err = m.DownTo(ctx, "0"); err != nil {
+	if res, err = m.Down(ctx, DownTarget{To: "0"}); err != nil {
 		t.Fatalf("DownTo 0: %v", err)
 	}
 	eq(t, versions(res), []string{"1"})
@@ -260,7 +260,7 @@ func conformSpecial(t *testing.T, tg target) {
 	if n := count(t, db, tg.specialCheck); n != 2 {
 		t.Fatalf("%s = %d, want 2", tg.specialCheck, n)
 	}
-	if _, err := m.DownTo(ctx, "0"); err != nil {
+	if _, err := m.Down(ctx, DownTarget{To: "0"}); err != nil {
 		t.Fatalf("DownTo 0: %v", err)
 	}
 }
@@ -416,7 +416,7 @@ func conformExamples(t *testing.T, tg target) {
 	if n := count(t, db, "SELECT COUNT(*) FROM user_post_counts"); n != 0 {
 		t.Fatalf("view rows = %d", n)
 	}
-	if res, err := m.DownTo(ctx, "0"); err != nil || len(res.Applied) != 3 {
+	if res, err := m.Down(ctx, DownTarget{To: "0"}); err != nil || len(res.Applied) != 3 {
 		t.Fatalf("DownTo 0 = %+v, %v", res, err)
 	}
 }

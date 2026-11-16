@@ -28,6 +28,8 @@ var codes = []struct {
 	{ErrPreconditionFailed, "precondition_failed"},
 	{ErrTagNotFound, "tag_not_found"},
 	{ErrInvalidVersion, "invalid_version"},
+	{ErrInvalidArgument, "invalid_argument"},
+	{ErrPlanChanged, "plan_changed"},
 	{ErrBadPrecondition, "bad_precondition"},
 	{ErrBadFileName, "bad_file_name"},
 	{ErrDuplicateVersion, "duplicate_version"},

@@ -147,14 +147,14 @@ func TestUpToAndDown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := m.Down(ctx, 4); !errors.Is(err, ErrNotEnoughApplied) {
+	if _, err := m.Down(ctx, DownTarget{Steps: 4}); !errors.Is(err, ErrNotEnoughApplied) {
 		t.Fatalf("Down(4) = %v, want ErrNotEnoughApplied", err)
 	}
-	plan, err := m.PlanDown(ctx, 2)
+	plan, err := m.PlanDown(ctx, DownTarget{Steps: 2})
 	if err != nil || len(plan) != 2 || plan[0].Version != "11" {
 		t.Fatalf("PlanDown = %v, %v", plan, err)
 	}
-	res, err = m.Down(ctx, 2)
+	res, err = m.Down(ctx, DownTarget{Steps: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,12 +162,12 @@ func TestUpToAndDown(t *testing.T) {
 	if tableExists(t, db, "ten") || !tableExists(t, db, "nine") {
 		t.Fatal("down did not drop exactly the last two tables")
 	}
-	res, err = m.DownTo(ctx, "0")
+	res, err = m.Down(ctx, DownTarget{To: "0"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	eq(t, versions(res), []string{"9"})
-	if _, err := m.Down(ctx, 0); err == nil {
+	if _, err := m.Down(ctx, DownTarget{Steps: -1}); err == nil {
 		t.Fatal("Down(0) must error")
 	}
 }
@@ -182,7 +182,7 @@ func TestIrreversibleCheckedBeforeAnything(t *testing.T) {
 	if _, err := m.Up(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Down(ctx, 2); !errors.Is(err, ErrIrreversible) {
+	if _, err := m.Down(ctx, DownTarget{Steps: 2}); !errors.Is(err, ErrIrreversible) {
 		t.Fatalf("err = %v, want ErrIrreversible", err)
 	}
 	if !tableExists(t, db, "a") || !tableExists(t, db, "b") {
@@ -308,7 +308,7 @@ func TestMissingAndOutOfOrder(t *testing.T) {
 		t.Fatalf("missing info = %+v", last)
 	}
 	// Out-of-order application is rolled back in reverse application order.
-	res, err = newM(t, db, late).Down(ctx, 1)
+	res, err = newM(t, db, late).Down(ctx, DownTarget{Steps: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestGoMigrations(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("rows = %d", n)
 	}
-	if _, err := m.Down(ctx, 1); err != nil {
+	if _, err := m.Down(ctx, DownTarget{Steps: 1}); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n)
@@ -401,7 +401,7 @@ func TestBaseline(t *testing.T) {
 	if st.Migrations[0].State != StateBelowBase || st.Migrations[1].State != StateBaseline {
 		t.Fatalf("states = %v, %v", st.Migrations[0].State, st.Migrations[1].State)
 	}
-	if _, err := m.Down(ctx, 2); !errors.Is(err, ErrNotEnoughApplied) {
+	if _, err := m.Down(ctx, DownTarget{Steps: 2}); !errors.Is(err, ErrNotEnoughApplied) {
 		t.Fatalf("baseline must not be rolled back: %v", err)
 	}
 }
@@ -534,7 +534,7 @@ func TestDownToBelowBaselineFails(t *testing.T) {
 	if _, err := m.Up(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.DownTo(ctx, "9"); !errors.Is(err, ErrBelowBaseline) {
+	if _, err := m.Down(ctx, DownTarget{To: "9"}); !errors.Is(err, ErrBelowBaseline) {
 		t.Fatalf("DownTo below baseline = %v, want ErrBelowBaseline", err)
 	}
 	if err := m.Baseline(ctx, "x", ""); !errors.Is(err, ErrInvalidVersion) {
@@ -552,7 +552,7 @@ func TestRollbackReappliesRepeatables(t *testing.T) {
 	if _, err := m.Up(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.DownTo(ctx, "0"); err != nil {
+	if _, err := m.Down(ctx, DownTarget{To: "0"}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := m.Up(ctx)
@@ -608,8 +608,8 @@ func TestReexportedErrorsAndOptions(t *testing.T) {
 	if err != nil || m.opts.lockWait != 0 {
 		t.Fatalf("WithLockWait(0) must mean no wait: %+v, %v", m, err)
 	}
-	if _, err := m.PlanDownTo(context.Background(), ""); !errors.Is(err, ErrVersionNotFound) {
-		t.Errorf("PlanDownTo empty = %v", err)
+	if _, err := m.PlanDown(context.Background(), DownTarget{Steps: -1}); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("PlanDown negative steps = %v", err)
 	}
 	if got := (Migration{Repeatable: true, Description: "views"}).Label(); got != "R__views" {
 		t.Errorf("Label = %s", got)

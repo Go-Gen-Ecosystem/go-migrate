@@ -8,6 +8,7 @@ import (
 	"time"
 
 	migrate "github.com/go-gen-ecosystem/go-migrate"
+	"github.com/go-gen-ecosystem/go-migrate/internal/config"
 )
 
 // This file defines the machine-readable contract shared by `--output json`
@@ -45,6 +46,9 @@ var cliCodes = []struct {
 }{
 	{errConfirmationRequired, "confirmation_required"},
 	{errLintBlocked, "lint_blocked"},
+	{errDirectiveNotAllowed, "directive_not_allowed"},
+	{config.ErrNoDatabase, "no_database"},
+	{errNoMigrationsDir, "no_migrations_dir"},
 	{ErrPending, "pending"},
 	{ErrLintFailed, "lint_failed"},
 }
@@ -69,12 +73,36 @@ func newErrorJSON(err error) *errorJSON {
 	return ej
 }
 
+// dataError carries a partial result alongside an error, so a failed run's
+// JSON envelope still reports what completed (e.g. migrations applied before
+// the failing one).
+type dataError struct {
+	err  error
+	data any
+}
+
+func (e dataError) Error() string { return e.err.Error() }
+func (e dataError) Unwrap() error { return e.err }
+
+// withData attaches data to a non-nil err.
+func withData(err error, data any) error {
+	if err == nil {
+		return nil
+	}
+	return dataError{err: err, data: data}
+}
+
 func okEnvelope(command string, data any) envelope {
 	return envelope{OK: true, Command: command, Data: data}
 }
 
 func errEnvelope(command string, err error) envelope {
-	return envelope{OK: false, Command: command, Error: newErrorJSON(err)}
+	env := envelope{OK: false, Command: command, Error: newErrorJSON(err)}
+	var de dataError
+	if errors.As(err, &de) {
+		env.Data = de.data
+	}
+	return env
 }
 
 // migrationJSON describes one migration in plans, results and status.
@@ -91,11 +119,14 @@ type migrationJSON struct {
 	ExecutionMS *int64     `json:"execution_ms,omitempty"`
 	DurationMS  *int64     `json:"duration_ms,omitempty"`
 	MarkedRan   bool       `json:"marked_ran,omitempty"`
-	Statements  []string   `json:"statements,omitempty"`
+	// NoTransaction is set when the migration runs outside a transaction
+	// (a partial failure leaves the database dirty).
+	NoTransaction bool     `json:"no_transaction,omitempty"`
+	Statements    []string `json:"statements,omitempty"`
 }
 
 func describe(m migrate.Migration) migrationJSON {
-	return migrationJSON{Version: m.Version, Description: m.Description, Repeatable: m.Repeatable, Source: m.Source}
+	return migrationJSON{Version: m.Version, Description: m.Description, Repeatable: m.Repeatable, Source: m.Source, NoTransaction: m.NoTx}
 }
 
 func (m migrationJSON) label() string {
@@ -103,14 +134,17 @@ func (m migrationJSON) label() string {
 }
 
 type planJSON struct {
-	DryRun     bool            `json:"dry_run"`
-	Direction  string          `json:"direction"`
+	DryRun    bool   `json:"dry_run"`
+	Direction string `json:"direction"`
+	// PlanID binds an approval to execution: pass it to --expect-plan (CLI)
+	// or plan_id (MCP) and the run fails with plan_changed if anything differs.
+	PlanID     string          `json:"plan_id"`
 	Migrations []migrationJSON `json:"migrations"`
 }
 
 // newPlan describes a dry run; with sql each migration carries its exact statements.
 func newPlan(m *migrate.Migrator, dir migrate.Direction, ms []migrate.Migration, sql bool) planJSON {
-	out := planJSON{DryRun: true, Direction: dir.String(), Migrations: make([]migrationJSON, 0, len(ms))}
+	out := planJSON{DryRun: true, Direction: dir.String(), PlanID: m.PlanID(dir, ms), Migrations: make([]migrationJSON, 0, len(ms))}
 	for _, mig := range ms {
 		mj := describe(mig)
 		if sql {

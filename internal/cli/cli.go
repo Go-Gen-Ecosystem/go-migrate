@@ -40,6 +40,9 @@ const (
 // ErrPending is returned by `status --fail-on-pending` when migrations are pending.
 var ErrPending = errors.New("pending migrations")
 
+// errNoMigrationsDir: the configured migrations directory does not exist.
+var errNoMigrationsDir = errors.New("migrations directory not found (run `gomigrate init` or pass --dir)")
+
 // globals holds the persistent flags shared by every command.
 type globals struct {
 	configPath string
@@ -147,7 +150,7 @@ func (g *globals) open(ctx context.Context) (*session, error) {
 		return nil, err
 	}
 	if st, err := os.Stat(cfg.Migrations.Dir); err != nil || !st.IsDir() {
-		return nil, fmt.Errorf("migrations directory %q not found (run `gomigrate init` or pass --dir)", cfg.Migrations.Dir)
+		return nil, fmt.Errorf("%q: %w", cfg.Migrations.Dir, errNoMigrationsDir)
 	}
 	db, dialectName, err := config.Open(ctx, cfg.Database)
 	if err != nil {

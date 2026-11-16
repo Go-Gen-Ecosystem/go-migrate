@@ -90,12 +90,22 @@ func TestJSONOutputContract(t *testing.T) {
 	if code != ExitError || e.OK || e.Error == nil || e.Error.Code != "tag_not_found" {
 		t.Fatalf("down --to-tag nope = %d %s", code, out)
 	}
-	write(t, "migrations/3_bad.sql", "CREATE TABLE ok (id INTEGER);\nINSERT INTO missing VALUES (1);")
+	write(t, "migrations/3_ok.sql", "CREATE TABLE okay (id INTEGER);")
+	write(t, "migrations/4_bad.sql", "CREATE TABLE ok (id INTEGER);\nINSERT INTO missing VALUES (1);")
 	out, code = runCLI(t, env, append(base, "--context", "prod", "up")...)
 	e = decode(t, out)
 	if code != ExitError || e.Error == nil || e.Error.Code != "migration_failed" || e.Error.Migration == nil ||
-		e.Error.Migration.Version != "3" || e.Error.Migration.Statement != 2 {
+		e.Error.Migration.Version != "4" || e.Error.Migration.Statement != 2 {
 		t.Fatalf("failing migration = %d %s", code, out)
+	}
+	// The error envelope still reports what completed before the failure.
+	var partial struct {
+		Applied []struct {
+			Version string `json:"version"`
+		} `json:"applied"`
+	}
+	if err := json.Unmarshal(e.Data, &partial); err != nil || len(partial.Applied) != 1 || partial.Applied[0].Version != "3" {
+		t.Fatalf("partial run data = %s, %v", e.Data, err)
 	}
 }
 

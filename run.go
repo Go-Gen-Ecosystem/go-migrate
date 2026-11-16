@@ -38,43 +38,31 @@ var (
 
 // Up applies every pending migration, then any new or changed repeatable
 // migrations. Nothing pending is not an error: the Result is simply empty.
-func (m *Migrator) Up(ctx context.Context) (*Result, error) { return m.up(ctx, "") }
+func (m *Migrator) Up(ctx context.Context, opts ...RunOption) (*Result, error) {
+	return m.up(ctx, "", opts)
+}
 
 // UpTo applies pending migrations up to and including version. Repeatable
 // migrations are not run.
-func (m *Migrator) UpTo(ctx context.Context, version string) (*Result, error) {
+func (m *Migrator) UpTo(ctx context.Context, version string, opts ...RunOption) (*Result, error) {
 	if version == "" {
 		return nil, fmt.Errorf("empty target: %w", ErrVersionNotFound)
 	}
-	return m.up(ctx, version)
+	return m.up(ctx, version, opts)
 }
 
-// Down rolls back the last steps applied migrations, newest first. It fails
-// before changing anything if fewer than steps are applied or any of them is
-// irreversible.
-func (m *Migrator) Down(ctx context.Context, steps int) (*Result, error) {
-	if steps <= 0 {
-		return nil, fmt.Errorf("steps must be positive, got %d", steps)
+// Down rolls back the migrations selected by t, newest application first. It
+// fails before changing anything if the selection is invalid, a selected
+// migration was edited or is irreversible, or fewer migrations are applied
+// than requested.
+func (m *Migrator) Down(ctx context.Context, t DownTarget, opts ...RunOption) (*Result, error) {
+	t, err := t.validate()
+	if err != nil {
+		return nil, err
 	}
-	return m.down(ctx, downSelector{steps: steps})
-}
-
-// DownTo rolls back every applied migration with a version above version.
-// DownTo(ctx, "0") rolls back everything above the baseline (if any).
-func (m *Migrator) DownTo(ctx context.Context, version string) (*Result, error) {
-	if version == "" {
-		return nil, fmt.Errorf("empty target: %w", ErrVersionNotFound)
-	}
-	return m.down(ctx, downSelector{to: version})
-}
-
-// DownToTag rolls back every migration applied after the one carrying tag
-// (Liquibase "rollback to tag").
-func (m *Migrator) DownToTag(ctx context.Context, tag string) (*Result, error) {
-	if tag == "" {
-		return nil, fmt.Errorf("empty tag: %w", ErrTagNotFound)
-	}
-	return m.down(ctx, downSelector{tag: tag})
+	res := &Result{Direction: Down}
+	err = m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a, opts).down(ctx, t, res) })
+	return res, err
 }
 
 // Redo rolls back the most recently applied migration and applies it again,
@@ -82,19 +70,13 @@ func (m *Migrator) DownToTag(ctx context.Context, tag string) (*Result, error) {
 // re-applied migration.
 func (m *Migrator) Redo(ctx context.Context) (*Result, error) {
 	res := &Result{Direction: Up}
-	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a).redo(ctx, res) })
+	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a, nil).redo(ctx, res) })
 	return res, err
 }
 
-func (m *Migrator) up(ctx context.Context, target string) (*Result, error) {
+func (m *Migrator) up(ctx context.Context, target string, opts []RunOption) (*Result, error) {
 	res := &Result{Direction: Up}
-	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a).up(ctx, target, res) })
-	return res, err
-}
-
-func (m *Migrator) down(ctx context.Context, sel downSelector) (*Result, error) {
-	res := &Result{Direction: Down}
-	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a).down(ctx, sel, res) })
+	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a, opts).up(ctx, target, res) })
 	return res, err
 }
 
@@ -125,12 +107,24 @@ func (m *Migrator) locked(ctx context.Context, fn func(context.Context, *applier
 		d: m.dialect, cat: m.cat, opts: &m.opts})
 }
 
-func (m *Migrator) runner(a *applier) runner { return runner{a: a, plan: m.plan} }
+func (m *Migrator) runner(a *applier, opts []RunOption) runner {
+	return runner{a: a, plan: m.plan, opts: applyRunOptions(opts)}
+}
 
 // runner orchestrates applying and rolling back migrations under one lock.
 type runner struct {
 	a    *applier
 	plan planner
+	opts runOptions
+}
+
+// verify enforces ExpectPlan: the plan computed under the lock must be the
+// one that was approved.
+func (r runner) verify(dir Direction, plan []*unit) error {
+	if r.opts.expectPlan != "" && r.a.cat.planID(dir, plan) != r.opts.expectPlan {
+		return ErrPlanChanged
+	}
+	return nil
 }
 
 func (r runner) snapshot(ctx context.Context) (*snapshot, error) {
@@ -153,6 +147,9 @@ func (r runner) up(ctx context.Context, target string, res *Result) error {
 	if err != nil {
 		return err
 	}
+	if err := r.verify(Up, plan); err != nil {
+		return err
+	}
 	if err := a.callbacks(ctx, a.conn, source.BeforeMigrate); err != nil {
 		return err
 	}
@@ -164,19 +161,23 @@ func (r runner) up(ctx context.Context, target string, res *Result) error {
 	return a.callbacks(ctx, a.conn, source.AfterMigrate)
 }
 
-func (r runner) down(ctx context.Context, sel downSelector, res *Result) error {
+func (r runner) down(ctx context.Context, t DownTarget, res *Result) error {
 	s, err := r.snapshot(ctx)
 	if err != nil {
 		return err
 	}
-	plan, err := r.plan.down(s, sel)
+	plan, err := r.plan.down(s, t)
 	if err != nil {
 		return err
 	}
-	if err := r.execute(ctx, plan, Down, s, res); err != nil || len(res.Applied) == 0 {
+	if err := r.verify(Down, plan); err != nil {
 		return err
 	}
-	return r.invalidateRepeatables(ctx, s)
+	err = r.execute(ctx, plan, Down, s, res)
+	if len(res.Applied) > 0 { // even after a partial failure: something was dropped
+		err = errors.Join(err, r.invalidateRepeatables(ctx, s))
+	}
+	return err
 }
 
 func (r runner) redo(ctx context.Context, res *Result) error {
@@ -184,12 +185,11 @@ func (r runner) redo(ctx context.Context, res *Result) error {
 	if err != nil {
 		return err
 	}
-	plan, err := r.plan.down(s, downSelector{steps: 1})
+	plan, err := r.plan.down(s, DownTarget{Steps: 1})
 	if err != nil {
 		return err
 	}
-	u := plan[0]
-	if _, err := r.a.apply(ctx, u, Down, s); err != nil {
+	if err := r.execute(ctx, plan, Down, s, &Result{Direction: Down}); err != nil {
 		return err
 	}
 	if err := r.invalidateRepeatables(ctx, s); err != nil {
@@ -198,23 +198,19 @@ func (r runner) redo(ctx context.Context, res *Result) error {
 	if s, err = r.snapshot(ctx); err != nil {
 		return err
 	}
-	d, err := r.a.apply(ctx, u, Up, s)
-	if err != nil {
-		return err
-	}
-	res.Applied = append(res.Applied, Applied{Migration: u.Migration, Duration: d})
-	return nil
+	// Re-apply through execute so preconditions are evaluated again.
+	return r.execute(ctx, plan, Up, s, res)
 }
 
 // execute runs plan in order, appending each success to res, and stops at
 // the first failure.
 func (r runner) execute(ctx context.Context, plan []*unit, dir Direction, s *snapshot, res *Result) error {
 	for _, u := range plan {
-		run, err := r.precondition(ctx, u, dir, s, res)
+		bypassed, err := r.bypass(ctx, u, dir, s, res)
 		if err != nil {
 			return err
 		}
-		if !run {
+		if bypassed {
 			continue
 		}
 		d, err := r.a.apply(ctx, u, dir, s)
@@ -227,30 +223,36 @@ func (r runner) execute(ctx context.Context, plan []*unit, dir Direction, s *sna
 	return nil
 }
 
-// precondition evaluates u's preconditions (Up only) and reports whether u
-// should run; MARK_RAN records it and CONTINUE skips it for this run.
-func (r runner) precondition(ctx context.Context, u *unit, dir Direction, s *snapshot, res *Result) (bool, error) {
-	if dir != Up || len(u.pre) == 0 {
-		return true, nil
+// bypass handles migrations whose SQL must not run: on Up, a failed
+// precondition (MARK_RAN records it, CONTINUE skips it, HALT fails); on Down,
+// a row recorded by MARK_RAN, whose rollback only forgets the row because the
+// migration never created anything.
+func (r runner) bypass(ctx context.Context, u *unit, dir Direction, s *snapshot, res *Result) (bool, error) {
+	if dir == Down {
+		if rec := s.byKey[u.key]; rec != nil && rec.Kind == history.KindMarked {
+			res.Applied = append(res.Applied, Applied{Migration: u.Migration, MarkedRan: true})
+			return true, r.a.forget(ctx, u)
+		}
+		return false, nil
+	}
+	if len(u.pre) == 0 {
+		return false, nil
 	}
 	outcome, err := checkPreconditions(ctx, r.a.conn, u.pre)
 	if err != nil {
-		return false, &MigrationError{Version: u.label(), Direction: dir, Err: err}
+		return true, &MigrationError{Version: u.Label(), Direction: dir, Err: err}
 	}
 	switch outcome {
 	case script.Halt:
-		return false, fmt.Errorf("migration %s: %w", u.label(), ErrPreconditionFailed)
+		return true, fmt.Errorf("migration %s: %w", u.Label(), ErrPreconditionFailed)
 	case script.Continue:
-		r.a.opts.logger.Typed().Str(logVersion, u.label()).Info("precondition not met: skipped for this run")
-		return false, nil
-	case script.MarkRan:
-		if err := r.a.markRan(ctx, u, s); err != nil {
-			return false, err
-		}
-		res.Applied = append(res.Applied, Applied{Migration: u.Migration, MarkedRan: true})
-		return false, nil
-	default:
+		r.a.opts.logger.Typed().Str(logVersion, u.Label()).Info("precondition not met: skipped for this run")
 		return true, nil
+	case script.MarkRan:
+		res.Applied = append(res.Applied, Applied{Migration: u.Migration, MarkedRan: true})
+		return true, r.a.markRan(ctx, u, s)
+	default:
+		return false, nil
 	}
 }
 

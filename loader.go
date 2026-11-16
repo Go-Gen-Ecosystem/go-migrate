@@ -93,8 +93,11 @@ func (l *loader) sqlUnit(f *source.File) (*unit, error) {
 	if meta.RunAlways && !f.Repeatable {
 		return nil, fmt.Errorf("%s: RunAlways is only valid on repeatable (R__) migrations", f.Name)
 	}
-	selected, err := l.selected(meta)
+	dbmsOK, err := l.dbmsMatches(meta.DBMS)
 	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+	if err := checkLintIgnore(meta.LintIgnore); err != nil {
 		return nil, fmt.Errorf("%s: %w", f.Name, err)
 	}
 	pre, err := resolvePreconditions(meta.Preconditions, l.opts.placeholders)
@@ -109,7 +112,9 @@ func (l *loader) sqlUnit(f *source.File) (*unit, error) {
 		},
 		kind:       history.KindSQL,
 		stmts:      stmts,
-		skipped:    !selected,
+		skipped:    !dbmsOK || !matches(meta.Contexts, l.opts.contexts) || !matches(meta.Labels, l.opts.labels),
+		otherDBMS:  !dbmsOK,
+		retryable:  hasContinue(pre),
 		runAlways:  meta.RunAlways,
 		pre:        pre,
 		lintIgnore: meta.LintIgnore,
@@ -137,23 +142,37 @@ func (l *loader) checkTxControl(f *source.File, stmts [2][]string) error {
 	return nil
 }
 
-// selected reports whether a migration's targeting directives (DBMS,
-// Context, Labels) match this Migrator. Unset filters on either side match.
-func (l *loader) selected(meta script.Meta) (bool, error) {
-	if len(meta.DBMS) > 0 {
-		names := make([]string, 0, len(meta.DBMS))
-		for _, n := range meta.DBMS {
-			d, err := dialect.Lookup(n)
-			if err != nil {
-				return false, fmt.Errorf("DBMS directive: %w", err)
-			}
-			names = append(names, d.Name())
+// dbmsMatches reports whether a DBMS directive (if any) includes this dialect.
+func (l *loader) dbmsMatches(dbms []string) (bool, error) {
+	if len(dbms) == 0 {
+		return true, nil
+	}
+	for _, n := range dbms {
+		d, err := dialect.Lookup(n)
+		if err != nil {
+			return false, fmt.Errorf("DBMS directive: %w", err)
 		}
-		if !slices.Contains(names, l.d.Name()) {
-			return false, nil
+		if d.Name() == l.d.Name() {
+			return true, nil
 		}
 	}
-	return matches(meta.Contexts, l.opts.contexts) && matches(meta.Labels, l.opts.labels), nil
+	return false, nil
+}
+
+// checkLintIgnore rejects unknown rule IDs, so a typo never silently
+// disables nothing (or, worse, appears to suppress a finding).
+func checkLintIgnore(ids []string) error {
+	known := LintRules()
+	for _, id := range ids {
+		if !slices.Contains(known, id) {
+			return fmt.Errorf("Lint ignore=%s: unknown rule: %w", id, ErrUnknownDirective)
+		}
+	}
+	return nil
+}
+
+func hasContinue(pcs []precondition) bool {
+	return slices.ContainsFunc(pcs, func(p precondition) bool { return p.onFail == script.Continue })
 }
 
 func (l *loader) addCallback(cb *source.Callback) error {

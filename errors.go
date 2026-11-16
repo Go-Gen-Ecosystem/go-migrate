@@ -44,6 +44,11 @@ var (
 	ErrPreconditionFailed = errors.New("precondition failed")
 	// ErrTagNotFound means no applied migration carries the requested tag.
 	ErrTagNotFound = errors.New("tag not found")
+	// ErrInvalidArgument means a caller passed invalid or conflicting arguments.
+	ErrInvalidArgument = errors.New("invalid argument")
+	// ErrPlanChanged means the plan to execute no longer matches the one
+	// approved (ExpectPlan): migrations were added, edited or applied since.
+	ErrPlanChanged = errors.New("plan changed since it was approved")
 	// ErrInvalidVersion means a version is not numeric (digits, optionally dot-separated).
 	ErrInvalidVersion = errors.New("invalid version")
 	// ErrVersionNotFound means a requested target version does not exist.

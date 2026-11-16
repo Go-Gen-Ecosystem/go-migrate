@@ -40,8 +40,8 @@ func Lint(dialectName string, opts ...Option) ([]Finding, error) {
 func (m *Migrator) Lint() []Finding {
 	var out []Finding
 	for _, u := range m.cat.units {
-		if u.kind == history.KindGo {
-			continue
+		if u.kind == history.KindGo || u.otherDBMS {
+			continue // Go code is not SQL; other-DBMS files never run here
 		}
 		issues := lint.Check(lint.Migration{
 			Dialect: m.dialect.Name(), Up: u.stmts[Up], Down: u.stmts[Down], NoTx: u.NoTx,
@@ -50,7 +50,7 @@ func (m *Migrator) Lint() []Finding {
 		for _, is := range issues {
 			out = append(out, Finding{
 				Rule: is.Rule, Severity: string(is.Severity), Message: is.Message, Hint: is.Hint,
-				Version: u.label(), Source: u.Source, Statement: is.Statement, SQL: truncateSQL(is.SQL),
+				Version: u.Label(), Source: u.Source, Statement: is.Statement, SQL: truncateSQL(is.SQL),
 			})
 		}
 	}

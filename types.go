@@ -6,6 +6,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -85,6 +86,8 @@ const (
 	StateBelowBase  State = "below baseline"
 	StateOutOfOrder State = "out of order" // pending, older than the latest applied
 	StateSkipped    State = "skipped"      // excluded by DBMS, Context or Labels
+	StateMarkedRan  State = "marked ran"   // recorded by a MARK_RAN precondition, never executed
+	StateRunAlways  State = "run always"   // RunAlways repeatable: re-applied on every Up
 )
 
 // Info is a migration together with its state and history row (if any).
@@ -139,4 +142,54 @@ type Event struct {
 type Hooks struct {
 	Before func(ctx context.Context, e Event) error
 	After  func(ctx context.Context, e Event)
+}
+
+// DownTarget selects what a rollback undoes. Set at most one field; the
+// zero value rolls back the most recently applied migration.
+type DownTarget struct {
+	// Steps rolls back the last Steps applied migrations, newest first.
+	Steps int
+	// To rolls back every migration with a version above To ("0": all).
+	To string
+	// Tag rolls back every migration applied after the one tagged Tag.
+	Tag string
+}
+
+func (t DownTarget) validate() (DownTarget, error) {
+	set := 0
+	for _, ok := range []bool{t.Steps != 0, t.To != "", t.Tag != ""} {
+		if ok {
+			set++
+		}
+	}
+	switch {
+	case set > 1:
+		return t, fmt.Errorf("set only one of Steps, To and Tag: %w", ErrInvalidArgument)
+	case t.Steps < 0:
+		return t, fmt.Errorf("steps must be positive, got %d: %w", t.Steps, ErrInvalidArgument)
+	case set == 0:
+		t.Steps = 1
+	}
+	return t, nil
+}
+
+// RunOption adjusts one run (Up, UpTo, Down, Redo).
+type RunOption func(*runOptions)
+
+type runOptions struct{ expectPlan string }
+
+// ExpectPlan makes the run verify, under the migration lock, that it is about
+// to execute exactly the plan identified by id (see Migrator.PlanID) and to
+// fail with ErrPlanChanged otherwise. It binds a human's or agent's approval
+// of a dry run to what actually runs.
+func ExpectPlan(id string) RunOption { return func(o *runOptions) { o.expectPlan = id } }
+
+func applyRunOptions(opts []RunOption) runOptions {
+	var o runOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
 }

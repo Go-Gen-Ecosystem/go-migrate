@@ -44,7 +44,7 @@ func Example() {
 	}
 	fmt.Println("current version:", st.Current, "pending:", st.Pending)
 
-	plan, err := m.PlanDown(ctx, 1)
+	plan, err := m.PlanDown(ctx, migrate.DownTarget{Steps: 1})
 	if err != nil {
 		log.Fatal(err)
 	}

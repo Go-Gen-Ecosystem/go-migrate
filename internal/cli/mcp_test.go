@@ -81,18 +81,30 @@ func TestMCPAgentWorkflow(t *testing.T) {
 		t.Fatalf("create_migration = %+v", e)
 	}
 
-	// 2. apply without confirmation returns the exact SQL for the human to approve.
+	// 2. apply without confirmation returns the exact SQL and a plan_id for the human to approve.
 	e, isErr = call(t, cs, "apply", map[string]any{})
 	if !isErr || e.Error == nil || e.Error.Code != "confirmation_required" ||
 		!strings.Contains(string(e.Data), "CREATE TABLE users (id INTEGER PRIMARY KEY)") {
 		t.Fatalf("unconfirmed apply = %+v", e)
 	}
+	approved := planID(t, e)
+	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true}); e.Error == nil || e.Error.Code != "confirmation_required" {
+		t.Fatalf("confirm without plan_id must not run: %+v", e)
+	}
 	if e, _ = call(t, cs, "status", nil); !strings.Contains(string(e.Data), `"pending":1`) {
-		t.Fatalf("nothing may run without confirmation: %s", e.Data)
+		t.Fatalf("nothing may run without an approved plan: %s", e.Data)
 	}
 
-	// 3. Confirmed apply runs it.
-	if e, isErr = call(t, cs, "apply", map[string]any{"confirm": true}); isErr || !e.OK {
+	// 3. If the pending set changes after approval, the approved plan_id is refused.
+	if e, isErr = call(t, cs, "create_migration", map[string]any{"name": "later", "up": "CREATE TABLE later (id INTEGER);",
+		"down": "DROP TABLE later;", "sequential": true}); isErr {
+		t.Fatalf("create = %+v", e)
+	}
+	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true, "plan_id": approved}); e.Error == nil || e.Error.Code != "plan_changed" {
+		t.Fatalf("stale plan = %+v", e)
+	}
+	e, _ = call(t, cs, "plan", nil)
+	if e, isErr = call(t, cs, "apply", map[string]any{"confirm": true, "plan_id": planID(t, e)}); isErr || !e.OK {
 		t.Fatalf("confirmed apply = %+v", e)
 	}
 
@@ -102,32 +114,68 @@ func TestMCPAgentWorkflow(t *testing.T) {
 	}); isErr || !strings.Contains(string(e.Data), "add-not-null-without-default") {
 		t.Fatalf("create with risky SQL must report findings: %+v", e)
 	}
-	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true}); e.Error == nil || e.Error.Code != "lint_blocked" {
+	e, _ = call(t, cs, "plan", nil)
+	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true, "plan_id": planID(t, e)}); e.Error == nil || e.Error.Code != "lint_blocked" {
 		t.Fatalf("lint gate = %+v", e)
 	}
+	if err := os.Remove("migrations/0003_add_tier.sql"); err != nil {
+		t.Fatal(err)
+	}
 
-	// 5. Read-only tools and rollback confirmation.
+	// 5. Agents cannot inject directives (e.g. to suppress lint); typed inputs instead.
+	if e, isErr = call(t, cs, "create_migration", map[string]any{"name": "sneaky",
+		"up": "-- +migrate Lint ignore=add-not-null-without-default\nSELECT 1;"}); !isErr || e.Error.Code != "directive_not_allowed" {
+		t.Fatalf("directive injection = %+v", e)
+	}
+	if e, isErr = call(t, cs, "create_migration", map[string]any{"name": "idx", "up": "CREATE INDEX later_id ON later (id);",
+		"down": "DROP INDEX later_id;", "sequential": true, "no_transaction": true}); isErr || !e.OK {
+		t.Fatalf("no_transaction create = %+v", e)
+	}
+	if e, _ = call(t, cs, "plan", nil); !strings.Contains(string(e.Data), `"no_transaction":true`) {
+		t.Fatalf("plans must show the transaction mode: %s", e.Data)
+	}
+
+	// 6. Read-only tools, argument validation and rollback confirmation.
 	if e, isErr = call(t, cs, "lint", nil); isErr || !e.OK {
 		t.Fatalf("lint = %+v", e)
 	}
-	if e, isErr = call(t, cs, "plan", map[string]any{"direction": "down"}); isErr || !strings.Contains(string(e.Data), "DROP TABLE users") {
+	if e, isErr = call(t, cs, "plan", map[string]any{"direction": "Down"}); !isErr || e.Error.Code != "invalid_argument" {
+		t.Fatalf("unknown direction = %+v", e)
+	}
+	if e, isErr = call(t, cs, "rollback", map[string]any{"steps": 1, "to": "0"}); !isErr || e.Error.Code != "invalid_argument" {
+		t.Fatalf("conflicting selectors = %+v", e)
+	}
+	e, isErr = call(t, cs, "plan", map[string]any{"direction": "down", "steps": 2})
+	if isErr || !strings.Contains(string(e.Data), "DROP TABLE later") {
 		t.Fatalf("plan down = %+v", e)
 	}
-	if e, _ = call(t, cs, "rollback", map[string]any{}); e.Error == nil || e.Error.Code != "confirmation_required" {
+	if e, _ = call(t, cs, "rollback", map[string]any{"steps": 2}); e.Error == nil || e.Error.Code != "confirmation_required" {
 		t.Fatalf("unconfirmed rollback = %+v", e)
 	}
-	if e, isErr = call(t, cs, "rollback", map[string]any{"confirm": true}); isErr || !e.OK {
+	if e, isErr = call(t, cs, "rollback", map[string]any{"steps": 2, "confirm": true, "plan_id": planID(t, e)}); isErr || !e.OK {
 		t.Fatalf("confirmed rollback = %+v", e)
 	}
 	if e, isErr = call(t, cs, "validate", nil); isErr || !e.OK {
 		t.Fatalf("validate = %+v", e)
 	}
 
-	// 6. Errors carry stable codes.
-	if e, isErr = call(t, cs, "rollback", map[string]any{"to_tag": "nope", "confirm": true}); !isErr || e.Error.Code != "tag_not_found" {
+	// 7. Errors carry stable codes.
+	if e, isErr = call(t, cs, "rollback", map[string]any{"to_tag": "nope", "confirm": true, "plan_id": "x"}); !isErr || e.Error.Code != "tag_not_found" {
 		t.Fatalf("rollback to unknown tag = %+v", e)
 	}
 	if e, isErr = call(t, cs, "create_migration", map[string]any{"name": "!!!", "up": "SELECT 1;"}); !isErr || e.OK {
 		t.Fatalf("invalid name must fail: %+v", e)
 	}
+}
+
+// planID extracts plan_id from a plan-carrying response.
+func planID(t *testing.T, e testEnvelope) string {
+	t.Helper()
+	var p struct {
+		PlanID string `json:"plan_id"`
+	}
+	if err := json.Unmarshal(e.Data, &p); err != nil || p.PlanID == "" {
+		t.Fatalf("no plan_id in %s", e.Data)
+	}
+	return p.PlanID
 }
