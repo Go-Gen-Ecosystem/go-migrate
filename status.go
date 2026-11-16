@@ -6,7 +6,9 @@ package migrate
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
@@ -15,7 +17,7 @@ import (
 // and never creates the history table. Pending counts what Up would apply,
 // excluding RunAlways repeatables (they run every time and are never "behind").
 func (m *Migrator) Status(ctx context.Context) (*Status, error) {
-	s, err := readSnapshot(ctx, m.db, m.store)
+	s, err := m.readHistory(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +34,7 @@ func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 // Up fail: dirty rows, modified or missing applied migrations, and
 // out-of-order pending ones. It returns nil when Up could run.
 func (m *Migrator) Validate(ctx context.Context) error {
-	s, err := readSnapshot(ctx, m.db, m.store)
+	s, err := m.readHistory(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -43,11 +45,8 @@ func (m *Migrator) Validate(ctx context.Context) error {
 // applying it, including the effect of WithBaselineOnMigrate. Use it for dry
 // runs and bind an approval to it with PlanID and ExpectPlan.
 func (m *Migrator) Plan(ctx context.Context, target string) ([]Migration, error) {
-	s, err := readSnapshot(ctx, m.db, m.store)
+	s, err := m.readHistory(ctx, true)
 	if err != nil {
-		return nil, err
-	}
-	if s, err = m.simulateBaseline(ctx, s); err != nil {
 		return nil, err
 	}
 	plan, err := m.plan.up(s, target)
@@ -63,7 +62,7 @@ func (m *Migrator) PlanDown(ctx context.Context, t DownTarget) ([]Migration, err
 	if err != nil {
 		return nil, err
 	}
-	s, err := readSnapshot(ctx, m.db, m.store)
+	s, err := m.readHistory(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -109,18 +108,31 @@ func (m *Migrator) Statements(mig Migration, dir Direction) []string {
 	return m.cat.statements(mig, dir)
 }
 
-// simulateBaseline makes a read-only snapshot reflect WithBaselineOnMigrate:
-// Up would baseline an existing, untracked schema first, so dry runs must too.
-func (m *Migrator) simulateBaseline(ctx context.Context, s *snapshot) (*snapshot, error) {
-	if m.opts.baselineOnUp == "" || len(s.records) > 0 {
-		return s, nil
+// readHistory resolves and reads history on one session, including any
+// schema inspection needed for a dry run.
+func (m *Migrator) readHistory(ctx context.Context, baseline bool) (*snapshot, error) {
+	conn, err := m.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reserve history connection: %w", err)
 	}
-	schema, err := m.dialect.CurrentSchema(ctx, m.db)
+	defer func() { _ = conn.Close() }()
+	table, err := m.dialect.ResolveTable(ctx, conn, m.table)
 	if err != nil {
 		return nil, err
 	}
-	table := m.table.Qualify(schema)
-	n, err := m.dialect.CountTables(ctx, m.db, table.Schema, table.Name, table.Name+"_lock")
+	s, err := readSnapshot(ctx, conn, history.New(m.dialect, table))
+	if err != nil || !baseline {
+		return s, err
+	}
+	return m.simulateBaseline(ctx, conn, table, s)
+}
+
+// simulateBaseline projects the marker Up would insert on an existing schema.
+func (m *Migrator) simulateBaseline(ctx context.Context, q history.Querier, table dialect.Table, s *snapshot) (*snapshot, error) {
+	if m.opts.baselineOnUp == "" || len(s.records) > 0 {
+		return s, nil
+	}
+	n, err := m.dialect.CountTables(ctx, q, table.Schema, table.Name, table.Name+"_lock")
 	if err != nil || n == 0 {
 		return s, err
 	}

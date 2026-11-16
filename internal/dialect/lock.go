@@ -31,6 +31,8 @@ const (
 	pollMin      = 50 * time.Millisecond
 	pollMax      = time.Second
 	mysqlMaxLock = 64
+
+	lockCleanupTimeout = 30 * time.Second
 )
 
 // leaseTTL is how long an SQLite lease survives without renewal; a variable
@@ -44,10 +46,8 @@ type Querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// Locker acquires the cross-process migration lock for key.
-type Locker interface {
-	Lock(ctx context.Context, db *sql.DB, key string, wait time.Duration) (*Lock, error)
-}
+// locker acquires the lock on an already pinned connection.
+type locker func(d *Dialect, ctx context.Context, conn *sql.Conn, table Table, once bool) (*Lock, error)
 
 // Lock is a held migration lock.
 //
@@ -57,6 +57,7 @@ type Locker interface {
 // cannot deadlock.
 type Lock struct {
 	Conn   *sql.Conn
+	Table  Table
 	fence  func(ctx context.Context, q Querier) error
 	unlock func(ctx context.Context) error
 	// discard closes the connection on release instead of pooling it.
@@ -79,15 +80,16 @@ func (l *Lock) Fence(ctx context.Context, q Querier) error {
 // migrations (SET ..., USE ...) never leaks into the pool and a connection
 // whose unlock failed can never be reused while still holding the lock.
 // SQLite connections are pooled normally (an in-memory database lives only
-// as long as its connection). Release is safe to call more than once.
+// as long as its connection). Cleanup has its own deadline, and Release is
+// safe to call more than once.
 func (l *Lock) Release(ctx context.Context) error {
 	var err error
 	l.once.Do(func() {
-		err = l.unlock(ctx)
+		cleanup, cancel := lockCleanupContext(ctx)
+		defer cancel()
+		err = l.unlock(cleanup)
 		if l.discard {
-			// Returning ErrBadConn from Raw makes database/sql close the
-			// connection instead of returning it to the pool.
-			_ = l.Conn.Raw(func(any) error { return driver.ErrBadConn })
+			discardSession(l.Conn)
 			return
 		}
 		if cerr := l.Conn.Close(); err == nil {
@@ -97,116 +99,148 @@ func (l *Lock) Release(ctx context.Context) error {
 	return err
 }
 
+// Lock pins one session, resolves its history table, and acquires the lock
+// within the same budget. A zero wait makes one attempt under the caller's
+// context. The acquired lock owns the connection until Release.
+func (d *Dialect) Lock(ctx context.Context, db *sql.DB, table Table, wait time.Duration) (*Lock, error) {
+	if wait <= 0 {
+		return d.acquireLock(ctx, db, table, true)
+	}
+	acquire, cancel := context.WithTimeoutCause(ctx, wait, ErrLockTimeout)
+	defer cancel()
+	held, err := d.acquireLock(acquire, db, table, false)
+	if err != nil && errors.Is(context.Cause(acquire), ErrLockTimeout) {
+		return nil, fmt.Errorf("%w: %w", ErrLockTimeout, err)
+	}
+	return held, err
+}
+
+func (d *Dialect) acquireLock(ctx context.Context, db *sql.DB, table Table, once bool) (held *Lock, err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reserve lock connection: %w", err)
+	}
+	defer func() {
+		if held == nil {
+			_ = conn.Close()
+		}
+	}()
+	table, err = d.ResolveTable(ctx, conn, table)
+	if err != nil {
+		return nil, err
+	}
+	held, err = d.locker(d, ctx, conn, table, once)
+	if err != nil {
+		return nil, fmt.Errorf("acquire migration lock: %w", err)
+	}
+	held.Conn, held.Table = conn, table
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, held.Release(ctx))
+	}
+	return held, nil
+}
+
+func lockCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), lockCleanupTimeout)
+}
+
+func discardSession(conn *sql.Conn) {
+	// Returning ErrBadConn from Raw makes database/sql close the session.
+	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+}
+
 // tryFunc makes one non-blocking acquisition attempt.
 type tryFunc func(ctx context.Context) (bool, error)
 
-// poll calls try with capped exponential backoff until it succeeds, wait
-// elapses (ErrLockTimeout) or ctx is done.
-func poll(ctx context.Context, wait time.Duration, try tryFunc) error {
-	deadline := time.Now().Add(wait)
-	delay := pollMin
-	for {
-		ok, err := try(ctx)
-		if err != nil {
+// poll shares the acquisition deadline with SQL and connection checkout.
+func poll(ctx context.Context, once bool, try tryFunc) error {
+	for delay := pollMin; ; delay = min(delay*2, pollMax) {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if ok {
-			return nil
+		ok, err := try(ctx)
+		if err != nil || ok {
+			return err
 		}
-		if !time.Now().Before(deadline) {
+		if once {
 			return ErrLockTimeout
 		}
-		t := time.NewTimer(min(delay, time.Until(deadline)))
+		t := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			t.Stop()
 			return ctx.Err()
 		case <-t.C:
 		}
-		delay = min(delay*2, pollMax)
 	}
 }
 
-// pgLocker uses a session-level advisory lock. PostgreSQL releases it if
+// postgresLock uses a session-level advisory lock. PostgreSQL releases it if
 // the session dies.
-type pgLocker struct{}
-
-func (pgLocker) Lock(ctx context.Context, db *sql.DB, key string, wait time.Duration) (*Lock, error) {
-	id := advisoryID(key)
-	return sessionLock(ctx, db, wait,
-		func(ctx context.Context, c *sql.Conn) (bool, error) {
+func (*Dialect) postgresLock(ctx context.Context, conn *sql.Conn, table Table, once bool) (*Lock, error) {
+	id := advisoryID(LockKey(table))
+	return sessionLock(ctx, conn, once,
+		func(ctx context.Context) (bool, error) {
 			var ok bool
-			err := c.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", id).Scan(&ok)
+			err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", id).Scan(&ok)
 			return ok, err
 		},
-		func(ctx context.Context, c *sql.Conn) error {
-			_, err := c.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", id)
+		func(ctx context.Context) error {
+			_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", id)
 			return err
 		})
 }
 
-// mysqlLocker uses GET_LOCK; MySQL releases it if the session dies.
-type mysqlLocker struct{}
-
-func (mysqlLocker) Lock(ctx context.Context, db *sql.DB, key string, wait time.Duration) (*Lock, error) {
-	name := key
+// mysqlLock uses GET_LOCK. MySQL releases it if the session dies.
+func (*Dialect) mysqlLock(ctx context.Context, conn *sql.Conn, table Table, once bool) (*Lock, error) {
+	name := LockKey(table)
 	if len(name) > mysqlMaxLock {
-		name = fmt.Sprintf("go-migrate:%016x", advisoryID(key))
+		name = fmt.Sprintf("go-migrate:%016x", advisoryID(name))
 	}
-	return sessionLock(ctx, db, wait,
-		func(ctx context.Context, c *sql.Conn) (bool, error) {
+	return sessionLock(ctx, conn, once,
+		func(ctx context.Context) (bool, error) {
 			var got sql.NullInt64
-			if err := c.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&got); err != nil {
+			if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&got); err != nil {
 				return false, err
 			}
 			return got.Valid && got.Int64 == 1, nil
 		},
-		func(ctx context.Context, c *sql.Conn) error {
-			_, err := c.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", name)
+		func(ctx context.Context) error {
+			_, err := conn.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", name)
 			return err
 		})
 }
 
-// sessionLock takes a session-scoped lock on a dedicated connection, which
-// then becomes the connection all migration work runs on.
-func sessionLock(ctx context.Context, db *sql.DB, wait time.Duration,
-	try func(context.Context, *sql.Conn) (bool, error),
-	unlock func(context.Context, *sql.Conn) error,
-) (*Lock, error) {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reserve lock connection: %w", err)
+func sessionLock(ctx context.Context, conn *sql.Conn, once bool, try tryFunc, unlock func(context.Context) error) (*Lock, error) {
+	if err := poll(ctx, once, try); err != nil {
+		// The server may have acquired the lock before a response was lost.
+		discardSession(conn)
+		return nil, err
 	}
-	if err := poll(ctx, wait, func(ctx context.Context) (bool, error) { return try(ctx, conn) }); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("acquire migration lock: %w", err)
-	}
-	return &Lock{Conn: conn, discard: true, unlock: func(ctx context.Context) error { return unlock(ctx, conn) }}, nil
+	return &Lock{discard: true, unlock: unlock}, nil
 }
 
-// sqliteLocker uses a single-row lease table. There is no heartbeat
+// sqliteLock uses a single-row lease table. There is no heartbeat
 // goroutine: each migration renews the lease inside its own transaction
 // (Fence), which SQLite's single-writer model makes atomic with the change.
 // A crashed holder's lease expires after leaseTTL.
-type sqliteLocker struct{}
-
-func (sqliteLocker) Lock(ctx context.Context, db *sql.DB, key string, wait time.Duration) (*Lock, error) {
-	t, err := leaseTable(key)
-	if err != nil {
-		return nil, err
-	}
-	tbl := dialects[SQLite].Quote(t)
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reserve lock connection: %w", err)
-	}
+func (d *Dialect) sqliteLock(ctx context.Context, conn *sql.Conn, table Table, once bool) (*Lock, error) {
+	table.Name += "_lock"
+	tbl := d.Quote(table)
 	ddl := "CREATE TABLE IF NOT EXISTS " + tbl + " (id INTEGER PRIMARY KEY CHECK (id = 1), owner TEXT NOT NULL, expires_at INTEGER NOT NULL)"
 	if _, err := conn.ExecContext(ctx, ddl); err != nil {
-		_ = conn.Close()
 		return nil, fmt.Errorf("create lock table: %w", err)
 	}
 	owner := ownerID()
-	err = poll(ctx, wait, func(ctx context.Context) (bool, error) {
+	clear := func(ctx context.Context) (int64, error) {
+		res, err := conn.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE id = 1 AND owner = ?", owner)
+		if err != nil {
+			return 0, fmt.Errorf("delete migration lease: %w", err)
+		}
+		return res.RowsAffected()
+	}
+	uncertain := false
+	err := poll(ctx, once, func(ctx context.Context) (bool, error) {
 		now := time.Now().UnixMilli()
 		if _, err := conn.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE expires_at < ?", now); err != nil {
 			return false, transient(err)
@@ -214,17 +248,26 @@ func (sqliteLocker) Lock(ctx context.Context, db *sql.DB, key string, wait time.
 		res, err := conn.ExecContext(ctx, "INSERT INTO "+tbl+" (id, owner, expires_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING",
 			owner, now+leaseTTL.Milliseconds())
 		if err != nil {
-			return false, transient(err)
+			err = transient(err)
+			uncertain = err != nil
+			return false, err
 		}
 		n, err := res.RowsAffected()
+		uncertain = err != nil
 		return n == 1, err
 	})
+	// An interrupted INSERT can have committed before the driver reported
+	// failure. Remove only this attempt's owner row.
+	if uncertain {
+		cleanup, cancel := lockCleanupContext(ctx)
+		defer cancel()
+		_, clearErr := clear(cleanup)
+		err = errors.Join(err, clearErr)
+	}
 	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("acquire migration lock: %w", err)
+		return nil, err
 	}
 	return &Lock{
-		Conn: conn,
 		fence: func(ctx context.Context, q Querier) error {
 			res, err := q.ExecContext(ctx, "UPDATE "+tbl+" SET expires_at = ? WHERE id = 1 AND owner = ?",
 				time.Now().Add(leaseTTL).UnixMilli(), owner)
@@ -237,11 +280,11 @@ func (sqliteLocker) Lock(ctx context.Context, db *sql.DB, key string, wait time.
 			return nil
 		},
 		unlock: func(ctx context.Context) error {
-			res, err := conn.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE id = 1 AND owner = ?", owner)
+			n, err := clear(ctx)
 			if err != nil {
-				return fmt.Errorf("release migration lock: %w", err)
+				return err
 			}
-			if n, _ := res.RowsAffected(); n != 1 {
+			if n != 1 {
 				return ErrLockLost
 			}
 			return nil
@@ -257,17 +300,6 @@ func transient(err error) error {
 		return nil
 	}
 	return err
-}
-
-// leaseTable derives the SQLite lease table from the lock key, keeping the
-// history table's schema so separately attached databases never share one.
-func leaseTable(key string) (Table, error) {
-	t, err := ParseTable(strings.TrimPrefix(key, "go-migrate:"))
-	if err != nil {
-		return Table{}, err
-	}
-	t.Name += "_lock"
-	return t, nil
 }
 
 // advisoryID hashes key into the 64-bit space of PostgreSQL advisory locks.

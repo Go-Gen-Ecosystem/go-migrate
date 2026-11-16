@@ -482,7 +482,7 @@ func conformReadOnly(t *testing.T, tg target) {
 	if plan, err := m.Plan(ctx, "2"); err != nil || len(plan) != 2 {
 		t.Fatalf("Plan = %v, %v", plan, err)
 	}
-	ok, err := m.store.Exists(ctx, db)
+	ok, err := m.dialect.TableExists(ctx, db, m.table)
 	if err != nil || ok {
 		t.Fatalf("read-only calls created the history table: %v, %v", ok, err)
 	}

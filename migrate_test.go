@@ -465,6 +465,69 @@ func TestConcurrentUpAppliesEachMigrationOnce(t *testing.T) {
 	}
 }
 
+func TestLockWaitBoundsConnectionCheckout(t *testing.T) {
+	db := openDB(t)
+	db.SetMaxOpenConns(1)
+	entered, resume := make(chan struct{}), make(chan struct{})
+	finished := make(chan error, 1)
+	fsys := files("1_example.sql", "CREATE TABLE example (id INTEGER);")
+	first := newM(t, db, fsys, WithHooks(Hooks{
+		Before: func(context.Context, Event) error {
+			close(entered)
+			<-resume
+			return nil
+		},
+	}))
+	second := newM(t, db, fsys, WithLockWait(20*time.Millisecond))
+	go func() {
+		_, err := first.Up(t.Context())
+		finished <- err
+	}()
+	defer func() {
+		close(resume)
+		if err := <-finished; err != nil {
+			t.Errorf("first migration: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first migration did not reach its hook")
+	}
+	if _, err := second.Up(ctx); !errors.Is(err, ErrLockTimeout) {
+		t.Fatalf("second migration: %v, want ErrLockTimeout", err)
+	}
+}
+
+func TestHistoryReadsUseQualifiedTable(t *testing.T) {
+	ctx := t.Context()
+	db := openDB(t)
+	db.SetMaxOpenConns(1)
+	m := newM(t, db, basic)
+	if _, err := m.UpTo(ctx, "9"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "CREATE TEMP TABLE "+DefaultTable+" (other_column INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	if status, err := m.Status(ctx); err != nil || status.Current != "9" || status.Pending != 2 {
+		t.Fatalf("Status with a temporary shadow table: %+v, %v", status, err)
+	}
+	if err := m.Validate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if plan, err := m.Plan(ctx, ""); err != nil || len(plan) != 2 || plan[0].Version != "10" {
+		t.Fatalf("Plan with a temporary shadow table: %v, %v", plan, err)
+	}
+	if plan, err := m.PlanDown(ctx, DownTarget{Steps: 1}); err != nil || len(plan) != 1 || plan[0].Version != "9" {
+		t.Fatalf("PlanDown with a temporary shadow table: %v, %v", plan, err)
+	}
+}
+
 func TestCancelledContextReleasesLock(t *testing.T) {
 	db := openDB(t)
 	m := newM(t, db, basic)

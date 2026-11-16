@@ -11,14 +11,12 @@ import (
 
 	"github.com/go-gen-ecosystem/halolog"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 	"github.com/go-gen-ecosystem/go-migrate/internal/script"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
-// cleanupTimeout bounds work that must finish even after ctx is cancelled:
-// releasing the lock and recording a change that was already applied.
+// cleanupTimeout bounds history updates and failure callbacks after cancellation.
 const cleanupTimeout = 30 * time.Second
 
 // History column limits (see dialect.HistoryDDL).
@@ -87,23 +85,16 @@ func (m *Migrator) up(ctx context.Context, target string, opts []RunOption) (*Re
 // migration's SET search_path or USE cannot redirect history writes. The
 // lock is released even if fn panics or ctx is cancelled.
 func (m *Migrator) locked(ctx context.Context, fn func(context.Context, *applier) error) (err error) {
-	schema, err := m.dialect.CurrentSchema(ctx, m.db)
-	if err != nil {
-		return err
-	}
-	table := m.table.Qualify(schema)
-	lock, err := m.dialect.Locker().Lock(ctx, m.db, dialect.LockKey(table), m.opts.lockWait)
+	lock, err := m.dialect.Lock(ctx, m.db, m.table, m.opts.lockWait)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-		if rerr := lock.Release(cctx); rerr != nil {
+		if rerr := lock.Release(ctx); rerr != nil {
 			err = errors.Join(err, fmt.Errorf("release migration lock: %w", rerr))
 		}
 	}()
-	return fn(ctx, &applier{conn: lock.Conn, table: table, store: history.New(m.dialect, table), lock: lock,
+	return fn(ctx, &applier{conn: lock.Conn, table: lock.Table, store: history.New(m.dialect, lock.Table), lock: lock,
 		d: m.dialect, cat: m.cat, opts: &m.opts})
 }
 

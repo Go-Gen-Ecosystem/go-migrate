@@ -61,9 +61,9 @@ func WithGoMigrations(ms ...GoMigration) Option {
 // WithTable sets the history table ("name" or "schema.name").
 func WithTable(name string) Option { return func(o *options) { o.table = name } }
 
-// WithLockWait sets how long a run waits for another run to finish
-// (default DefaultLockWait). Zero or negative means "do not wait": fail with
-// ErrLockTimeout at once if the lock is held.
+// WithLockWait sets the lock acquisition budget, including reserving and
+// setting up the session (default DefaultLockWait). Zero or negative makes
+// one attempt using the caller's context and returns ErrLockTimeout if held.
 func WithLockWait(d time.Duration) Option { return func(o *options) { o.lockWait = max(d, 0) } }
 
 // WithLogger sets the halolog logger used for progress and diagnostics

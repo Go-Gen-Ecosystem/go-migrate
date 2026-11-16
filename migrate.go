@@ -27,7 +27,6 @@ import (
 	"regexp"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
-	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 )
 
 // Migrator applies migrations to one database. Create it with New.
@@ -39,7 +38,6 @@ type Migrator struct {
 	db      *sql.DB
 	dialect *dialect.Dialect
 	table   dialect.Table
-	store   *history.Store // unqualified, for read-only queries on the pool
 	opts    options
 	cat     *catalog
 	plan    planner
@@ -107,7 +105,7 @@ func build(db *sql.DB, dialectName string, opts []Option) (*Migrator, error) {
 	}
 	cat.scope = d.Name() + "/" + tbl.String()
 	return &Migrator{
-		db: db, dialect: d, table: tbl, store: history.New(d, tbl), opts: o, cat: cat,
+		db: db, dialect: d, table: tbl, opts: o, cat: cat,
 		plan: planner{cat: cat, allowOOO: o.allowOOO, allowMissing: o.allowMissing},
 	}, nil
 }
