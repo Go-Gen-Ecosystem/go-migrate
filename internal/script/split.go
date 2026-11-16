@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package script parses migration files and splits SQL into statements.
 //
 // The splitter is a single-pass, O(n) lexer that understands string literals,
@@ -175,4 +178,47 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
+}
+
+// Code returns sql with comments removed and string-literal contents
+// blanked (quotes kept), for pattern analysis that must never match text
+// inside comments or literals. Quoted identifiers are kept as written.
+func Code(sql string, lx Lexical) string {
+	var b strings.Builder
+	b.Grow(len(sql))
+	for i := 0; i < len(sql); {
+		c := sql[i]
+		switch {
+		case c == '\'':
+			backslash := lx.BackslashEscapes || (lx.DollarQuotes && isEStringPrefix(sql, i))
+			i = skipQuoted(sql, i, '\'', backslash)
+			b.WriteString("''")
+		case c == '"' || (c == '`' && lx.Backticks):
+			j := skipQuoted(sql, i, c, false)
+			b.WriteString(sql[i:j])
+			i = j
+		case c == '-' && i+1 < len(sql) && sql[i+1] == '-' &&
+			(!lx.MySQLComments || i+2 >= len(sql) || isSpace(sql[i+2])):
+			i = skipLine(sql, i)
+			b.WriteByte(' ')
+		case c == '#' && lx.HashComments:
+			i = skipLine(sql, i)
+			b.WriteByte(' ')
+		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			i = skipBlock(sql, i)
+			b.WriteByte(' ')
+		case c == '$' && lx.DollarQuotes:
+			j := skipDollar(sql, i)
+			if j > i+1 {
+				b.WriteString("$$")
+			} else {
+				b.WriteByte('$')
+			}
+			i = j
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
 }

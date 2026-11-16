@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package script
 
 import (
@@ -103,6 +106,9 @@ type Meta struct {
 	DBMS          []string
 	RunAlways     bool
 	Preconditions []Precondition
+	// LintIgnore lists lint rule IDs suppressed for this file
+	// ("-- +migrate Lint ignore=drop-table,rename").
+	LintIgnore []string
 }
 
 // OnFail says what happens when a precondition does not hold.
@@ -221,6 +227,12 @@ func Parse(content []byte, def Direction) (Script, error) {
 			sc.Meta.DBMS = append(sc.Meta.DBMS, list(opts)...)
 		case "runalways":
 			sc.Meta.RunAlways = true
+		case "lint":
+			key, val, _ := strings.Cut(opts, "=")
+			if key != "ignore" || val == "" {
+				return Script{}, fmt.Errorf("line %d: %w %q (want: Lint ignore=<rule>[,<rule>])", lineNo, ErrUnknownDirective, strings.TrimSpace(m[1]+" "+m[2]))
+			}
+			sc.Meta.LintIgnore = append(sc.Meta.LintIgnore, list(val)...)
 		case "precondition":
 			pc, err := parsePrecondition(m[2])
 			if err != nil {

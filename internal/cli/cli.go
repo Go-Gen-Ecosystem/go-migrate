@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package cli implements the gomigrate command line.
 //
 // Every command has two renderings of the same result: human text (default)
@@ -59,15 +62,21 @@ func Run(ctx context.Context, version string, args []string, stdout, stderr io.W
 	if err == nil {
 		return ExitOK
 	}
-	pending := errors.Is(err, ErrPending)
-	switch {
-	case g.json() && !pending: // with --fail-on-pending the status is already on stdout
-		writeErrorJSON(stdout, cmd.Name(), err)
-	case !g.json():
-		_, _ = fmt.Fprintln(stderr, "Error:", err)
+	// Gate outcomes (pending migrations, lint findings) have already printed
+	// their result document; they only set the exit code.
+	gate := map[error]int{ErrPending: ExitPending, ErrLintFailed: ExitLint}
+	for sentinel, code := range gate {
+		if errors.Is(err, sentinel) {
+			if !g.json() {
+				_, _ = fmt.Fprintln(stderr, "Error:", err)
+			}
+			return code
+		}
 	}
-	if pending {
-		return ExitPending
+	if g.json() {
+		writeErrorJSON(stdout, cmd.Name(), err)
+	} else {
+		_, _ = fmt.Fprintln(stderr, "Error:", err)
 	}
 	return ExitError
 }
@@ -95,14 +104,14 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 	pf.StringSliceVar(&g.overrides.Labels, "label", nil, "active labels for Labels-targeted migrations (repeatable)")
 	pf.StringToStringVar(&g.overrides.Placeholders, "placeholder", nil, "placeholder value name=value for ${name} in SQL (repeatable)")
 	pf.StringVar(&g.overrides.BaselineOnMigrate, "baseline-on-migrate", "", "baseline an existing, untracked schema at this version before up")
-	pf.StringVarP(&g.output, "output", "o", "text", "text | json (stable schema for CI and agents)")
+	pf.StringVarP(&g.output, "output", "o", "text", "text | json (stable schema for CI and agents); lint also accepts github")
 	pf.StringVar(&g.logLevel, "log-level", "info", "debug | info | warn | error")
 	pf.StringVar(&g.logFormat, "log-format", "text", "text | json (logs go to stderr)")
 
 	root.AddCommand(
 		newInitCmd(g), newCreateCmd(g), newUpCmd(g), newDownCmd(g), newRedoCmd(g),
 		newStatusCmd(g), newValidateCmd(g), newRepairCmd(g), newMarkAppliedCmd(g),
-		newBaselineCmd(g), newTagCmd(g),
+		newBaselineCmd(g), newTagCmd(g), newLintCmd(g),
 	)
 	return root, g
 }

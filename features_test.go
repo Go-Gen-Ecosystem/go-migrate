@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package migrate
 
 import (
@@ -194,6 +197,32 @@ func TestTagsAndStatements(t *testing.T) {
 	}
 	if got := m.Statements(Migration{Version: "404"}, Up); got != nil {
 		t.Fatalf("unknown migration = %q", got)
+	}
+}
+
+func TestLintWithoutDatabase(t *testing.T) {
+	fsys := files(
+		"1_users.sql", "-- +migrate Up\nCREATE TABLE users (id INTEGER);\n-- +migrate Down\nDROP TABLE users;",
+		"2_risky.sql", "ALTER TABLE users ADD COLUMN tier TEXT NOT NULL;\nDROP TABLE legacy;",
+		"3_quiet.sql", "-- +migrate Lint ignore=drop-table,irreversible\nDROP TABLE old;",
+	)
+	findings, err := Lint("sqlite", WithFS(fsys))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(findings))
+	for _, f := range findings {
+		got = append(got, f.Version+":"+f.Rule)
+	}
+	eq(t, got, []string{"2:add-not-null-without-default", "2:drop-table", "2:irreversible"})
+	if findings[0].Severity != "error" || findings[0].Statement != 1 || findings[0].Source != "2_risky.sql" {
+		t.Fatalf("finding = %+v", findings[0])
+	}
+	if len(LintRules()) == 0 {
+		t.Fatal("LintRules must list the rules")
+	}
+	if _, err := Lint("oracle"); !errors.Is(err, ErrUnsupportedDialect) {
+		t.Fatalf("Lint(oracle) = %v", err)
 	}
 }
 

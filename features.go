@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package migrate
 
 import (
@@ -7,9 +10,7 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/script"
-	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
 // placeholderRef matches ${name}; names may contain letters, digits, '_',
@@ -50,25 +51,6 @@ func expandAll(stmts []string, vals map[string]string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// selected reports whether a migration's targeting directives (DBMS,
-// Context, Labels) match this Migrator. Unset filters on either side match.
-func (m *Migrator) selected(meta script.Meta) (bool, error) {
-	if len(meta.DBMS) > 0 {
-		names := make([]string, 0, len(meta.DBMS))
-		for _, n := range meta.DBMS {
-			d, err := dialect.Lookup(n)
-			if err != nil {
-				return false, fmt.Errorf("DBMS directive: %w", err)
-			}
-			names = append(names, d.Name())
-		}
-		if !slices.Contains(names, m.dialect.Name()) {
-			return false, nil
-		}
-	}
-	return matches(meta.Contexts, m.opts.contexts) && matches(meta.Labels, m.opts.labels), nil
 }
 
 // matches implements "declared nothing, or nothing selected, or overlap".
@@ -136,28 +118,4 @@ func scalar(v any) string {
 type callback struct {
 	name  string
 	stmts []string
-}
-
-func (m *Migrator) addCallback(cb *source.Callback) error {
-	stmts, err := expandAll(cb.Script.Up.Statements(m.dialect.Lexical()), m.opts.placeholders)
-	if err != nil {
-		return fmt.Errorf("%s: %w", cb.Name, err)
-	}
-	if m.callbacks == nil {
-		m.callbacks = map[string][]callback{}
-	}
-	m.callbacks[cb.Event] = append(m.callbacks[cb.Event], callback{name: cb.Name, stmts: stmts})
-	return nil
-}
-
-// runCallbacks executes every callback file registered for event on q.
-func (m *Migrator) runCallbacks(ctx context.Context, q Executor, event string) error {
-	for _, cb := range m.callbacks[event] {
-		for i, stmt := range cb.stmts {
-			if _, err := q.ExecContext(ctx, stmt); err != nil {
-				return fmt.Errorf("%s callback %s statement %d (%s): %w", event, cb.name, i+1, truncateSQL(stmt), err)
-			}
-		}
-	}
-	return nil
 }

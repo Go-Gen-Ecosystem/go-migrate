@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package config
 
 import (
@@ -73,17 +76,7 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 // taken from db.Driver or inferred from the DSN (postgres://, mysql://,
 // sqlite://, file:, *.db).
 func Resolve(db Database) (string, string, error) {
-	driver := db.Driver
-	if driver == "" {
-		driver = inferDriver(db.DSN)
-	}
-	if driver == "" {
-		if db.DSN == "" && db.Name == "" {
-			return "", "", ErrNoDatabase
-		}
-		return "", "", errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite)")
-	}
-	d, err := dialect.Lookup(driver)
+	d, err := resolveDialect(db)
 	if err != nil {
 		return "", "", err
 	}
@@ -97,6 +90,30 @@ func Resolve(db Database) (string, string, error) {
 		dsn, err = sqliteDSN(db)
 	}
 	return d.Name(), dsn, err
+}
+
+// Dialect returns the dialect name for db from its driver or DSN scheme
+// without needing a complete DSN (for database-free commands such as lint).
+func Dialect(db Database) (string, error) {
+	d, err := resolveDialect(db)
+	if err != nil {
+		return "", err
+	}
+	return d.Name(), nil
+}
+
+func resolveDialect(db Database) (*dialect.Dialect, error) {
+	driver := db.Driver
+	if driver == "" {
+		driver = inferDriver(db.DSN)
+	}
+	if driver == "" {
+		if db.DSN == "" && db.Name == "" {
+			return nil, ErrNoDatabase
+		}
+		return nil, errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite)")
+	}
+	return dialect.Lookup(driver)
 }
 
 func inferDriver(dsn string) string {

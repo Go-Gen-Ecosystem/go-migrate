@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package migrate
 
 import (
@@ -50,7 +53,7 @@ func BenchmarkPlan(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		plan, err := m.planUp(newSnapshot(recs), "")
+		plan, err := m.plan.up(newSnapshot(recs), "")
 		if err != nil || len(plan) != 0 {
 			b.Fatalf("plan = %d, %v", len(plan), err)
 		}

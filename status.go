@@ -1,14 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package migrate
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
-
-	"github.com/go-gen-ecosystem/go-migrate/internal/history"
-	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
 // Status reports every migration's state. It is read-only: it takes no lock
@@ -18,7 +16,7 @@ func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
-	in := m.inspect(s)
+	in := m.plan.inspect(s)
 	return &Status{
 		Current:    s.latest,
 		Dirty:      len(s.dirty) > 0,
@@ -35,7 +33,7 @@ func (m *Migrator) Validate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(m.inspect(s).problems...)
+	return errors.Join(m.plan.inspect(s).problems...)
 }
 
 // Plan returns what Up (target == "") or UpTo(target) would apply, without
@@ -45,7 +43,7 @@ func (m *Migrator) Plan(ctx context.Context, target string) ([]Migration, error)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := m.planUp(s, target)
+	plan, err := m.plan.up(s, target)
 	if err != nil {
 		return nil, err
 	}
@@ -80,15 +78,7 @@ func (m *Migrator) PlanDownToTag(ctx context.Context, tag string) ([]Migration, 
 // placeholder substitution, exactly as it would be executed (Liquibase
 // updateSQL). Go migrations and unknown migrations return nil.
 func (m *Migrator) Statements(mig Migration, dir Direction) []string {
-	key := mig.Version
-	if mig.Repeatable {
-		key = history.RepeatablePrefix + strings.ToLower(mig.Description)
-	}
-	u, ok := m.byKey[key]
-	if !ok {
-		return nil
-	}
-	return slices.Clone(u.stmts[dir])
+	return m.cat.statements(mig, dir)
 }
 
 func (m *Migrator) planDownRead(ctx context.Context, sel downSelector) ([]Migration, error) {
@@ -96,78 +86,9 @@ func (m *Migrator) planDownRead(ctx context.Context, sel downSelector) ([]Migrat
 	if err != nil {
 		return nil, err
 	}
-	plan, err := m.planDown(s, sel)
+	plan, err := m.plan.down(s, sel)
 	if err != nil {
 		return nil, err
 	}
 	return migrationsOf(plan), nil
-}
-
-// RepairResult reports what Repair changed.
-type RepairResult struct {
-	// RemovedFailed is the number of dirty (failed) history rows removed.
-	RemovedFailed int64
-	// Realigned lists versions whose stored checksum was updated to match
-	// the current file.
-	Realigned []string
-}
-
-// Repair clears failed history rows (after you have fixed the schema by
-// hand) and realigns stored checksums of applied migrations with the current
-// files, accepting deliberate edits. It never touches the schema itself.
-func (m *Migrator) Repair(ctx context.Context) (*RepairResult, error) {
-	res := &RepairResult{}
-	err := m.locked(ctx, func(ctx context.Context, r *runner) error {
-		s, err := r.snapshot(ctx)
-		if err != nil || len(s.records) == 0 {
-			return err
-		}
-		if res.RemovedFailed, err = r.store.DeleteFailed(ctx, r.conn); err != nil {
-			return err
-		}
-		for _, rec := range s.records {
-			u := m.byKey[rec.Version]
-			if !rec.Success || u == nil || !drifted(u, &rec) {
-				continue
-			}
-			if err := r.store.Realign(ctx, r.conn, rec.Version, u.Checksum, u.kind); err != nil {
-				return err
-			}
-			res.Realigned = append(res.Realigned, rec.Version)
-		}
-		m.opts.logger.Typed().Int64(logCount, res.RemovedFailed).Info("repair complete")
-		return nil
-	})
-	return res, err
-}
-
-// Baseline marks an existing database as being at version, so migrations up
-// to and including it are treated as already applied. It requires an empty
-// history table.
-func (m *Migrator) Baseline(ctx context.Context, version, description string) error {
-	if !goVersion.MatchString(version) {
-		return fmt.Errorf("baseline version %q: %w", version, ErrInvalidVersion)
-	}
-	if description == "" {
-		description = "baseline"
-	}
-	return m.locked(ctx, func(ctx context.Context, r *runner) error {
-		if err := r.store.Ensure(ctx, r.conn); err != nil {
-			return err
-		}
-		rs, err := r.store.List(ctx, r.conn)
-		if err != nil {
-			return err
-		}
-		if len(rs) > 0 {
-			return ErrBaselineNotEmpty
-		}
-		rec := m.newRecord(&unit{
-			Migration: Migration{Description: description, Source: "baseline"},
-			key:       source.Canonical(version),
-			kind:      history.KindBaseline,
-		}, 0, 0, true)
-		_, err = r.store.Insert(ctx, r.conn, rec)
-		return err
-	})
 }

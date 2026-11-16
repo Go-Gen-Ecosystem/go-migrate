@@ -1,30 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 package migrate
 
 import (
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
-
-// sortUnits orders versioned migrations by version, then repeatables by
-// description. It runs once, in New.
-func sortUnits(us []*unit) {
-	sort.SliceStable(us, func(i, j int) bool {
-		a, b := us[i], us[j]
-		if a.Repeatable != b.Repeatable {
-			return !a.Repeatable
-		}
-		if a.Repeatable {
-			return strings.ToLower(a.Description) < strings.ToLower(b.Description)
-		}
-		return source.Compare(a.Version, b.Version) < 0
-	})
-}
 
 // snapshot is the history table, read with one query and indexed by key.
 type snapshot struct {
@@ -65,14 +51,22 @@ type inspection struct {
 	problems []error // what blocks Up
 }
 
-// inspect is a pure function of the units and the snapshot: O(n) with map
-// lookups, no I/O.
-func (m *Migrator) inspect(s *snapshot) inspection {
-	in := inspection{infos: make([]Info, 0, len(m.units)+len(s.records))}
+// planner makes every decision about what to run as a pure function of the
+// catalog and a history snapshot: O(n) with map lookups and no I/O, so it is
+// trivially testable and safe for concurrent use.
+type planner struct {
+	cat          *catalog
+	allowOOO     bool
+	allowMissing bool
+}
+
+// inspect classifies every migration against s.
+func (p planner) inspect(s *snapshot) inspection {
+	in := inspection{infos: make([]Info, 0, len(p.cat.units)+len(s.records))}
 	for _, v := range s.dirty {
 		in.problems = append(in.problems, fmt.Errorf("version %s: %w", v, ErrDirty))
 	}
-	for _, u := range m.units {
+	for _, u := range p.cat.units {
 		info := Info{Migration: u.Migration}
 		rec := s.byKey[u.key]
 		if rec != nil {
@@ -101,7 +95,7 @@ func (m *Migrator) inspect(s *snapshot) inspection {
 			info.State = StateApplied
 		case s.baseline != "" && source.Compare(u.Version, s.baseline) <= 0:
 			info.State = StateBelowBase
-		case s.latest != "" && source.Compare(u.Version, s.latest) < 0 && !m.opts.allowOOO:
+		case s.latest != "" && source.Compare(u.Version, s.latest) < 0 && !p.allowOOO:
 			info.State = StateOutOfOrder
 			in.problems = append(in.problems, fmt.Errorf("version %s (latest applied %s): %w", u.Version, s.latest, ErrOutOfOrder))
 		default:
@@ -112,7 +106,7 @@ func (m *Migrator) inspect(s *snapshot) inspection {
 	}
 	for i := range s.records {
 		r := &s.records[i]
-		if _, known := m.byKey[r.Version]; known || r.Kind == history.KindBaseline {
+		if _, known := p.cat.byKey[r.Version]; known || r.Kind == history.KindBaseline {
 			continue
 		}
 		info := Info{
@@ -125,7 +119,7 @@ func (m *Migrator) inspect(s *snapshot) inspection {
 		}
 		fillApplied(&info, r)
 		in.infos = append(in.infos, info)
-		if !m.opts.allowMissing {
+		if !p.allowMissing {
 			in.problems = append(in.problems, fmt.Errorf("version %s (%s): %w", r.Version, r.Script, ErrMissingMigration))
 		}
 	}
@@ -139,16 +133,16 @@ func fillApplied(info *Info, r *history.Record) {
 	info.Tag = r.Tag
 }
 
-// planUp returns the migrations Up (or UpTo target) would apply.
-func (m *Migrator) planUp(s *snapshot, target string) ([]*unit, error) {
-	in := m.inspect(s)
+// up returns the migrations Up (or UpTo target) would apply.
+func (p planner) up(s *snapshot, target string) ([]*unit, error) {
+	in := p.inspect(s)
 	if len(in.problems) > 0 {
 		return nil, errors.Join(in.problems...)
 	}
 	if target == "" {
 		return in.pending, nil
 	}
-	t, err := m.lookupVersion(target)
+	t, err := p.cat.lookupVersion(target)
 	if err != nil {
 		return nil, err
 	}
@@ -168,9 +162,9 @@ type downSelector struct {
 	tag   string
 }
 
-// planDown returns the migrations to roll back, newest application first.
+// down returns the migrations to roll back, newest application first.
 // Every one is checked for reversibility before anything runs.
-func (m *Migrator) planDown(s *snapshot, sel downSelector) ([]*unit, error) {
+func (p planner) down(s *snapshot, sel downSelector) ([]*unit, error) {
 	if len(s.dirty) > 0 {
 		return nil, fmt.Errorf("version %s: %w", s.dirty[0], ErrDirty)
 	}
@@ -197,7 +191,7 @@ func (m *Migrator) planDown(s *snapshot, sel downSelector) ([]*unit, error) {
 		t := source.Canonical(sel.to)
 		if t != "0" && t != s.baseline {
 			var err error
-			if t, err = m.lookupVersion(sel.to); err != nil {
+			if t, err = p.cat.lookupVersion(sel.to); err != nil {
 				return nil, err
 			}
 		}
@@ -219,7 +213,7 @@ func (m *Migrator) planDown(s *snapshot, sel downSelector) ([]*unit, error) {
 	plan := make([]*unit, 0, len(chosen))
 	var problems []error
 	for _, r := range chosen {
-		u := m.byKey[r.Version]
+		u := p.cat.byKey[r.Version]
 		switch {
 		case u == nil:
 			problems = append(problems, fmt.Errorf("version %s (%s): %w", r.Version, r.Script, ErrMissingMigration))
@@ -233,26 +227,6 @@ func (m *Migrator) planDown(s *snapshot, sel downSelector) ([]*unit, error) {
 		return nil, errors.Join(problems...)
 	}
 	return plan, nil
-}
-
-// lookupVersion canonicalises v and checks that a versioned migration has it.
-func (m *Migrator) lookupVersion(v string) (string, error) {
-	if !goVersion.MatchString(v) {
-		return "", fmt.Errorf("version %q: %w", v, ErrVersionNotFound)
-	}
-	t := source.Canonical(v)
-	if u, ok := m.byKey[t]; !ok || u.Repeatable {
-		return "", fmt.Errorf("version %s: %w", v, ErrVersionNotFound)
-	}
-	return t, nil
-}
-
-func migrationsOf(us []*unit) []Migration {
-	out := make([]Migration, len(us))
-	for i, u := range us {
-		out[i] = u.Migration
-	}
-	return out
 }
 
 // drifted reports whether an applied, non-repeatable migration no longer
