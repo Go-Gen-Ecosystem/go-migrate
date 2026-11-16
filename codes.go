@@ -36,6 +36,7 @@ var codes = []struct {
 	{ErrMissingUp, "missing_up"},
 	{ErrEmptyUp, "empty_up"},
 	{ErrUpInDownFile, "up_in_down_file"},
+	{ErrMisplacedDirective, "misplaced_directive"},
 	{ErrContentBeforeMarker, "content_before_marker"},
 	{ErrDuplicateMarker, "duplicate_marker"},
 	{ErrUnbalancedBlock, "unbalanced_block"},

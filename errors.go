@@ -21,7 +21,7 @@ var (
 	// a history row with success = false. Bring the schema by hand to either
 	// side of the migration, then run Repair (schema as before it: the row
 	// is removed) or MarkApplied (schema as after it: the row is completed).
-	ErrDirty = errors.New("database is dirty: a migration failed part-way; restore the schema by hand, then run repair (undone) or mark-applied (completed)")
+	ErrDirty = errors.New("database is dirty: a migration failed part-way; " + dirtyGuidance)
 	// ErrBelowBaseline means a rollback target lies below the baseline,
 	// which cannot be rolled back.
 	ErrBelowBaseline = errors.New("target version is below the baseline")
@@ -74,6 +74,7 @@ var (
 	ErrMissingUp           = source.ErrMissingUp
 	ErrEmptyUp             = source.ErrEmptyUp
 	ErrUpInDownFile        = source.ErrUpInDownFile
+	ErrMisplacedDirective  = source.ErrMisplacedDirective
 	ErrContentBeforeMarker = script.ErrContentBeforeMarker
 	ErrDuplicateMarker     = script.ErrDuplicateMarker
 	ErrUnbalancedBlock     = script.ErrUnbalancedBlock
@@ -101,6 +102,11 @@ type MigrationError struct {
 	Err   error
 }
 
+// dirtyGuidance says how to recover from a dirty row in either direction:
+// the row is resolved by the state the schema is left in, not by which
+// direction failed.
+const dirtyGuidance = "make the schema consistent by hand, then run repair if the migration is now not applied, or mark-applied if it is"
+
 func (e *MigrationError) Error() string {
 	msg := fmt.Sprintf("migration %s %s failed", e.Version, e.Direction)
 	if e.Statement > 0 {
@@ -108,7 +114,7 @@ func (e *MigrationError) Error() string {
 	}
 	msg += ": " + e.Err.Error()
 	if e.Dirty {
-		msg += " [database left dirty: fix manually, then run repair]"
+		msg += " [database left dirty: " + dirtyGuidance + "]"
 	}
 	return msg
 }

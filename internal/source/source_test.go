@@ -173,6 +173,16 @@ func TestLoad_ReviewCases(t *testing.T) {
 	if _, err := Load(mapFS(upInDown)); !errors.Is(err, ErrUpInDownFile) {
 		t.Errorf("Up section in down file: err = %v", err)
 	}
+	// Directives where they would be silently ignored are rejected.
+	misplaced := map[string]map[string]string{
+		"down file": {"7_a.up.sql": "SELECT 1;", "7_a.down.sql": "-- +migrate Context prod" + nl + "SELECT 2;"},
+		"callback":  {"1_a.sql": "SELECT 1;", "beforeMigrate.sql": "-- +migrate DBMS postgres" + nl + "SELECT 1;"},
+	}
+	for name, fsys := range misplaced {
+		if _, err := LoadAll(mapFS(fsys)); !errors.Is(err, ErrMisplacedDirective) {
+			t.Errorf("directive in %s: err = %v, want ErrMisplacedDirective", name, err)
+		}
+	}
 }
 
 func TestChecksumCoversUpOnly(t *testing.T) {

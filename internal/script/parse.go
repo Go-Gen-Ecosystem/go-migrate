@@ -111,6 +111,12 @@ type Meta struct {
 	LintIgnore []string
 }
 
+// Empty reports whether no directive was set.
+func (m Meta) Empty() bool {
+	return len(m.Contexts) == 0 && len(m.Labels) == 0 && len(m.DBMS) == 0 && !m.RunAlways &&
+		len(m.Preconditions) == 0 && len(m.LintIgnore) == 0
+}
+
 // OnFail says what happens when a precondition does not hold.
 type OnFail string
 

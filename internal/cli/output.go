@@ -74,6 +74,7 @@ func (p *printer) plan(s *session, dir migrate.Direction, ms []migrate.Migration
 				p.printf("    %s;\n", stmt)
 			}
 		}
+		p.printf("Plan ID: %s (pass --expect-plan to run exactly this plan)\n", data.PlanID)
 	})
 }
 

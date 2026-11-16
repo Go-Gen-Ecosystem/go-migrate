@@ -33,6 +33,10 @@ var (
 	ErrMissingUp        = errors.New("down migration has no matching up migration")
 	ErrEmptyUp          = errors.New("migration has no up SQL")
 	ErrUpInDownFile     = errors.New("a .down.sql file must not contain an Up section")
+	// ErrMisplacedDirective reports file directives (Context, Labels, DBMS,
+	// RunAlways, Precondition, Lint) where they would be silently ignored:
+	// in a .down.sql file or a callback file.
+	ErrMisplacedDirective = errors.New("file directives belong in the migration's Up file; they are not allowed in .down.sql or callback files")
 )
 
 // File is one discovered migration (a single file or an up/down pair).
@@ -160,6 +164,9 @@ func loadCallback(fsys fs.FS, p, event string) (*Callback, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p, err)
 	}
+	if !sc.Meta.Empty() {
+		return nil, fmt.Errorf("%s: %w", p, ErrMisplacedDirective)
+	}
 	return &Callback{Event: event, Name: p, Script: sc}, nil
 }
 
@@ -258,6 +265,9 @@ func parsePair(up, down []byte) (script.Script, error) {
 		}
 		if !d.Up.Empty(anyComment) {
 			return script.Script{}, ErrUpInDownFile
+		}
+		if !d.Meta.Empty() {
+			return script.Script{}, ErrMisplacedDirective
 		}
 		u.Down = d.Down
 		u.NoTx = u.NoTx || d.NoTx
