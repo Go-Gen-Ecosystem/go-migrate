@@ -30,14 +30,31 @@ func TestLookup(t *testing.T) {
 		"postgres": Postgres, "PostgreSQL": Postgres, "pgx": Postgres,
 		"mysql": MySQL, "mariadb": MySQL, "sqlite": SQLite, "sqlite3": SQLite,
 		"sqlserver": SQLServer, "mssql": SQLServer,
+		"oracle": Oracle, "oracledb": Oracle,
 	} {
 		d, err := Lookup(in)
 		if err != nil || d.Name() != want {
 			t.Errorf("Lookup(%q) = %v, %v", in, d, err)
 		}
 	}
-	if _, err := Lookup("oracle"); !errors.Is(err, ErrUnsupported) {
+	if _, err := Lookup("db2"); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestOracleHistoryDDL(t *testing.T) {
+	d, err := Lookup(Oracle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.TransactionalDDL() || d.Placeholders(2) != ":1, :2" {
+		t.Fatal("Oracle requires Oracle bind markers and the dirty-migration protocol")
+	}
+	ddl := d.HistoryDDL(Table{Schema: "owner", Name: "history"})
+	for _, part := range []string{`CREATE TABLE IF NOT EXISTS "owner"."HISTORY"`, "TIMESTAMP(6) WITH TIME ZONE", "success NUMBER(1) NOT NULL", "checksum VARCHAR2(64),"} {
+		if !strings.Contains(ddl, part) {
+			t.Errorf("history DDL missing %q", part)
+		}
 	}
 }
 

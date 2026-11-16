@@ -105,7 +105,12 @@ func (a *applier) apply(ctx context.Context, u *unit, dir Direction, s *snapshot
 	log.Typed().Str(logVersion, u.Label()).Str(logDirection, dir.String()).Str(logSource, u.Source).Info("running migration")
 
 	st := step{existing: s.byKey[u.key], rank: s.nextRank, start: time.Now()}
-	err := a.strategyFor(u)(a, ctx, u, dir, st)
+	// A before hook can cancel the run. Check before dispatching any write,
+	// including the dirty marker, regardless of driver cancellation timing.
+	err := ctx.Err()
+	if err == nil {
+		err = a.strategyFor(u)(a, ctx, u, dir, st)
+	}
 	d := time.Since(st.start)
 	if err == nil && dir == Up && st.existing == nil {
 		s.nextRank++

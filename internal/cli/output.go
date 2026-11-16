@@ -97,6 +97,10 @@ func (p *printer) planSQL(dialectName, stmt string) {
 		p.printf("    %s\n    GO\n", stmt)
 		return
 	}
+	if dialectName == dialect.Oracle {
+		p.printf("    %s\n", stmt)
+		return
+	}
 	p.printf("    %s;\n", stmt)
 }
 

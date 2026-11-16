@@ -9,7 +9,11 @@
 // inside any of those never ends a statement.
 package script
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Lexical describes the dialect-specific lexical rules the splitter honours.
 type Lexical struct {
@@ -26,6 +30,8 @@ type Lexical struct {
 	MySQLComments bool
 	// TSQL enables bracketed identifiers, nested comments, and GO batches.
 	TSQL bool
+	// Oracle enables alternative q-quoted literals and explicit PL/SQL blocks.
+	Oracle bool
 }
 
 // Split returns the statements in sql, trimmed, without the terminating ';'.
@@ -77,6 +83,9 @@ func (s *splitter) run() []string {
 		case c == '[' && s.lx.TSQL:
 			s.hasCode = true
 			i = skipQuoted(src, i, ']', false)
+		case s.lx.Oracle && c|0x20 == 'q':
+			s.hasCode = true
+			i = skipOracleQuote(src, i)
 		case c == '-' && i+1 < len(src) && src[i+1] == '-' &&
 			(!s.lx.MySQLComments || i+2 >= len(src) || isSpace(src[i+2])):
 			i = skipLine(src, i)
@@ -162,6 +171,46 @@ func skipDollar(src string, i int) int {
 	return len(src)
 }
 
+func skipOracleQuote(src string, i int) int {
+	closer, start := oracleQuoteTag(src, i)
+	if closer == "" {
+		return i + 1
+	}
+	if end := strings.Index(src[start:], closer); end >= 0 {
+		return start + end + len(closer)
+	}
+	return len(src)
+}
+
+// oracleQuoteTag recognizes q'X...X' and nq'X...X', including paired brackets.
+func oracleQuoteTag(src string, i int) (string, int) {
+	if i+2 >= len(src) || src[i+1] != '\'' {
+		return "", i
+	}
+	start := i
+	if start > 0 && src[start-1]|0x20 == 'n' {
+		start--
+	}
+	if start > 0 && isIdentByte(src[start-1]) {
+		return "", i
+	}
+	delimiter, n := utf8.DecodeRuneInString(src[i+2:])
+	if unicode.IsSpace(delimiter) || delimiter == '\'' || delimiter == utf8.RuneError {
+		return "", i
+	}
+	switch delimiter {
+	case '[':
+		delimiter = ']'
+	case '{':
+		delimiter = '}'
+	case '(':
+		delimiter = ')'
+	case '<':
+		delimiter = '>'
+	}
+	return string(delimiter) + "'", i + 2 + n
+}
+
 // dollarTag returns the opening tag ($$ or $name$) at src[i], or "" when the
 // '$' continues an identifier or starts a positional parameter ($1).
 func dollarTag(src string, i int) string {
@@ -220,6 +269,12 @@ func (st lexState) line(s string, lx Lexical) lexState {
 			i++
 		case c == '[' && lx.TSQL:
 			st = lexState{closer: "]"}
+			i++
+		case lx.Oracle && c|0x20 == 'q':
+			if closer, start := oracleQuoteTag(s, i); closer != "" {
+				st, i = lexState{closer: closer}, start
+				continue
+			}
 			i++
 		case c == '-' && i+1 < len(s) && s[i+1] == '-' && (!lx.MySQLComments || i+2 >= len(s) || isSpace(s[i+2])),
 			c == '#' && lx.HashComments:
@@ -341,6 +396,14 @@ func code(sql string, lx Lexical, identifiers bool) string {
 				b.WriteString(sql[i:j])
 			} else {
 				b.WriteByte(' ')
+			}
+			i = j
+		case lx.Oracle && c|0x20 == 'q':
+			j := skipOracleQuote(sql, i)
+			if j == i+1 {
+				b.WriteByte(c)
+			} else {
+				b.WriteString("''")
 			}
 			i = j
 		case c == '-' && i+1 < len(sql) && sql[i+1] == '-' &&

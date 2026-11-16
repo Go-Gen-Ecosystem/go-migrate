@@ -33,7 +33,7 @@ var (
 
 var directiveLine = regexp.MustCompile(`(?im)^\s*--\s*\+(?:migrate|goose)\b`)
 
-const mcpInstructions = `gomigrate manages versioned database migrations (PostgreSQL, MySQL, SQLite, SQL Server).
+const mcpInstructions = `gomigrate manages versioned database migrations (PostgreSQL, MySQL, SQLite, SQL Server, Oracle).
 Safe workflow: call status; author changes with create_migration; check them with lint;
 call plan to get the exact SQL and its plan_id; show that plan to the user; only after the
 user approves, call apply (or rollback) with confirm=true and that plan_id. If anything

@@ -30,6 +30,7 @@ var (
 	ErrUnbalancedBlock     = errors.New("unbalanced StatementBegin/StatementEnd")
 	ErrUnknownDirective    = errors.New("unknown directive")
 	ErrTSQLBatch           = errors.New("expected GO on its own line outside StatementBegin; GO counts are unsupported")
+	ErrPLSQLBlock          = errors.New("wrap Oracle PL/SQL in StatementBegin/StatementEnd and omit the SQL*Plus slash")
 )
 
 // Section is one direction of a migration: an ordered list of chunks. A chunk
@@ -96,7 +97,7 @@ func (s Section) Statements(lx Lexical) []string {
 	for _, c := range s.chunks {
 		if c.verbatim {
 			if stmt := strings.TrimSpace(c.sql); stmt != "" {
-				if !lx.TSQL {
+				if !lx.TSQL && (!lx.Oracle || !startsPLSQL(stmt, lx)) {
 					stmt = strings.TrimSuffix(stmt, ";")
 				}
 				out = append(out, stmt)
@@ -219,6 +220,9 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrTSQLBatch)
 			}
 		}
+		if lx.Oracle && st.inCode() && strings.TrimSpace(line) == "/" {
+			return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrPLSQLBlock)
+		}
 		var m []string
 		if st.inCode() && mayBeDirective(line) {
 			m = directive.FindStringSubmatch(line)
@@ -308,7 +312,35 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 		return Script{}, fmt.Errorf("line %d: %w", blockLine, ErrUnbalancedBlock)
 	}
 	flush(false)
+	if lx.Oracle {
+		for _, section := range []Section{sc.Up, sc.Down} {
+			for _, chunk := range section.chunks {
+				if err := checkOracleChunk(chunk, lx); err != nil {
+					return Script{}, err
+				}
+			}
+		}
+	}
 	return sc, nil
+}
+
+var oraPLSQLStart = regexp.MustCompile(`(?is)^\s*(?:BEGIN|DECLARE|CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NON)?EDITIONABLE\s+)?(?:FUNCTION|PROCEDURE|PACKAGE|TRIGGER|TYPE\s+BODY))\b`)
+
+func startsPLSQL(sql string, lx Lexical) bool { return oraPLSQLStart.MatchString(Code(sql, lx)) }
+
+func checkOracleChunk(c chunk, lx Lexical) error {
+	if c.verbatim {
+		if startsPLSQL(c.sql, lx) && !strings.HasSuffix(strings.TrimSpace(Code(c.sql, lx)), ";") {
+			return ErrPLSQLBlock
+		}
+		return nil
+	}
+	for _, stmt := range Split(c.sql, lx) {
+		if startsPLSQL(stmt, lx) {
+			return ErrPLSQLBlock
+		}
+	}
+	return nil
 }
 
 // tsqlGoLine recognizes a standalone client-side batch separator, optionally
@@ -379,6 +411,9 @@ func IsTransactionControl(stmt string, lx Lexical) bool {
 	if lx.TSQL {
 		return tsqlTransactionControl.MatchString(code(stmt, lx, false))
 	}
+	if lx.Oracle {
+		return oraTransactionControl.MatchString(code(stmt, lx, false))
+	}
 	words := strings.FieldsFunc(strings.ToUpper(Code(stmt, lx)), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
 	})
@@ -404,6 +439,8 @@ func IsTransactionControl(stmt string, lx Lexical) bool {
 // T-SQL batches can contain several statements, even without semicolons.
 // BEGIN / END of a regular code block is distinct from BEGIN TRANSACTION.
 var tsqlTransactionControl = regexp.MustCompile(`(?i)(?:^|[^\pL\pN_@$#])(?:COMMIT|ROLLBACK|BEGIN\s+(?:DISTRIBUTED\s+)?TRAN(?:SACTION)?|SET\s+IMPLICIT_TRANSACTIONS\s+ON)\b`)
+
+var oraTransactionControl = regexp.MustCompile(`(?i)(?:^|[^\pL\pN_@$#])(?:COMMIT|ROLLBACK|SET\s+TRANSACTION)\b`)
 
 // list splits a comma- or space-separated directive value (lower-cased).
 func list(s string) []string {

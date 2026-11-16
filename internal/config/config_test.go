@@ -68,6 +68,53 @@ func TestSQLServerConnectionErrorsKeepCredentialsPrivate(t *testing.T) {
 	}
 }
 
+func TestOracleConnectionConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		db       Database
+		host     string
+		protocol string
+	}{
+		{Database{DSN: "oracle://user:p%40ss%2Fword@localhost/FREEPDB1"}, "localhost:2484", "tcps"},
+		{Database{Driver: "oracledb", Host: "::1", Name: "FREEPDB1", User: "user", Password: "p@ss/word", Params: map[string]string{"protocol": "tcp"}}, "[::1]:1521", "tcp"},
+	} {
+		name, dsn, err := Resolve(tt.db)
+		if err != nil || name != "oracle" {
+			t.Fatalf("dialect = %q, %v", name, err)
+		}
+		u, err := url.Parse(dsn)
+		if err != nil || u.Host != tt.host || u.Query().Get("protocol") != tt.protocol {
+			t.Fatal("Oracle endpoint did not resolve as configured")
+		}
+		if password, _ := u.User.Password(); password != "p@ss/word" {
+			t.Fatal("Oracle credentials did not round-trip")
+		}
+		pool, err := openOraclePool(dsn)
+		if err != nil {
+			t.Fatal("Oracle driver rejected resolved configuration")
+		}
+		_ = pool.Close()
+	}
+}
+
+func TestOracleConnectionErrorsKeepCredentialsPrivate(t *testing.T) {
+	for _, dsn := range []string{
+		"oracle://login:secret%40pass@localhost/FREEPDB1?protocol=%ZZ",
+		"oracle://login:secret%40pass@localhost/FREEPDB1?protocol=tcp&protocol=tcps",
+		"oracle://login:secret%40pass@localhost/FREEPDB1?failover=true",
+	} {
+		_, _, err := Open(t.Context(), Database{DSN: dsn})
+		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "login") {
+			t.Fatal("invalid Oracle connection did not return a credential-safe error")
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, err := Open(ctx, Database{DSN: "oracle://login:secret%40pass@localhost/FREEPDB1"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled connection = %v", err)
+	}
+}
+
 func TestExpandEnv(t *testing.T) {
 	look := env(map[string]string{"PASS": "s3cr$t", "EMPTY": ""})
 	tests := []struct{ in, want string }{
@@ -217,7 +264,7 @@ func TestResolve(t *testing.T) {
 		{name: "sqlite name field", db: Database{Driver: "sqlite3", Name: "x.db"}, dialect: "sqlite", contains: []string{"x.db?"}},
 		{name: "nothing configured", db: Database{}, err: true},
 		{name: "cannot infer", db: Database{DSN: "host=x"}, err: true},
-		{name: "unknown driver", db: Database{Driver: "oracle", DSN: "x"}, err: true},
+		{name: "unknown driver", db: Database{Driver: "db2", DSN: "x"}, err: true},
 		{name: "bad mysql dsn", db: Database{Driver: "mysql", DSN: "no-slash"}, err: true},
 	}
 	for _, tc := range tests {

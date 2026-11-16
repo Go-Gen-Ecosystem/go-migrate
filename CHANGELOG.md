@@ -22,6 +22,9 @@ kept under `_parked/v0` for reference.
   CLI: CGO-free binaries for linux/darwin/windows × amd64/arm64).
 - SQL Server 2022 migration support with Microsoft's pure-Go driver, T-SQL
   batches, database-scoped application locking, and verified TLS by default.
+- Oracle AI Database 26ai Free support with Oracle's native Go driver, explicit
+  PL/SQL blocks, and migration locks that survive implicit DDL commits. The
+  Oracle driver raises the Go module minimum to 1.26.9.
 - Migration formats: `001_x.sql` / `V1.2__x.sql` with `-- +migrate` or
   `-- +goose` markers, golang-migrate `.up.sql`/`.down.sql` pairs, Flyway
   `R__x.sql` repeatable migrations, Go migrations, `fs.FS` / `embed.FS`.

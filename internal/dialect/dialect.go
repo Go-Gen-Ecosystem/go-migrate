@@ -25,6 +25,7 @@ const (
 	MySQL     = "mysql"
 	SQLite    = "sqlite"
 	SQLServer = "sqlserver"
+	Oracle    = "oracle"
 )
 
 // ErrUnsupported is returned by Lookup for an unknown dialect name.
@@ -97,10 +98,21 @@ var dialects = map[string]*Dialect{
 		schemaSQL:        "SELECT SCHEMA_NAME()",
 		locker:           (*Dialect).sqlServerLock,
 	},
+	Oracle: {
+		name:       Oracle,
+		lexical:    script.Lexical{Oracle: true},
+		quote:      '"',
+		bindPrefix: ":",
+		tsType:     "TIMESTAMP(6) WITH TIME ZONE",
+		exists:     oracleExists,
+		schemaSQL:  "SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL",
+		tables:     infoSchemaTables("SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :1 AND NESTED = 'NO' AND SECONDARY = 'N'"),
+		locker:     (*Dialect).oracleLock,
+	},
 }
 
 // Lookup returns the dialect for a driver or dialect name. Common aliases
-// (postgresql, pgx, mariadb, sqlite3, mssql) are accepted.
+// (postgresql, pgx, mariadb, sqlite3, mssql, oracledb) are accepted.
 func Lookup(name string) (*Dialect, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "postgres", "postgresql", "pgx":
@@ -111,6 +123,8 @@ func Lookup(name string) (*Dialect, error) {
 		return dialects[SQLite], nil
 	case "sqlserver", "mssql":
 		return dialects[SQLServer], nil
+	case "oracle", "oracledb":
+		return dialects[Oracle], nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupported, name)
 	}
@@ -175,7 +189,12 @@ func ParseTable(name string) (Table, error) {
 func (t Table) String() string { return t.qualified(func(s string) string { return s }) }
 
 // Quote returns t quoted for this dialect.
-func (d *Dialect) Quote(t Table) string { return t.qualified(d.quoteIdentifier) }
+func (d *Dialect) Quote(t Table) string {
+	if d.name == Oracle {
+		t.Name = strings.ToUpper(t.Name)
+	}
+	return t.qualified(d.quoteIdentifier)
+}
 
 func (t Table) qualified(quote func(string) string) string {
 	name := quote(t.Name)
@@ -201,22 +220,27 @@ func (d *Dialect) quoteIdentifier(name string) string {
 func (d *Dialect) HistoryDDL(t Table) string {
 	table := d.Quote(t)
 	prefix, textType, boolType, keyCollation := "CREATE TABLE IF NOT EXISTS ", "VARCHAR", "BOOLEAN", ""
-	if d.name == SQLServer {
+	shortType, msType, textUnits, nullableText := "VARCHAR", "BIGINT", "", " NOT NULL"
+	switch d.name {
+	case SQLServer:
 		prefix = sqlServerHistoryGuard(table)
 		textType, boolType, keyCollation = "NVARCHAR", "BIT", " COLLATE Latin1_General_100_BIN2"
+	case Oracle:
+		textType, shortType, boolType, msType, textUnits = "VARCHAR2", "VARCHAR2", "NUMBER(1)", "NUMBER(19)", " CHAR"
+		nullableText = "" // Oracle stores empty descriptions and checksums as NULL.
 	}
 	return prefix + table + " (\n" +
 		"  installed_rank INTEGER NOT NULL PRIMARY KEY,\n" +
-		"  version " + textType + "(128)" + keyCollation + " NOT NULL,\n" +
-		"  description " + textType + "(255) NOT NULL,\n" +
-		"  kind VARCHAR(16) NOT NULL,\n" +
-		"  script " + textType + "(1024) NOT NULL,\n" +
-		"  checksum VARCHAR(64) NOT NULL,\n" +
-		"  installed_by " + textType + "(255) NOT NULL,\n" +
+		"  version " + textType + "(128" + textUnits + ")" + keyCollation + " NOT NULL,\n" +
+		"  description " + textType + "(255" + textUnits + ")" + nullableText + ",\n" +
+		"  kind " + shortType + "(16) NOT NULL,\n" +
+		"  script " + textType + "(1024" + textUnits + ") NOT NULL,\n" +
+		"  checksum " + shortType + "(64)" + nullableText + ",\n" +
+		"  installed_by " + textType + "(255" + textUnits + ") NOT NULL,\n" +
 		"  installed_on " + d.tsType + " NOT NULL,\n" +
-		"  execution_ms BIGINT NOT NULL,\n" +
+		"  execution_ms " + msType + " NOT NULL,\n" +
 		"  success " + boolType + " NOT NULL,\n" +
-		"  tag " + textType + "(255)" + keyCollation + " NULL,\n" +
+		"  tag " + textType + "(255" + textUnits + ")" + keyCollation + " NULL,\n" +
 		"  CONSTRAINT " + d.quoteIdentifier(t.Name+"_version_uk") + " UNIQUE (version)\n" +
 		")" + d.tableSuffix
 }
@@ -251,6 +275,12 @@ func (d *Dialect) CurrentSchema(ctx context.Context, q Querier) (string, error) 
 func (d *Dialect) ResolveTable(ctx context.Context, conn *sql.Conn, table Table) (Table, error) {
 	if d.name == SQLServer {
 		return resolveSQLServerTable(ctx, conn, table)
+	}
+	if d.name == Oracle {
+		// The option accepts ordinary, undelimited Oracle identifiers. Keep
+		// the database's exact spelling when resolving a session's schema.
+		table.Name = strings.ToUpper(table.Name)
+		table.Schema = strings.ToUpper(table.Schema)
 	}
 	if table.Schema != "" {
 		return table, nil

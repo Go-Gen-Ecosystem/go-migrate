@@ -48,10 +48,13 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	conn, err := sql.Open(driverNames[name], dsn)
+	conn, err := openPool(name, dsn)
 	if err != nil {
 		if name == dialect.SQLServer {
 			return nil, "", errors.New("invalid SQL Server connection configuration")
+		}
+		if name == dialect.Oracle {
+			return nil, "", errors.New("invalid Oracle connection configuration")
 		}
 		return nil, "", fmt.Errorf("open %s database: %w", name, err)
 	}
@@ -76,14 +79,24 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 		if name == dialect.SQLServer {
 			return nil, "", sqlServerConnectError(pctx, err)
 		}
+		if name == dialect.Oracle {
+			return nil, "", oracleConnectError(pctx, err)
+		}
 		return nil, "", fmt.Errorf("connect to %s database: %w", name, scrub(err, db.Password))
 	}
 	return conn, name, nil
 }
 
+func openPool(name, dsn string) (*sql.DB, error) {
+	if name == dialect.Oracle {
+		return openOraclePool(dsn)
+	}
+	return sql.Open(driverNames[name], dsn)
+}
+
 // Resolve returns the dialect name and driver DSN for db. The driver is
 // taken from db.Driver or inferred from the DSN (postgres://, mysql://,
-// sqlserver://, sqlite://, file:, *.db).
+// sqlserver://, oracle://, sqlite://, file:, *.db).
 func Resolve(db Database) (string, string, error) {
 	d, err := resolveDialect(db)
 	if err != nil {
@@ -97,6 +110,8 @@ func Resolve(db Database) (string, string, error) {
 		dsn, err = mysqlDSN(db)
 	case dialect.SQLServer:
 		dsn, err = sqlServerDSN(db)
+	case dialect.Oracle:
+		dsn, err = oracleDSN(db)
 	default:
 		dsn, err = sqliteDSN(db)
 	}
@@ -122,7 +137,7 @@ func resolveDialect(db Database) (*dialect.Dialect, error) {
 		if db.DSN == "" && db.Name == "" {
 			return nil, ErrNoDatabase
 		}
-		return nil, errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite, sqlserver)")
+		return nil, errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite, sqlserver, oracle)")
 	}
 	return dialect.Lookup(driver)
 }
@@ -136,6 +151,8 @@ func inferDriver(dsn string) string {
 		return dialect.MySQL
 	case strings.HasPrefix(lower, "sqlserver://"):
 		return dialect.SQLServer
+	case strings.HasPrefix(lower, "oracle://"):
+		return dialect.Oracle
 	case strings.HasPrefix(lower, "sqlite://"), strings.HasPrefix(lower, "sqlite3://"), strings.HasPrefix(lower, "file:"),
 		strings.HasSuffix(lower, ".db"), strings.HasSuffix(lower, ".sqlite"), strings.HasSuffix(lower, ".sqlite3"),
 		lower == ":memory:":

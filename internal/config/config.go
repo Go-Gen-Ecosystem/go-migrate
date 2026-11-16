@@ -143,7 +143,7 @@ type Overrides struct {
 // The generic DATABASE_URL is ignored when the config file was named
 // explicitly (--config), so an ambient variable never retargets a run aimed
 // at a specific database. When a DSN overrides the file and its scheme
-// identifies a driver (postgres://, mysql://, sqlite://, sqlserver://), that driver wins
+// identifies a driver (postgres://, mysql://, sqlite://, sqlserver://, oracle://), that driver wins
 // over any driver set at a lower level.
 func (cfg *Config) Apply(o Overrides, explicitConfig bool, lookup func(string) (string, bool)) {
 	const (

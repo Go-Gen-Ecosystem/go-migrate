@@ -4,7 +4,7 @@
 # go-migrate
 
 **Database migrations for Go teams, CI pipelines and AI agents.** Versioned SQL and
-Go migrations for PostgreSQL, MySQL/MariaDB, SQLite and SQL Server, delivered as a driver-free library
+Go migrations for PostgreSQL, MySQL/MariaDB, SQLite, SQL Server and Oracle Database, delivered as a driver-free library
 and one static CLI. It has Flyway's safety model and Liquibase's targeting, needs no JVM,
 lints migration SQL for production risks, and includes an MCP server so agents can
 migrate safely.
@@ -141,11 +141,40 @@ the configured history schema and permission to create and modify history and
 application objects there. An unqualified history table uses the login's default
 schema. See [the SQL Server example](examples/sqlserver).
 
+## Oracle Database
+
+Use the `oracle` dialect or an `oracle://user:password@host:port/service` URL in
+`GOMIGRATE_DSN`. The YAML `database.name` field identifies the Oracle service.
+The CLI bundles Oracle's native-Go `oracledb` driver and uses password
+authentication. The driver requires Go 1.26.9 and keeps the CLI CGO-free.
+Library callers can register and open `oracledb` themselves through `database/sql`.
+The driver is distributed under the [Universal Permissive License 1.0](https://github.com/oracle/go-oracledb/blob/v26.4.0/LICENSE.txt).
+
+The CLI selects TCPS on port 2484 by default and requests certificate-chain and
+server-identity verification. Set `wallet_location` or `ssl_server_cert_dn` as
+needed through the URL or `database.params`. An isolated Oracle Free test instance
+can use `protocol=tcp` to connect on port 1521. The conformance fixture uses
+password authentication over TCP on a private network. It targets Oracle AI
+Database 26ai Free and connects to the `FREEPDB1` service.
+
+A history table with no explicit schema uses the session's initial current
+schema. The tool folds ordinary configured identifiers to uppercase as Oracle
+does for unquoted names. The migration user needs permission to create and
+modify its history and application objects and an `EXECUTE` grant on
+`SYS.DBMS_LOCK`. Oracle releases the migration lock when the physical session
+ends. Use a driver configuration that fails the run on session loss.
+
+Ordinary SQL uses semicolon separators. Wrap Oracle PL/SQL blocks and stored
+routines in `-- +migrate StatementBegin` and `-- +migrate StatementEnd`. Keep the
+final `END;` and omit the SQL*Plus slash command. Oracle `q'[...]'` and `nq'[...]'`
+literals can contain semicolons and newlines. See [the Oracle example](examples/oracle).
+
 ## Safety model
 
 - **Locking:** a cross-process lock scoped to the configured migration history.
   - PostgreSQL and MySQL: `pg_advisory_lock` / `GET_LOCK`, which the server releases if the process dies.
   - SQL Server: a session-owned `sp_getapplock` per database. Distinct history tables in the same database share that lock so aliases of a table under a case-insensitive or accent-insensitive collation cannot bypass it.
+  - Oracle: an exclusive `DBMS_LOCK` session lock per schema and history table that survives Oracle DDL commits.
   - SQLite: a run-lifetime OS lock on `<database>.gomigrate-<history-table>.lock` beside the database file, with a fenced lease row. The containing directory must allow creation of that coordination file, and each migrator must be able to open it. Keep the file in place while any migrator might use it. In-memory SQLite databases coordinate within the process.
   - After a SQLite process exits, the OS lock is released and an abandoned lease can be reclaimed once it expires. Drain older versions before rolling out the SQLite lock change so all running migrators use the same coordination protocol.
   - Ten replicas can run `up` at boot, and each migration still runs exactly once.
@@ -156,7 +185,7 @@ schema. See [the SQL Server example](examples/sqlserver).
   - Session-lock connections are discarded afterwards, never returned to the pool.
 - **Atomicity.**
   - PostgreSQL, SQLite and SQL Server normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
-  - MySQL and migrations marked `notransaction` commit a dirty row first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
+  - MySQL, Oracle, and migrations marked `notransaction` commit a dirty row first. Oracle DDL commits implicitly. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
 - **Approval binds execution:** a plan ID hashes the dialect, history table, direction, versions, checksums, exact statements and the SQL callbacks that will run. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
 - **Read-only means read-only:** `status`, `validate`, `lint` and dry runs never create tables.
@@ -297,5 +326,11 @@ for a self-signed fixture to also verify the default certificate rejection.
 Repository owners can enable the SQL Server Developer Edition CI job by setting
 `GOMIGRATE_CI_SQLSERVER_ACCEPT_EULA` to `Y` after accepting Microsoft's license
 terms for that CI service.
+
+Set `GOMIGRATE_TEST_ORACLE_DSN` to include Oracle in `go test ./...`. Use an
+isolated Oracle Database Free PDB with a fixture administrator that can create
+and drop disposable users and grant `EXECUTE` on `SYS.DBMS_LOCK`. Test users
+receive only the schema privileges needed by the suite and are dropped after
+each case.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design. Licensed under Apache-2.0.

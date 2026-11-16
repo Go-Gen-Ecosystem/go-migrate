@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // @author Admilson B. F. Cossa
 
-// Command gomigrate applies versioned SQL migrations to PostgreSQL, MySQL and
-// SQLite. Run `gomigrate --help` for usage.
+// Command gomigrate applies versioned SQL and Go migrations. Run
+// `gomigrate --help` for supported databases and usage.
 //
 // Exit codes: 0 success, 1 error, 2 `status --fail-on-pending` found
 // pending migrations, 3 `lint` found issues at the --fail-on level (so CI
@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,6 +23,10 @@ import (
 var version = "dev"
 
 func main() {
+	// Cobra owns the arguments. Oracle's driver otherwise tries to parse
+	// os.Args using the standard-library flag set when it first connects.
+	_ = flag.CommandLine.Parse(nil)
+
 	// Ctrl-C / SIGTERM cancel the context; in-flight transactions roll back
 	// and the migration lock is released before exit.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

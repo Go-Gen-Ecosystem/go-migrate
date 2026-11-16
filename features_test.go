@@ -59,7 +59,7 @@ func TestTargeting(t *testing.T) {
 	if res, err := newM(t, openDB(t), fsys).Up(ctx); err != nil || len(res.Applied) != 3 {
 		t.Fatalf("no selection = %v, %v", versions(res), err)
 	}
-	if _, err := New(db, "sqlite", WithFS(files("1_x.sql", "-- +migrate DBMS oracle\nSELECT 1;"))); !errors.Is(err, ErrUnsupportedDialect) {
+	if _, err := New(db, "sqlite", WithFS(files("1_x.sql", "-- +migrate DBMS db2\nSELECT 1;"))); !errors.Is(err, ErrUnsupportedDialect) {
 		t.Fatalf("unknown DBMS = %v", err)
 	}
 }
@@ -221,8 +221,8 @@ func TestLintWithoutDatabase(t *testing.T) {
 	if len(LintRules()) == 0 {
 		t.Fatal("LintRules must list the rules")
 	}
-	if _, err := Lint("oracle"); !errors.Is(err, ErrUnsupportedDialect) {
-		t.Fatalf("Lint(oracle) = %v", err)
+	if _, err := Lint("db2"); !errors.Is(err, ErrUnsupportedDialect) {
+		t.Fatalf("Lint(db2) = %v", err)
 	}
 }
 

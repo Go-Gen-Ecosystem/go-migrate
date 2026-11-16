@@ -9,6 +9,7 @@ package migrate
 //	GOMIGRATE_TEST_POSTGRES_DSN=postgres://postgres:pw@localhost:5432/postgres?sslmode=disable
 //	GOMIGRATE_TEST_MYSQL_DSN=root:pw@tcp(localhost:3306)/
 //	GOMIGRATE_TEST_SQLSERVER_DSN=sqlserver://sa:<password>@localhost:1433?database=master&trustservercertificate=true
+//	GOMIGRATE_TEST_ORACLE_DSN=oracle://fixture_admin:<password>@localhost:1521/FREEPDB1?protocol=tcp
 //
 // (see `make test-integration`). Each test gets its own schema/database.
 
@@ -84,6 +85,7 @@ func targets() []target {
 			specialCheck: "SELECT COUNT(*) FROM `audit`",
 		},
 		sqlServerTarget(),
+		oracleTarget(),
 	}
 }
 
@@ -178,6 +180,11 @@ func TestConformance(t *testing.T) {
 				t.Run("nontransactional failure", conformSQLServerDirty)
 				t.Run("TLS defaults", conformSQLServerTLS)
 			}
+			if tg.dialect == dialect.Oracle {
+				t.Run("engine version", conformOracleVersion)
+				t.Run("session lock across DDL", conformOracleLock)
+				t.Run("Go checksums and baseline", conformOracleEmptyChecksum)
+			}
 		})
 	}
 }
@@ -232,10 +239,10 @@ func conformFailure(t *testing.T, tg target) {
 		t.Fatalf("err = %v", err)
 	}
 	st, _ := m.Status(ctx)
-	if tg.dialect == "mysql" {
+	if tg.dialect == dialect.MySQL || tg.dialect == dialect.Oracle {
 		// No transactional DDL: the first statement stuck, the row is dirty.
 		if !errors.Is(err, ErrDirty) || !st.Dirty {
-			t.Fatalf("mysql failure must be dirty: err=%v status=%+v", err, st)
+			t.Fatalf("%s failure must be dirty: err=%v status=%+v", tg.dialect, err, st)
 		}
 		if _, err := db.Exec("DROP TABLE half"); err != nil {
 			t.Fatal(err)
@@ -369,6 +376,9 @@ func conformSessionState(t *testing.T, tg target) {
 	case dialect.SQLServer:
 		switchTo = "CREATE DATABASE elsewhere_%s;\nGO\nUSE elsewhere_%s;\nGO\nCREATE TABLE moved (id INT);"
 		cleanup = "DROP DATABASE IF EXISTS elsewhere_%s"
+	case dialect.Oracle:
+		conformOracleSession(t, tg)
+		return
 	default:
 		t.Skip("no session-level schema switch on SQLite")
 	}
@@ -480,6 +490,9 @@ func conformExamples(t *testing.T, tg target) {
 	dir := "examples/migrations"
 	if tg.dialect == dialect.SQLServer {
 		dir = "examples/sqlserver"
+	}
+	if tg.dialect == dialect.Oracle {
+		dir = "examples/oracle"
 	}
 	m, err := New(db, tg.dialect, WithFS(os.DirFS(dir)))
 	if err != nil {

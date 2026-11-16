@@ -77,7 +77,14 @@ type queries struct {
 // New returns a store for table t on dialect d.
 func New(d *dialect.Dialect, t dialect.Table) *Store {
 	q, p := d.Quote(t), d.Placeholder
-	clearTag := "UPDATE " + q + " SET tag = NULL WHERE tag = " + p(1)
+	textEqual := func(column string, i int) string { return column + " = " + p(i) }
+	if d.Name() == dialect.Oracle {
+		// Match Go string identity even after a migration changes NLS sorting.
+		textEqual = func(column string, i int) string {
+			return "NLSSORT(" + column + ", 'NLS_SORT=BINARY') = NLSSORT(" + p(i) + ", 'NLS_SORT=BINARY')"
+		}
+	}
+	clearTag := "UPDATE " + q + " SET tag = NULL WHERE " + textEqual("tag", 1)
 	if d.Name() == dialect.SQLServer {
 		// Even binary collations pad strings before comparing them.
 		clearTag += " AND DATALENGTH(tag) = DATALENGTH(" + p(1) + ")"
@@ -86,18 +93,18 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 		list:      "SELECT " + columns + ", tag FROM " + q + " ORDER BY installed_rank",
 		nextRank:  "SELECT COALESCE(MAX(installed_rank), 0) + 1 FROM " + q,
 		insert:    "INSERT INTO " + q + " (" + columns + ") VALUES (" + d.Placeholders(10) + ")",
-		complete:  "UPDATE " + q + " SET success = " + p(1) + ", execution_ms = " + p(2) + " WHERE version = " + p(3),
-		markDirty: "UPDATE " + q + " SET success = " + p(1) + " WHERE version = " + p(2),
+		complete:  "UPDATE " + q + " SET success = " + p(1) + ", execution_ms = " + p(2) + " WHERE " + textEqual("version", 3),
+		markDirty: "UPDATE " + q + " SET success = " + p(1) + " WHERE " + textEqual("version", 2),
 		reapply: "UPDATE " + q + " SET description = " + p(1) + ", script = " + p(2) + ", checksum = " + p(3) +
 			", installed_by = " + p(4) + ", installed_on = " + p(5) + ", execution_ms = " + p(6) + ", success = " + p(7) +
-			" WHERE version = " + p(8),
-		realign:      "UPDATE " + q + " SET checksum = " + p(1) + ", kind = " + p(2) + " WHERE version = " + p(3),
+			" WHERE " + textEqual("version", 8),
+		realign:      "UPDATE " + q + " SET checksum = " + p(1) + ", kind = " + p(2) + " WHERE " + textEqual("version", 3),
 		invalidate:   "UPDATE " + q + " SET checksum = '' WHERE kind = " + p(1),
-		delete:       "DELETE FROM " + q + " WHERE version = " + p(1),
+		delete:       "DELETE FROM " + q + " WHERE " + textEqual("version", 1),
 		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
 		clearTag:     clearTag,
-		setTag:       "UPDATE " + q + " SET tag = " + p(1) + " WHERE version = " + p(2),
-		has:          "SELECT COUNT(*) FROM " + q + " WHERE version = " + p(1),
+		setTag:       "UPDATE " + q + " SET tag = " + p(1) + " WHERE " + textEqual("version", 2),
+		has:          "SELECT COUNT(*) FROM " + q + " WHERE " + textEqual("version", 1),
 	}}
 }
 
@@ -128,7 +135,7 @@ func (s *Store) List(ctx context.Context, q Querier) ([]Record, error) {
 		var r Record
 		var kind string
 		var tag sql.NullString
-		if err := rows.Scan(&r.Rank, &r.Version, &r.Description, &kind, &r.Script, &r.Checksum,
+		if err := rows.Scan(&r.Rank, &r.Version, (*emptyText)(&r.Description), &kind, &r.Script, (*emptyText)(&r.Checksum),
 			&r.InstalledBy, timestamp{&r.InstalledOn}, &r.ExecutionMS, &r.Success, &tag); err != nil {
 			return nil, fmt.Errorf("scan history: %w", err)
 		}
@@ -141,6 +148,19 @@ func (s *Store) List(ctx context.Context, q Querier) ([]Record, error) {
 		return nil, fmt.Errorf("read history: %w", err)
 	}
 	return out, nil
+}
+
+// Oracle stores the empty string as NULL. Round-trip optional history text
+// as an empty Go string without allocating an extra value per column.
+type emptyText string
+
+func (s *emptyText) Scan(value any) error {
+	var nullable sql.NullString
+	if err := nullable.Scan(value); err != nil {
+		return err
+	}
+	*s = emptyText(nullable.String)
+	return nil
 }
 
 // Insert appends r and returns the installed_rank used. A zero r.Rank means
@@ -159,7 +179,7 @@ func (s *Store) Insert(ctx context.Context, q Querier, r Record) (int64, error) 
 	}
 	_, err := q.ExecContext(ctx, s.sql.insert,
 		rank, r.Version, r.Description, string(r.Kind), r.Script, r.Checksum,
-		r.InstalledBy, r.InstalledOn, r.ExecutionMS, r.Success)
+		r.InstalledBy, r.InstalledOn, r.ExecutionMS, s.bindSuccess(r.Success))
 	if err != nil {
 		return 0, fmt.Errorf("record version %s: %w", r.Version, err)
 	}
@@ -168,13 +188,13 @@ func (s *Store) Insert(ctx context.Context, q Querier, r Record) (int64, error) 
 
 // Complete marks version as successfully applied in executionMS.
 func (s *Store) Complete(ctx context.Context, q Querier, version string, executionMS int64) error {
-	return s.exec(ctx, q, s.sql.complete, true, executionMS, version)
+	return s.exec(ctx, q, s.sql.complete, s.bindSuccess(true), executionMS, version)
 }
 
 // MarkDirty sets success = false on version before a non-transactional
 // change starts, so a crash part-way is detectable on the next run.
 func (s *Store) MarkDirty(ctx context.Context, q Querier, version string) error {
-	return s.exec(ctx, q, s.sql.markDirty, false, version)
+	return s.exec(ctx, q, s.sql.markDirty, s.bindSuccess(false), version)
 }
 
 // Reapply overwrites a repeatable migration's row after it ran again.
@@ -183,7 +203,7 @@ func (s *Store) Reapply(ctx context.Context, q Querier, r Record) error {
 		r.InstalledOn = Now()
 	}
 	return s.exec(ctx, q, s.sql.reapply,
-		r.Description, r.Script, r.Checksum, r.InstalledBy, r.InstalledOn, r.ExecutionMS, r.Success, r.Version)
+		r.Description, r.Script, r.Checksum, r.InstalledBy, r.InstalledOn, r.ExecutionMS, s.bindSuccess(r.Success), r.Version)
 }
 
 // Realign records version's current checksum and kind (used by repair to
@@ -210,11 +230,21 @@ func (s *Store) Delete(ctx context.Context, q Querier, version string) error {
 
 // DeleteFailed removes every row with success = false and returns how many.
 func (s *Store) DeleteFailed(ctx context.Context, q Querier) (int64, error) {
-	n, err := s.affected(ctx, q, s.sql.deleteFailed, false)
+	n, err := s.affected(ctx, q, s.sql.deleteFailed, s.bindSuccess(false))
 	if err != nil {
 		return 0, fmt.Errorf("delete failed history rows: %w", err)
 	}
 	return n, nil
+}
+
+func (s *Store) bindSuccess(success bool) any {
+	if s.d.Name() != dialect.Oracle {
+		return success
+	}
+	if success {
+		return int64(1)
+	}
+	return int64(0)
 }
 
 // exec runs a single-row write whose last argument is the version, and

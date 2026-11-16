@@ -42,6 +42,7 @@ var codes = []struct {
 	{ErrUnbalancedBlock, "unbalanced_block"},
 	{ErrUnknownDirective, "unknown_directive"},
 	{ErrTSQLBatch, "invalid_tsql_batch"},
+	{ErrPLSQLBlock, "invalid_plsql_block"},
 	{ErrUnsupportedDialect, "unsupported_dialect"},
 	{ErrInvalidIdentifier, "invalid_identifier"},
 	{ErrHistoryRowNotFound, "history_row_not_found"},
