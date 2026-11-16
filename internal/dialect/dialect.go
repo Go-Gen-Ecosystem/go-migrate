@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/script"
 )
@@ -40,16 +39,9 @@ type Dialect struct {
 	numbered         bool
 	tsType           string
 	tableSuffix      string
-	existsSQL        string
-	existsArgs       func(Table) []any
+	exists           func(Table) (string, []any)
+	schemaSQL        string // query for the session's current schema/database
 	locker           Locker
-}
-
-// Locker acquires the cross-process migration lock for key. The returned
-// context is derived from ctx and is cancelled if the lock is lost; release
-// must be called exactly once.
-type Locker interface {
-	Lock(ctx context.Context, db *sql.DB, key string, wait time.Duration) (context.Context, func(context.Context) error, error)
 }
 
 var dialects = map[string]*Dialect{
@@ -60,8 +52,8 @@ var dialects = map[string]*Dialect{
 		quote:            '"',
 		numbered:         true,
 		tsType:           "TIMESTAMP",
-		existsSQL:        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE($1, current_schema()) AND table_name = $2",
-		existsArgs:       schemaAndName,
+		exists:           infoSchemaExists("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE($1, current_schema()) AND table_name = $2"),
+		schemaSQL:        "SELECT current_schema()",
 		locker:           pgLocker{},
 	},
 	MySQL: {
@@ -70,8 +62,8 @@ var dialects = map[string]*Dialect{
 		quote:       '`',
 		tsType:      "DATETIME(6)",
 		tableSuffix: " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
-		existsSQL:   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ?",
-		existsArgs:  schemaAndName,
+		exists:      infoSchemaExists("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ?"),
+		schemaSQL:   "SELECT DATABASE()",
 		locker:      mysqlLocker{},
 	},
 	SQLite: {
@@ -80,8 +72,7 @@ var dialects = map[string]*Dialect{
 		transactionalDDL: true,
 		quote:            '"',
 		tsType:           "DATETIME",
-		existsSQL:        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
-		existsArgs:       func(t Table) []any { return []any{t.Name} },
+		exists:           sqliteExists,
 		locker:           sqliteLocker{},
 	},
 }
@@ -196,20 +187,57 @@ func (d *Dialect) HistoryDDL(t Table) string {
 }
 
 // TableExists reports whether t exists, without creating it.
-func (d *Dialect) TableExists(ctx context.Context, db *sql.DB, t Table) (bool, error) {
+func (d *Dialect) TableExists(ctx context.Context, q Querier, t Table) (bool, error) {
+	query, args := d.exists(t)
 	var n int
-	if err := db.QueryRowContext(ctx, d.existsSQL, d.existsArgs(t)...).Scan(&n); err != nil {
+	if err := q.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return false, fmt.Errorf("check table %s: %w", t, err)
 	}
 	return n > 0, nil
 }
 
-// schemaAndName passes a NULL schema for unqualified tables so the query
-// falls back to the connection's current schema/database.
-func schemaAndName(t Table) []any {
-	var schema any
-	if t.Schema != "" {
-		schema = t.Schema
+// CurrentSchema returns the schema (PostgreSQL), database (MySQL) or
+// attached database name (SQLite: "main") that unqualified names resolve to.
+func (d *Dialect) CurrentSchema(ctx context.Context, q Querier) (string, error) {
+	if d.schemaSQL == "" {
+		return "main", nil
 	}
-	return []any{schema, t.Name}
+	var schema sql.NullString
+	if err := q.QueryRowContext(ctx, d.schemaSQL).Scan(&schema); err != nil {
+		return "", fmt.Errorf("resolve current schema: %w", err)
+	}
+	if !schema.Valid || schema.String == "" {
+		return "", errors.New("no current schema/database selected on the connection")
+	}
+	return schema.String, nil
+}
+
+// Qualify returns t with its schema set to schema when t has none.
+func (t Table) Qualify(schema string) Table {
+	if t.Schema == "" {
+		t.Schema = schema
+	}
+	return t
+}
+
+// infoSchemaExists checks information_schema, passing a NULL schema for
+// unqualified tables so the query falls back to the session's current one.
+func infoSchemaExists(query string) func(Table) (string, []any) {
+	return func(t Table) (string, []any) {
+		var schema any
+		if t.Schema != "" {
+			schema = t.Schema
+		}
+		return query, []any{schema, t.Name}
+	}
+}
+
+// sqliteExists checks the sqlite_master of the table's attached database.
+// The schema is a validated identifier, so it is safe to quote inline.
+func sqliteExists(t Table) (string, []any) {
+	master := "sqlite_master"
+	if t.Schema != "" {
+		master = `"` + t.Schema + `".sqlite_master`
+	}
+	return "SELECT COUNT(*) FROM " + master + " WHERE type = 'table' AND name = ?", []any{t.Name}
 }

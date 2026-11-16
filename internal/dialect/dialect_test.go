@@ -96,32 +96,35 @@ func TestSQLiteLockMutualExclusion(t *testing.T) {
 	db := openSQLite(t)
 	l := sqliteLocker{}
 
-	_, release, err := l.Lock(ctx, db, "go-migrate:schema_history", time.Second)
+	held, err := l.Lock(ctx, db, "go-migrate:main.schema_history", time.Second)
 	if err != nil {
 		t.Fatalf("first lock: %v", err)
 	}
-	if _, _, err := l.Lock(ctx, db, "go-migrate:schema_history", 150*time.Millisecond); !errors.Is(err, ErrLockTimeout) {
+	if _, err := l.Lock(ctx, db, "go-migrate:main.schema_history", 150*time.Millisecond); !errors.Is(err, ErrLockTimeout) {
 		t.Fatalf("second lock err = %v, want ErrLockTimeout", err)
 	}
 	// A different history table is an independent lock.
-	_, releaseOther, err := l.Lock(ctx, db, "go-migrate:other_history", time.Second)
+	other, err := l.Lock(ctx, db, "go-migrate:main.other_history", time.Second)
 	if err != nil {
 		t.Fatalf("independent lock: %v", err)
 	}
-	if err := releaseOther(ctx); err != nil {
+	if err := other.Release(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := release(ctx); err != nil {
+	if err := held.Fence(ctx, held.Conn); err != nil {
+		t.Fatalf("fence while held: %v", err)
+	}
+	if err := held.Release(ctx); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if err := release(ctx); err != nil {
+	if err := held.Release(ctx); err != nil {
 		t.Fatalf("second release must be a no-op: %v", err)
 	}
-	_, release2, err := l.Lock(ctx, db, "go-migrate:schema_history", time.Second)
+	again, err := l.Lock(ctx, db, "go-migrate:main.schema_history", time.Second)
 	if err != nil {
 		t.Fatalf("relock after release: %v", err)
 	}
-	_ = release2(ctx)
+	_ = again.Release(ctx)
 }
 
 func TestSQLiteLockTakesOverExpiredLease(t *testing.T) {
@@ -133,35 +136,119 @@ func TestSQLiteLockTakesOverExpiredLease(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO "h_lock" VALUES (1, 'crashed-host', ?)`, time.Now().Add(-time.Minute).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	_, release, err := sqliteLocker{}.Lock(ctx, db, "go-migrate:h", time.Second)
+	l, err := sqliteLocker{}.Lock(ctx, db, "go-migrate:h", time.Second)
 	if err != nil {
 		t.Fatalf("expected takeover of expired lease: %v", err)
 	}
-	_ = release(ctx)
+	_ = l.Release(ctx)
 }
 
-func TestSQLiteLockLostCancelsContext(t *testing.T) {
-	oldTTL, oldHB := leaseTTL, leaseHeartbeat
-	leaseTTL, leaseHeartbeat = time.Second, 20*time.Millisecond
-	t.Cleanup(func() { leaseTTL, leaseHeartbeat = oldTTL, oldHB })
-
+func TestSQLiteFenceDetectsStolenLease(t *testing.T) {
 	ctx := context.Background()
 	db := openSQLite(t)
-	lockCtx, release, err := sqliteLocker{}.Lock(ctx, db, "go-migrate:h", time.Second)
+	l, err := sqliteLocker{}.Lock(ctx, db, "go-migrate:h", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Another process steals the lease.
-	if _, err := db.ExecContext(ctx, `UPDATE "h_lock" SET owner = 'thief'`); err != nil {
+	if _, err := l.Conn.ExecContext(ctx, `UPDATE "h_lock" SET owner = 'thief'`); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-lockCtx.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("lock context was not cancelled after the lease was lost")
+	if err := l.Fence(ctx, l.Conn); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("Fence = %v, want ErrLockLost", err)
 	}
-	if err := release(ctx); !errors.Is(err, ErrLockLost) {
-		t.Fatalf("release err = %v, want ErrLockLost", err)
+	if err := l.Release(ctx); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("Release = %v, want ErrLockLost", err)
+	}
+}
+
+func TestSQLiteWaiterKeepsWaitingWhileDatabaseIsBusy(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "busy.db")
+	// No busy timeout: every contended statement returns SQLITE_BUSY at once.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`CREATE TABLE "h_lock" (id INTEGER PRIMARY KEY CHECK (id = 1), owner TEXT NOT NULL, expires_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = writer.ExecContext(ctx, "COMMIT")
+		_ = writer.Close()
+	}()
+	l, err := sqliteLocker{}.Lock(ctx, db, "go-migrate:h", 5*time.Second)
+	if err != nil {
+		t.Fatalf("waiter must poll through SQLITE_BUSY, got %v", err)
+	}
+	_ = l.Release(ctx)
+}
+
+func TestReleaseFreesConnection(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+	l, err := sqliteLocker{}.Lock(ctx, db, "go-migrate:h", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Release(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Conn.PingContext(ctx); !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("pinned *sql.Conn must be done after release, ping = %v", err)
+	}
+	discarded := &Lock{Conn: mustConn(t, db), discard: true, unlock: func(context.Context) error { return nil }}
+	before := db.Stats().OpenConnections
+	if err := discarded.Release(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := db.Stats().OpenConnections; after != before-1 {
+		t.Fatalf("session-lock connection must be closed, not pooled: open %d -> %d", before, after)
+	}
+}
+
+func mustConn(t *testing.T, db *sql.DB) *sql.Conn {
+	t.Helper()
+	c, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestTableExistsWithSchemaAndCurrentSchema(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+	db.SetMaxOpenConns(1) // ATTACH is per connection
+	d, _ := Lookup(SQLite)
+	if _, err := db.Exec("ATTACH DATABASE ':memory:' AS aux"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE aux.hist (id INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := d.TableExists(ctx, db, Table{Schema: "aux", Name: "hist"}); err != nil || !ok {
+		t.Fatalf("aux.hist exists = %v, %v", ok, err)
+	}
+	if ok, _ := d.TableExists(ctx, db, Table{Name: "hist"}); ok {
+		t.Fatal("unqualified lookup must not see aux.hist")
+	}
+	if s, err := d.CurrentSchema(ctx, db); err != nil || s != "main" {
+		t.Fatalf("CurrentSchema = %q, %v", s, err)
+	}
+	if q := (Table{Name: "t"}).Qualify("app"); q.String() != "app.t" {
+		t.Fatalf("Qualify = %s", q)
+	}
+	if q := (Table{Schema: "x", Name: "t"}).Qualify("app"); q.String() != "x.t" {
+		t.Fatalf("Qualify must keep an explicit schema: %s", q)
 	}
 }
 
@@ -186,8 +273,11 @@ func TestLockKeyAndAdvisoryID(t *testing.T) {
 	if advisoryID("a") == advisoryID("b") {
 		t.Error("distinct keys should hash differently")
 	}
-	if leaseTableName("go-migrate:app.hist") != "hist_lock" {
-		t.Errorf("leaseTableName = %s", leaseTableName("go-migrate:app.hist"))
+	if lt, err := leaseTable("go-migrate:app.hist"); err != nil || lt.String() != "app.hist_lock" {
+		t.Errorf("leaseTable = %v, %v", lt, err)
+	}
+	if transient(errors.New("database is locked (5) (SQLITE_BUSY)")) != nil || transient(errors.New("boom")) == nil {
+		t.Error("transient must swallow only busy/locked errors")
 	}
 	if a, b := ownerID(), ownerID(); a == b {
 		t.Error("owner IDs must be unique per call")

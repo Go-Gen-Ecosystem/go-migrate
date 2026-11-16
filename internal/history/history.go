@@ -9,7 +9,6 @@ package history
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -35,11 +34,7 @@ const RepeatablePrefix = "R:"
 var ErrNotFound = errors.New("history row not found")
 
 // Querier is satisfied by *sql.DB, *sql.Tx and *sql.Conn.
-type Querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+type Querier = dialect.Querier
 
 // Record is one history row.
 type Record struct {
@@ -67,7 +62,7 @@ type Store struct {
 }
 
 type queries struct {
-	list, nextRank, insert, complete, markDirty, reapply, setChecksum, delete, deleteFailed string
+	list, nextRank, insert, complete, markDirty, reapply, realign, delete, deleteFailed string
 }
 
 // New returns a store for table t on dialect d.
@@ -82,7 +77,7 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 		reapply: "UPDATE " + q + " SET description = " + p(1) + ", script = " + p(2) + ", checksum = " + p(3) +
 			", installed_by = " + p(4) + ", installed_on = " + p(5) + ", execution_ms = " + p(6) + ", success = " + p(7) +
 			" WHERE version = " + p(8),
-		setChecksum:  "UPDATE " + q + " SET checksum = " + p(1) + " WHERE version = " + p(2),
+		realign:      "UPDATE " + q + " SET checksum = " + p(1) + ", kind = " + p(2) + " WHERE version = " + p(3),
 		delete:       "DELETE FROM " + q + " WHERE version = " + p(1),
 		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
 	}}
@@ -98,8 +93,8 @@ func (s *Store) Ensure(ctx context.Context, q Querier) error {
 
 // Exists reports whether the history table exists, without creating it, so
 // read-only operations never issue DDL.
-func (s *Store) Exists(ctx context.Context, db *sql.DB) (bool, error) {
-	return s.d.TableExists(ctx, db, s.table)
+func (s *Store) Exists(ctx context.Context, q Querier) (bool, error) {
+	return s.d.TableExists(ctx, q, s.table)
 }
 
 // List returns all rows in installed_rank order with a single query.
@@ -171,9 +166,10 @@ func (s *Store) Reapply(ctx context.Context, q Querier, r Record) error {
 		r.Description, r.Script, r.Checksum, r.InstalledBy, r.InstalledOn, r.ExecutionMS, r.Success, r.Version)
 }
 
-// SetChecksum realigns the stored checksum of version (used by repair).
-func (s *Store) SetChecksum(ctx context.Context, q Querier, version, checksum string) error {
-	return s.exec(ctx, q, s.sql.setChecksum, checksum, version)
+// Realign records version's current checksum and kind (used by repair to
+// accept a deliberately edited or re-implemented migration).
+func (s *Store) Realign(ctx context.Context, q Querier, version, checksum string, kind Kind) error {
+	return s.exec(ctx, q, s.sql.realign, checksum, string(kind), version)
 }
 
 // Delete removes the row for version.

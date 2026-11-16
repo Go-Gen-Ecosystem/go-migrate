@@ -89,7 +89,7 @@ func (m *Migrator) inspect(s *snapshot) inspection {
 		case u.Repeatable && rec.Checksum != u.Checksum:
 			info.State = StateOutdated
 			in.pending = append(in.pending, u)
-		case rec != nil && u.Checksum != "" && rec.Checksum != u.Checksum:
+		case rec != nil && drifted(u, rec):
 			info.State = StateModified
 			in.problems = append(in.problems, fmt.Errorf("version %s (%s): %w", u.Version, u.Source, ErrChecksumMismatch))
 		case rec != nil:
@@ -232,4 +232,10 @@ func migrationsOf(us []*unit) []Migration {
 		out[i] = u.Migration
 	}
 	return out
+}
+
+// drifted reports whether an applied, non-repeatable migration no longer
+// matches its source: the content changed, or it switched between SQL and Go.
+func drifted(u *unit, rec *history.Record) bool {
+	return rec.Kind != history.KindBaseline && (rec.Checksum != u.Checksum || rec.Kind != u.kind)
 }

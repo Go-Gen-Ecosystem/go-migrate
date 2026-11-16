@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -160,6 +161,8 @@ func TestConformance(t *testing.T) {
 			t.Run("concurrent runs", func(t *testing.T) { conformConcurrent(t, tg) })
 			t.Run("status is read-only", func(t *testing.T) { conformReadOnly(t, tg) })
 			t.Run("shipped examples", func(t *testing.T) { conformExamples(t, tg) })
+			t.Run("one-connection pool", func(t *testing.T) { conformSingleConn(t, tg) })
+			t.Run("session state isolation", func(t *testing.T) { conformSessionState(t, tg) })
 		})
 	}
 }
@@ -309,6 +312,68 @@ func conformConcurrent(t *testing.T, tg target) {
 	m2, _ := New(db, tg.dialect, WithFS(fsys), WithLockWait(5*time.Second))
 	if _, err := m2.Up(ctx); err != nil {
 		t.Fatalf("lock not released after cancellation: %v", err)
+	}
+}
+
+// conformSingleConn: all locked work runs on the lock's own connection, so a
+// pool of one connection must not deadlock (a common migration-pool setup).
+func conformSingleConn(t *testing.T, tg target) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := tg.open(t)
+	db.SetMaxOpenConns(1)
+	m, err := New(db, tg.dialect, WithFS(lifecycle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Up(ctx); err != nil {
+		t.Fatalf("Up with one connection: %v", err)
+	}
+	if _, err := m.Redo(ctx); err != nil {
+		t.Fatalf("Redo with one connection: %v", err)
+	}
+	if st, err := m.Status(ctx); err != nil || st.Pending != 0 || st.Current != "10" {
+		t.Fatalf("Status = %+v, %v", st, err)
+	}
+}
+
+// conformSessionState: a migration that switches schema/database must not
+// redirect history writes, and its session must not leak into the pool.
+func conformSessionState(t *testing.T, tg target) {
+	var switchTo, cleanup string
+	switch tg.dialect {
+	case "postgres":
+		switchTo = "CREATE SCHEMA elsewhere_" + "%s;\nSET search_path TO elsewhere_%s;\nCREATE TABLE moved (id INT);"
+		cleanup = "DROP SCHEMA IF EXISTS elsewhere_%s CASCADE"
+	case "mysql":
+		switchTo = "CREATE DATABASE elsewhere_%s;\nUSE elsewhere_%s;\nCREATE TABLE moved (id INT);"
+		cleanup = "DROP DATABASE IF EXISTS elsewhere_%s"
+	default:
+		t.Skip("no session-level schema switch on SQLite")
+	}
+	ctx := context.Background()
+	db := tg.open(t)
+	suffix := randName("")
+	t.Cleanup(func() { _, _ = db.Exec(fmt.Sprintf(cleanup, suffix)) })
+	fsys := files(
+		"1_switch.sql", "-- +migrate Up notransaction\n"+fmt.Sprintf(switchTo, suffix, suffix),
+		"2_after.sql", "CREATE TABLE after_switch (id INT);",
+	)
+	m, err := New(db, tg.dialect, WithFS(fsys))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Up(ctx); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	st, err := m.Status(ctx)
+	if err != nil || st.Current != "2" || st.Dirty {
+		t.Fatalf("history must stay in the original schema: %+v, %v", st, err)
+	}
+	// A fresh pooled connection must still resolve unqualified names in the
+	// original schema (the switched session was discarded, not pooled).
+	if n := count(t, db, "SELECT COUNT(*) FROM "+historyTable(tg)); n != 2 {
+		t.Fatalf("history rows visible from the pool = %d", n)
 	}
 }
 

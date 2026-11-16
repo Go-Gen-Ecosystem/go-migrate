@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -12,9 +13,9 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 )
 
-// releaseTimeout bounds lock release, which runs on a non-cancelled context
-// so that Ctrl-C or a request deadline never leaves the lock held.
-const releaseTimeout = 30 * time.Second
+// cleanupTimeout bounds work that must finish even after ctx is cancelled:
+// releasing the lock and recording a change that was already applied.
+const cleanupTimeout = 30 * time.Second
 
 // History column limits (see dialect.HistoryDDL).
 const (
@@ -57,7 +58,7 @@ func (m *Migrator) Down(ctx context.Context, steps int) (*Result, error) {
 }
 
 // DownTo rolls back every applied migration with a version above version.
-// DownTo(ctx, "0") rolls back everything.
+// DownTo(ctx, "0") rolls back everything above the baseline (if any).
 func (m *Migrator) DownTo(ctx context.Context, version string) (*Result, error) {
 	if version == "" {
 		return nil, fmt.Errorf("empty target: %w", ErrVersionNotFound)
@@ -65,13 +66,44 @@ func (m *Migrator) DownTo(ctx context.Context, version string) (*Result, error) 
 	return m.down(ctx, downSelector{to: version})
 }
 
-func (m *Migrator) up(ctx context.Context, target string) (*Result, error) {
+// Redo rolls back the most recently applied migration and applies it again,
+// under a single lock so no other run can interleave. The Result lists the
+// re-applied migration.
+func (m *Migrator) Redo(ctx context.Context) (*Result, error) {
 	res := &Result{Direction: Up}
-	err := m.locked(ctx, func(ctx context.Context) error {
-		if err := m.store.Ensure(ctx, m.db); err != nil {
+	err := m.locked(ctx, func(ctx context.Context, r *runner) error {
+		s, err := r.snapshot(ctx)
+		if err != nil {
 			return err
 		}
-		s, err := m.snapshot(ctx)
+		plan, err := m.planDown(s, downSelector{steps: 1})
+		if err != nil {
+			return err
+		}
+		u := plan[0]
+		if _, err := r.run(ctx, u, Down, s); err != nil {
+			return err
+		}
+		if s, err = r.snapshot(ctx); err != nil {
+			return err
+		}
+		d, err := r.run(ctx, u, Up, s)
+		if err != nil {
+			return err
+		}
+		res.Applied = append(res.Applied, Applied{Migration: u.Migration, Duration: d})
+		return nil
+	})
+	return res, err
+}
+
+func (m *Migrator) up(ctx context.Context, target string) (*Result, error) {
+	res := &Result{Direction: Up}
+	err := m.locked(ctx, func(ctx context.Context, r *runner) error {
+		if err := r.store.Ensure(ctx, r.conn); err != nil {
+			return err
+		}
+		s, err := r.snapshot(ctx)
 		if err != nil {
 			return err
 		}
@@ -79,15 +111,15 @@ func (m *Migrator) up(ctx context.Context, target string) (*Result, error) {
 		if err != nil {
 			return err
 		}
-		return m.execute(ctx, plan, Up, s, res)
+		return r.execute(ctx, plan, Up, s, res)
 	})
 	return res, err
 }
 
 func (m *Migrator) down(ctx context.Context, sel downSelector) (*Result, error) {
 	res := &Result{Direction: Down}
-	err := m.locked(ctx, func(ctx context.Context) error {
-		s, err := m.snapshot(ctx)
+	err := m.locked(ctx, func(ctx context.Context, r *runner) error {
+		s, err := r.snapshot(ctx)
 		if err != nil {
 			return err
 		}
@@ -95,64 +127,86 @@ func (m *Migrator) down(ctx context.Context, sel downSelector) (*Result, error) 
 		if err != nil {
 			return err
 		}
-		return m.execute(ctx, plan, Down, s, res)
+		return r.execute(ctx, plan, Down, s, res)
 	})
 	return res, err
 }
 
-// execute runs plan in order, appending each success to res, and stops at
-// the first failure.
-func (m *Migrator) execute(ctx context.Context, plan []*unit, dir Direction, s *snapshot, res *Result) error {
-	for _, u := range plan {
-		d, err := m.run(ctx, u, dir, s)
-		if err != nil {
-			return err
-		}
-		res.Applied = append(res.Applied, Applied{Migration: u.Migration, Duration: d})
-	}
-	m.opts.logger.Typed().Int(logCount, len(res.Applied)).Str(logDirection, dir.String()).Info("migration run complete")
-	return nil
+// runner is the state of one locked run. Every statement runs on conn, the
+// lock's own connection, so losing a session lock fails the work and a
+// one-connection pool cannot deadlock. The history table is qualified with
+// the schema resolved before the run, so a migration's SET search_path or
+// USE cannot redirect history writes.
+type runner struct {
+	m     *Migrator
+	conn  *sql.Conn
+	store *history.Store
+	lock  *dialect.Lock
 }
 
 // locked runs fn while holding the cross-process migration lock. The lock is
-// released even if fn panics or ctx is cancelled.
-func (m *Migrator) locked(ctx context.Context, fn func(context.Context) error) (err error) {
-	lockCtx, release, err := m.dialect.Locker().Lock(ctx, m.db, dialect.LockKey(m.table), m.opts.lockWait)
+// released, and its connection discarded, even if fn panics or ctx is
+// cancelled.
+func (m *Migrator) locked(ctx context.Context, fn func(context.Context, *runner) error) (err error) {
+	schema, err := m.dialect.CurrentSchema(ctx, m.db)
+	if err != nil {
+		return err
+	}
+	table := m.table.Qualify(schema)
+	lock, err := m.dialect.Locker().Lock(ctx, m.db, dialect.LockKey(table), m.opts.lockWait)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
-		if rerr := release(rctx); rerr != nil {
+		if rerr := lock.Release(cctx); rerr != nil {
 			err = errors.Join(err, fmt.Errorf("release migration lock: %w", rerr))
 		}
 	}()
-	return fn(lockCtx)
+	return fn(ctx, &runner{m: m, conn: lock.Conn, store: history.New(m.dialect, table), lock: lock})
 }
 
-// snapshot reads the history table, or returns an empty snapshot if the
+func (r *runner) snapshot(ctx context.Context) (*snapshot, error) {
+	return readSnapshot(ctx, r.conn, r.store)
+}
+
+// readSnapshot reads the history table, or returns an empty snapshot if the
 // table does not exist yet (so read-only calls never issue DDL).
-func (m *Migrator) snapshot(ctx context.Context) (*snapshot, error) {
-	ok, err := m.store.Exists(ctx, m.db)
+func readSnapshot(ctx context.Context, q history.Querier, store *history.Store) (*snapshot, error) {
+	ok, err := store.Exists(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return newSnapshot(nil), nil
 	}
-	rs, err := m.store.List(ctx, m.db)
+	rs, err := store.List(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	return newSnapshot(rs), nil
 }
 
-// run executes one migration in one direction, with hooks and logging. It
-// assigns new history rows the snapshot's next rank (safe: the lock is held)
-// and advances it on success.
-func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, s *snapshot) (time.Duration, error) {
-	existing := s.byKey[u.key]
+// execute runs plan in order, appending each success to res, and stops at
+// the first failure.
+func (r *runner) execute(ctx context.Context, plan []*unit, dir Direction, s *snapshot, res *Result) error {
+	for _, u := range plan {
+		d, err := r.run(ctx, u, dir, s)
+		if err != nil {
+			return err
+		}
+		res.Applied = append(res.Applied, Applied{Migration: u.Migration, Duration: d})
+	}
+	r.m.opts.logger.Typed().Int(logCount, len(res.Applied)).Str(logDirection, dir.String()).Info("migration run complete")
+	return nil
+}
+
+// run executes one migration in one direction, with hooks and logging. New
+// history rows take the snapshot's next rank (safe: the lock is held), which
+// advances on success; a rollback removes the row from the snapshot.
+func (r *runner) run(ctx context.Context, u *unit, dir Direction, s *snapshot) (time.Duration, error) {
+	m := r.m
 	ev := Event{Migration: u.Migration, Direction: dir}
 	if h := m.opts.hooks.Before; h != nil {
 		if err := h(ctx, ev); err != nil {
@@ -162,17 +216,18 @@ func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, s *snapshot)
 	log := m.opts.logger
 	log.Typed().Str(logVersion, u.label()).Str(logDirection, dir.String()).Str(logSource, u.Source).Info("running migration")
 
+	existing := s.byKey[u.key]
 	start := time.Now()
 	var err error
 	if !u.NoTx && m.dialect.TransactionalDDL() {
-		err = m.runTx(ctx, u, dir, existing, s.nextRank, start)
+		err = r.runTx(ctx, u, dir, existing, s.nextRank, start)
 	} else {
-		err = m.runNoTx(ctx, u, dir, existing, s.nextRank, start)
+		err = r.runNoTx(ctx, u, dir, existing, s.nextRank, start)
 	}
+	d := time.Since(start)
 	if err == nil && dir == Up && existing == nil {
 		s.nextRank++
 	}
-	d := time.Since(start)
 
 	if h := m.opts.hooks.After; h != nil {
 		ev.Duration, ev.Err = d, err
@@ -186,22 +241,26 @@ func (m *Migrator) run(ctx context.Context, u *unit, dir Direction, s *snapshot)
 	return d, nil
 }
 
-// runTx executes the migration and its history change in one transaction:
-// on failure nothing is applied and nothing is recorded.
-func (m *Migrator) runTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, rank int64, start time.Time) error {
-	tx, err := m.db.BeginTx(ctx, nil)
+// runTx executes the migration, re-checks lock ownership and writes its
+// history change in one transaction: on any failure nothing is applied and
+// nothing is recorded.
+func (r *runner) runTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, rank int64, start time.Time) error {
+	tx, err := r.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction for %s: %w", u.label(), err)
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
-	if err := u.exec(ctx, tx, dir); err != nil {
+	if err := u.exec(ctx, tx, dir, nil); err != nil {
+		return err
+	}
+	if err := r.lock.Fence(ctx, tx); err != nil {
 		return err
 	}
 	if dir == Down {
-		err = m.store.Delete(ctx, tx, u.key)
+		err = r.store.Delete(ctx, tx, u.key)
 	} else {
-		err = m.saveRecord(ctx, tx, m.newRecord(u, rank, time.Since(start), true), existing)
+		err = r.saveRecord(ctx, tx, r.m.newRecord(u, rank, time.Since(start), true), existing)
 	}
 	if err != nil {
 		return err
@@ -214,41 +273,50 @@ func (m *Migrator) runTx(ctx context.Context, u *unit, dir Direction, existing *
 
 // runNoTx executes a migration that cannot be transactional. The history row
 // is marked dirty first, so a failure or crash part-way is detected by the
-// next run (ErrDirty) instead of being silently re-applied. All statements
-// share one connection, so session settings (SET search_path, ...) carry over.
-func (m *Migrator) runNoTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, rank int64, start time.Time) error {
-	conn, err := m.db.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("reserve connection for %s: %w", u.label(), err)
+// next run (ErrDirty) instead of being silently re-applied. Lock ownership
+// is re-checked before every statement.
+func (r *runner) runNoTx(ctx context.Context, u *unit, dir Direction, existing *history.Record, rank int64, start time.Time) error {
+	q := r.conn
+	fence := func(ctx context.Context) error { return r.lock.Fence(ctx, q) }
+	if err := fence(ctx); err != nil {
+		return err
 	}
-	defer func() { _ = conn.Close() }()
-
+	var err error
 	if dir == Down {
-		err = m.store.MarkDirty(ctx, conn, u.key)
+		err = r.store.MarkDirty(ctx, q, u.key)
 	} else {
-		err = m.saveRecord(ctx, conn, m.newRecord(u, rank, 0, false), existing)
+		err = r.saveRecord(ctx, q, r.m.newRecord(u, rank, 0, false), existing)
 	}
 	if err != nil {
 		return err
 	}
-	if err := u.exec(ctx, conn, dir); err != nil {
+	if err := u.exec(ctx, q, dir, fence); err != nil {
 		var me *MigrationError
 		if errors.As(err, &me) {
 			me.Dirty = true
 		}
 		return err
 	}
+	// The change is fully applied: record it even if ctx was cancelled after
+	// the last statement, rather than leaving a completed migration dirty.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
 	if dir == Down {
-		return m.store.Delete(ctx, conn, u.key)
+		err = r.store.Delete(cctx, q, u.key)
+	} else {
+		err = r.store.Complete(cctx, q, u.key, time.Since(start).Milliseconds())
 	}
-	return m.store.Complete(ctx, conn, u.key, time.Since(start).Milliseconds())
+	if err != nil {
+		return fmt.Errorf("migration %s %s applied but its history row could not be updated: %w: %w", u.label(), dir, err, ErrDirty)
+	}
+	return nil
 }
 
-func (m *Migrator) saveRecord(ctx context.Context, q history.Querier, r history.Record, existing *history.Record) error {
+func (r *runner) saveRecord(ctx context.Context, q history.Querier, rec history.Record, existing *history.Record) error {
 	if existing != nil {
-		return m.store.Reapply(ctx, q, r)
+		return r.store.Reapply(ctx, q, rec)
 	}
-	_, err := m.store.Insert(ctx, q, r)
+	_, err := r.store.Insert(ctx, q, rec)
 	return err
 }
 
@@ -266,8 +334,9 @@ func (m *Migrator) newRecord(u *unit, rank int64, elapsed time.Duration, success
 	}
 }
 
-// exec runs the unit's SQL statements (or Go func) for dir on ex.
-func (u *unit) exec(ctx context.Context, ex Executor, dir Direction) error {
+// exec runs the unit's SQL statements (or Go func) for dir on ex. before, if
+// set, runs ahead of every statement (lock fencing for non-transactional runs).
+func (u *unit) exec(ctx context.Context, ex Executor, dir Direction, before func(context.Context) error) error {
 	if fn := u.fns[dir]; fn != nil {
 		if err := fn(ctx, ex); err != nil {
 			return &MigrationError{Version: u.label(), Direction: dir, Err: err}
@@ -275,6 +344,11 @@ func (u *unit) exec(ctx context.Context, ex Executor, dir Direction) error {
 		return nil
 	}
 	for i, stmt := range u.stmts[dir] {
+		if before != nil {
+			if err := before(ctx); err != nil {
+				return &MigrationError{Version: u.label(), Direction: dir, Statement: i + 1, SQL: truncateSQL(stmt), Err: err}
+			}
+		}
 		if _, err := ex.ExecContext(ctx, stmt); err != nil {
 			return &MigrationError{Version: u.label(), Direction: dir, Statement: i + 1, SQL: truncateSQL(stmt), Err: err}
 		}

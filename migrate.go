@@ -52,6 +52,13 @@ type unit struct {
 
 var goVersion = regexp.MustCompile(`^\d+(\.\d+)*$`)
 
+// Identifier limits derived from the history DDL (version VARCHAR(128)) and
+// the 63/64-character identifier limits of PostgreSQL and MySQL.
+const (
+	maxTableName  = 48
+	maxVersionKey = 128
+)
+
 // New builds a Migrator for db. dialectName is "postgres", "mysql" or
 // "sqlite" (aliases such as "pgx", "mariadb" and "sqlite3" are accepted).
 // The migration source is loaded and validated immediately, so malformed
@@ -66,7 +73,9 @@ func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {
 	}
 	o := defaults()
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 	if o.lockWait <= 0 {
 		o.lockWait = DefaultLockWait
@@ -77,6 +86,11 @@ func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {
 	tbl, err := dialect.ParseTable(o.table)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: history table: %w", err)
+	}
+	if len(tbl.Name) > maxTableName {
+		// Derived names (<table>_version_uk, <table>_lock) must stay within
+		// MySQL's and PostgreSQL's 64/63-character identifier limits.
+		return nil, fmt.Errorf("migrate: history table name %q is longer than %d characters", tbl.Name, maxTableName)
 	}
 
 	m := &Migrator{db: db, dialect: d, table: tbl, store: history.New(d, tbl), opts: o, byKey: map[string]*unit{}}
@@ -145,6 +159,9 @@ func (m *Migrator) add(u *unit) error {
 	u.key = u.Version
 	if u.Repeatable {
 		u.key = history.RepeatablePrefix + strings.ToLower(u.Description)
+	}
+	if len(u.key) > maxVersionKey {
+		return fmt.Errorf("%s: version or repeatable description longer than %d characters", u.Source, maxVersionKey)
 	}
 	if prev, ok := m.byKey[u.key]; ok {
 		return fmt.Errorf("%w: %s and %s", source.ErrDuplicateVersion, prev.Source, u.Source)

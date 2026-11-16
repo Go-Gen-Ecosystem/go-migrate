@@ -23,6 +23,8 @@ var (
 	// ErrOutOfOrder means a pending migration has a lower version than the
 	// latest applied one; enable WithAllowOutOfOrder to apply it anyway.
 	ErrOutOfOrder = errors.New("pending migration is older than the latest applied version")
+	// ErrInvalidVersion means a version is not numeric (digits, optionally dot-separated).
+	ErrInvalidVersion = errors.New("invalid version")
 	// ErrVersionNotFound means a requested target version does not exist.
 	ErrVersionNotFound = errors.New("version not found")
 	// ErrIrreversible means a migration that must be rolled back has no down section.

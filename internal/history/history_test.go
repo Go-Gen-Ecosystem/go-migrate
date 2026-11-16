@@ -56,7 +56,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := s.Complete(ctx, db, "2", 42); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetChecksum(ctx, db, "1", "zzz"); err != nil {
+	if err := s.Realign(ctx, db, "1", "zzz", KindSQL); err != nil {
 		t.Fatal(err)
 	}
 	rs, err := s.List(ctx, db)
