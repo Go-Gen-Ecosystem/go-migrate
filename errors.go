@@ -6,15 +6,22 @@ import (
 	"strings"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
+	"github.com/go-gen-ecosystem/go-migrate/internal/history"
+	"github.com/go-gen-ecosystem/go-migrate/internal/script"
+	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
 // Sentinel errors. Use errors.Is to test for them; most are wrapped with the
 // offending version.
 var (
 	// ErrDirty means a non-transactional migration failed part-way and left
-	// a history row with success = false. Fix the schema by hand, then run
-	// Repair to clear the row.
-	ErrDirty = errors.New("database is dirty: a migration failed part-way; fix the schema manually, then run repair")
+	// a history row with success = false. Bring the schema by hand to either
+	// side of the migration, then run Repair (schema as before it: the row
+	// is removed) or MarkApplied (schema as after it: the row is completed).
+	ErrDirty = errors.New("database is dirty: a migration failed part-way; restore the schema by hand, then run repair (undone) or mark-applied (completed)")
+	// ErrBelowBaseline means a rollback target lies below the baseline,
+	// which cannot be rolled back.
+	ErrBelowBaseline = errors.New("target version is below the baseline")
 	// ErrChecksumMismatch means an applied migration file was edited.
 	ErrChecksumMismatch = errors.New("applied migration was modified")
 	// ErrMissingMigration means the database has a version that no longer
@@ -42,8 +49,25 @@ var (
 	ErrLockLost = dialect.ErrLockLost
 )
 
+// Errors from loading migrations (New) and from the database layer,
+// re-exported so callers can test for them with errors.Is.
+var (
+	ErrBadFileName         = source.ErrBadFileName
+	ErrDuplicateVersion    = source.ErrDuplicateVersion
+	ErrMissingUp           = source.ErrMissingUp
+	ErrEmptyUp             = source.ErrEmptyUp
+	ErrUpInDownFile        = source.ErrUpInDownFile
+	ErrContentBeforeMarker = script.ErrContentBeforeMarker
+	ErrDuplicateMarker     = script.ErrDuplicateMarker
+	ErrUnbalancedBlock     = script.ErrUnbalancedBlock
+	ErrUnknownDirective    = script.ErrUnknownDirective
+	ErrUnsupportedDialect  = dialect.ErrUnsupported
+	ErrInvalidIdentifier   = dialect.ErrInvalidIdentifier
+	ErrHistoryRowNotFound  = history.ErrNotFound
+)
+
 // maxSQLInError bounds how much of a failing statement is echoed in errors,
-// so seed data or secrets in large statements do not leak into logs.
+// so large seed statements are not copied into logs wholesale.
 const maxSQLInError = 120
 
 // MigrationError reports which migration and statement failed.
@@ -83,6 +107,7 @@ func (e *MigrationError) Unwrap() []error {
 // truncateSQL returns a one-line excerpt of a statement for error messages:
 // leading comment lines are skipped (they usually repeat the file header),
 // whitespace is collapsed and the result is capped at maxSQLInError runes.
+// The cap limits, but cannot rule out, sensitive literals in the excerpt.
 func truncateSQL(s string) string {
 	lines := strings.Split(s, "\n")
 	for len(lines) > 1 && strings.HasPrefix(strings.TrimSpace(lines[0]), "--") {

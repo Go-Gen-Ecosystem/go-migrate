@@ -490,7 +490,7 @@ func TestNewErrors(t *testing.T) {
 	if _, err := New(db, "sqlite", WithFS(files("1_a.sql", "SELECT 1;", "001_b.sql", "SELECT 2;"))); err == nil {
 		t.Error("duplicate versions")
 	}
-	m, err := New(db, "sqlite", WithLogger(nil), WithLockWait(-1), WithInstalledBy("ci"), WithTable("main_history"))
+	m, err := New(db, "sqlite", WithLogger(nil), WithInstalledBy("ci"), WithTable("main_history"))
 	if err != nil || m.opts.lockWait != DefaultLockWait || m.opts.installedBy != "ci" || len(m.Migrations()) != 0 {
 		t.Fatalf("defaults not applied: %+v, %v", m, err)
 	}
@@ -519,5 +519,96 @@ func TestCommentOnlyDownIsIrreversible(t *testing.T) {
 	m := newM(t, openDB(t), files("1_a.sql", "-- +migrate Up\nCREATE TABLE a (id INTEGER);\n-- +migrate Down\n-- nothing to undo\n"))
 	if m.Migrations()[0].Reversible {
 		t.Fatal("a Down section with only comments must not count as reversible")
+	}
+}
+
+func TestDownToBelowBaselineFails(t *testing.T) {
+	ctx := context.Background()
+	m := newM(t, openDB(t), basic)
+	if err := m.Baseline(ctx, "10", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DownTo(ctx, "9"); !errors.Is(err, ErrBelowBaseline) {
+		t.Fatalf("DownTo below baseline = %v, want ErrBelowBaseline", err)
+	}
+	if err := m.Baseline(ctx, "x", ""); !errors.Is(err, ErrInvalidVersion) {
+		t.Fatalf("Baseline(x) = %v, want ErrInvalidVersion", err)
+	}
+}
+
+func TestRollbackReappliesRepeatables(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	m := newM(t, db, files(
+		"1_t.sql", "-- +migrate Up\nCREATE TABLE t (id INTEGER);\n-- +migrate Down\nDROP VIEW IF EXISTS v;\nDROP TABLE t;",
+		"R__view.sql", "DROP VIEW IF EXISTS v;\nCREATE VIEW v AS SELECT id FROM t;",
+	))
+	if _, err := m.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DownTo(ctx, "0"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, versions(res), []string{"1", "R:view"})
+	if !tableExists(t, db, "t") {
+		t.Fatal("table not recreated")
+	}
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM v").Scan(&n); err != nil {
+		t.Fatalf("view must exist again after re-applying repeatables: %v", err)
+	}
+}
+
+func TestMarkAppliedCompletesDirtyRow(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	fsys := files("1_notx.sql", "-- +migrate Up notransaction\nCREATE TABLE part (id INTEGER);\nINSERT INTO nope VALUES (1);")
+	m := newM(t, db, fsys)
+	if _, err := m.Up(ctx); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Up = %v, want ErrDirty", err)
+	}
+	// The operator finished the migration by hand.
+	if err := m.MarkApplied(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MarkApplied(ctx, "1"); err != nil {
+		t.Fatalf("MarkApplied must be idempotent: %v", err)
+	}
+	st, err := m.Status(ctx)
+	if err != nil || st.Dirty || st.Current != "1" || st.Migrations[0].State != StateApplied {
+		t.Fatalf("status = %+v, %v", st, err)
+	}
+	if err := m.MarkApplied(ctx, "42"); !errors.Is(err, ErrVersionNotFound) {
+		t.Fatalf("MarkApplied(unknown) = %v", err)
+	}
+}
+
+func TestReexportedErrorsAndOptions(t *testing.T) {
+	db := openDB(t)
+	if _, err := New(db, "sqlite", WithFS(files("1_a.sql", "SELECT 1;", "001_b.sql", "SELECT 2;"))); !errors.Is(err, ErrDuplicateVersion) {
+		t.Errorf("duplicate = %v", err)
+	}
+	if _, err := New(db, "oracle"); !errors.Is(err, ErrUnsupportedDialect) {
+		t.Errorf("dialect = %v", err)
+	}
+	if _, err := New(db, "sqlite", WithTable("a;b")); !errors.Is(err, ErrInvalidIdentifier) {
+		t.Errorf("table = %v", err)
+	}
+	m, err := New(db, "sqlite", nil, WithLockWait(0))
+	if err != nil || m.opts.lockWait != 0 {
+		t.Fatalf("WithLockWait(0) must mean no wait: %+v, %v", m, err)
+	}
+	if _, err := m.PlanDownTo(context.Background(), ""); !errors.Is(err, ErrVersionNotFound) {
+		t.Errorf("PlanDownTo empty = %v", err)
+	}
+	if got := (Migration{Repeatable: true, Description: "views"}).Label(); got != "R__views" {
+		t.Errorf("Label = %s", got)
 	}
 }

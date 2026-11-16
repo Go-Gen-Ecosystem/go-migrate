@@ -97,7 +97,7 @@ func (m *Migrator) inspect(s *snapshot) inspection {
 		case s.baseline != "" && source.Compare(u.Version, s.baseline) <= 0:
 			info.State = StateBelowBase
 		case s.latest != "" && source.Compare(u.Version, s.latest) < 0 && !m.opts.allowOOO:
-			info.State = StateIgnored
+			info.State = StateOutOfOrder
 			in.problems = append(in.problems, fmt.Errorf("version %s (latest applied %s): %w", u.Version, s.latest, ErrOutOfOrder))
 		default:
 			info.State = StatePending
@@ -182,6 +182,9 @@ func (m *Migrator) planDown(s *snapshot, sel downSelector) ([]*unit, error) {
 			if t, err = m.lookupVersion(sel.to); err != nil {
 				return nil, err
 			}
+		}
+		if t != "0" && s.baseline != "" && source.Compare(t, s.baseline) < 0 {
+			return nil, fmt.Errorf("version %s (baseline %s): %w", sel.to, s.baseline, ErrBelowBaseline)
 		}
 		for _, r := range applied {
 			if source.Compare(r.Version, t) > 0 {

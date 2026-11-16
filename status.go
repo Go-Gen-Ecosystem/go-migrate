@@ -60,6 +60,9 @@ func (m *Migrator) PlanDown(ctx context.Context, steps int) ([]Migration, error)
 
 // PlanDownTo returns what DownTo(version) would roll back, without doing it.
 func (m *Migrator) PlanDownTo(ctx context.Context, version string) ([]Migration, error) {
+	if version == "" {
+		return nil, fmt.Errorf("empty target: %w", ErrVersionNotFound)
+	}
 	return m.planDownRead(ctx, downSelector{to: version})
 }
 

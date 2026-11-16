@@ -22,8 +22,10 @@ func (d Direction) String() string {
 	return "up"
 }
 
-// Executor runs SQL. It is satisfied by *sql.DB, *sql.Tx and *sql.Conn; Go
-// migrations receive a *sql.Tx unless they set NoTx.
+// Executor runs SQL. It is satisfied by *sql.DB, *sql.Tx and *sql.Conn. Go
+// migrations receive a *sql.Tx on databases with transactional DDL
+// (PostgreSQL, SQLite) unless they set NoTx; on MySQL, or with NoTx, they
+// receive the run's *sql.Conn and follow the dirty-row protocol (see ErrDirty).
 type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -56,20 +58,29 @@ type Migration struct {
 	Reversible bool
 }
 
+// Label names the migration in logs and output: its version, or
+// "R__<description>" for a repeatable migration.
+func (m Migration) Label() string {
+	if m.Repeatable {
+		return "R__" + m.Description
+	}
+	return m.Version
+}
+
 // State is the state of a migration relative to the database.
 type State string
 
 // Migration states reported by Status.
 const (
-	StatePending   State = "pending"
-	StateApplied   State = "applied"
-	StateFailed    State = "failed"   // dirty: failed part-way, needs repair
-	StateModified  State = "modified" // applied, but the file changed since
-	StateMissing   State = "missing"  // applied, but no longer in the source
-	StateOutdated  State = "outdated" // repeatable whose content changed
-	StateBaseline  State = "baseline" // the baseline marker row
-	StateBelowBase State = "below baseline"
-	StateIgnored   State = "out of order" // pending, older than the latest applied
+	StatePending    State = "pending"
+	StateApplied    State = "applied"
+	StateFailed     State = "failed"   // dirty: failed part-way, needs repair
+	StateModified   State = "modified" // applied, but the file changed since
+	StateMissing    State = "missing"  // applied, but no longer in the source
+	StateOutdated   State = "outdated" // repeatable whose content changed
+	StateBaseline   State = "baseline" // the baseline marker row
+	StateBelowBase  State = "below baseline"
+	StateOutOfOrder State = "out of order" // pending, older than the latest applied
 )
 
 // Info is a migration together with its state and history row (if any).

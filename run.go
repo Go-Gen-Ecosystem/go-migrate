@@ -84,6 +84,9 @@ func (m *Migrator) Redo(ctx context.Context) (*Result, error) {
 		if _, err := r.run(ctx, u, Down, s); err != nil {
 			return err
 		}
+		if err := r.invalidateRepeatables(ctx, s); err != nil {
+			return err
+		}
 		if s, err = r.snapshot(ctx); err != nil {
 			return err
 		}
@@ -127,9 +130,53 @@ func (m *Migrator) down(ctx context.Context, sel downSelector) (*Result, error) 
 		if err != nil {
 			return err
 		}
-		return r.execute(ctx, plan, Down, s, res)
+		if err := r.execute(ctx, plan, Down, s, res); err != nil || len(res.Applied) == 0 {
+			return err
+		}
+		return r.invalidateRepeatables(ctx, s)
 	})
 	return res, err
+}
+
+// invalidateRepeatables clears the stored checksum of every repeatable
+// migration after a rollback, so the next Up re-applies them: a rollback can
+// drop the objects they create (a view over a dropped table).
+func (r *runner) invalidateRepeatables(ctx context.Context, s *snapshot) error {
+	for _, rec := range s.records {
+		if rec.Kind == history.KindRepeatable {
+			if err := r.store.Realign(ctx, r.conn, rec.Version, "", history.KindRepeatable); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// MarkApplied records version as applied without running it: for a dirty
+// row whose migration you completed by hand (see ErrDirty), or to adopt a
+// single change that already exists in the database. It is idempotent.
+func (m *Migrator) MarkApplied(ctx context.Context, version string) error {
+	key, err := m.lookupVersion(version)
+	if err != nil {
+		return err
+	}
+	u := m.byKey[key]
+	return m.locked(ctx, func(ctx context.Context, r *runner) error {
+		if err := r.store.Ensure(ctx, r.conn); err != nil {
+			return err
+		}
+		s, err := r.snapshot(ctx)
+		if err != nil {
+			return err
+		}
+		switch rec := s.byKey[key]; {
+		case rec == nil:
+			_, err = r.store.Insert(ctx, r.conn, m.newRecord(u, s.nextRank, 0, true))
+		case !rec.Success:
+			err = r.store.Complete(ctx, r.conn, key, rec.ExecutionMS)
+		}
+		return err
+	})
 }
 
 // runner is the state of one locked run. Every statement runs on conn, the
@@ -357,12 +404,7 @@ func (u *unit) exec(ctx context.Context, ex Executor, dir Direction, before func
 }
 
 // label is how a migration is named in logs and errors.
-func (u *unit) label() string {
-	if u.Repeatable {
-		return "R__" + u.Description
-	}
-	return u.Version
-}
+func (u *unit) label() string { return u.Label() }
 
 func clip(s string, n int) string {
 	r := []rune(s)

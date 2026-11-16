@@ -78,9 +78,6 @@ func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {
 			opt(&o)
 		}
 	}
-	if o.lockWait <= 0 {
-		o.lockWait = DefaultLockWait
-	}
 	if o.installedBy == "" {
 		o.installedBy = currentUser()
 	}
@@ -102,13 +99,7 @@ func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {
 }
 
 // Migrations returns every known migration in execution order.
-func (m *Migrator) Migrations() []Migration {
-	out := make([]Migration, len(m.units))
-	for i, u := range m.units {
-		out[i] = u.Migration
-	}
-	return out
-}
+func (m *Migrator) Migrations() []Migration { return migrationsOf(m.units) }
 
 func (m *Migrator) load() error {
 	var files []*source.File
