@@ -158,8 +158,8 @@ func TestSectionEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sc.Up.Empty() || !sc.Down.Empty() {
-		t.Fatalf("Up.Empty=%v Down.Empty=%v", sc.Up.Empty(), sc.Down.Empty())
+	if sc.Up.Empty(Lexical{}) || !sc.Down.Empty(Lexical{}) {
+		t.Fatalf("Up.Empty=%v Down.Empty=%v", sc.Up.Empty(Lexical{}), sc.Down.Empty(Lexical{}))
 	}
 }
 
@@ -203,4 +203,59 @@ func FuzzChecksumMatchesNormalize(f *testing.F) {
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+func TestParseExecutesOriginalText(t *testing.T) {
+	sc, err := Parse([]byte("INSERT INTO t VALUES ('line1   \r\nline2');\r\n"), Up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sc.Up.Statements(Lexical{})
+	if want := "INSERT INTO t VALUES ('line1   \nline2')"; len(got) != 1 || got[0] != want {
+		t.Fatalf("statement = %q, want %q (trailing spaces in literals must survive)", got, want)
+	}
+	if text := sc.Up.Text(); !strings.Contains(text, "line1   \n") {
+		t.Fatalf("Text() = %q", text)
+	}
+}
+
+func TestParseAllowsBlockCommentPreamble(t *testing.T) {
+	for _, pre := range []string{"/* header */\n", "# mysql header\n", "-- header\n\n"} {
+		sc, err := Parse([]byte(pre+"-- +migrate Up\nSELECT 1;"), Up)
+		if err != nil || sc.Up.Empty(Lexical{}) {
+			t.Errorf("preamble %q: %v", pre, err)
+		}
+	}
+}
+
+func TestSplitMySQLComments(t *testing.T) {
+	lx := Lexical{Backticks: true, HashComments: true, BackslashEscapes: true, MySQLComments: true}
+	got := Split("UPDATE t SET a=a--1;\nUPDATE u SET b=1;\n/*!40014 SET FOREIGN_KEY_CHECKS=0 */;\n/* plain */;", lx)
+	want := []string{"UPDATE t SET a=a--1", "UPDATE u SET b=1", "/*!40014 SET FOREIGN_KEY_CHECKS=0 */"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Split = %q, want %q", got, want)
+	}
+}
+
+func TestSectionEmptyUsesDialect(t *testing.T) {
+	sc, err := Parse([]byte("-- +migrate Up\nSELECT 1;\n-- +migrate Down\n# only a mysql comment\n"), Up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sc.Down.Empty(Lexical{HashComments: true}) {
+		t.Error("a '#' comment is not a statement on MySQL")
+	}
+}
+
+func TestIsTransactionControl(t *testing.T) {
+	for stmt, want := range map[string]bool{
+		"BEGIN": true, "begin transaction": true, "START TRANSACTION": true, "COMMIT": true,
+		"END": true, "ROLLBACK": true, "-- note\nCOMMIT": true, "/* x */ commit work": true, "ABORT": true,
+		"ROLLBACK TO SAVEPOINT s": false, "SAVEPOINT s": false, "CREATE TABLE begin_log (id INT)": false,
+		"DO $$ BEGIN PERFORM 1; END $$": false, "START REPLICA": false, "": false,
+	} {
+		if got := IsTransactionControl(stmt); got != want {
+			t.Errorf("IsTransactionControl(%q) = %v, want %v", stmt, got, want)
+		}
+	}
 }

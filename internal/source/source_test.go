@@ -90,10 +90,10 @@ func TestLoad_OrderAndFormats(t *testing.T) {
 		t.Errorf("description = %q", got)
 	}
 	pair := byVersion["20"]
-	if pair.Script.Down.Empty() || pair.Name != "sub/20_pair.up.sql | sub/20_pair.down.sql" {
+	if pair.Script.Down.Empty(anyComment) || pair.Name != "sub/20_pair.up.sql | sub/20_pair.down.sql" {
 		t.Errorf("pair = %+v", pair)
 	}
-	if !byVersion["9"].Script.Down.Empty() {
+	if !byVersion["9"].Script.Down.Empty(anyComment) {
 		t.Error("unmarked file must have no down section")
 	}
 }
@@ -140,3 +140,54 @@ func TestChecksumIgnoresLineEndings(t *testing.T) {
 		t.Fatal("checksum must not depend on line endings")
 	}
 }
+
+func TestLoad_ReviewCases(t *testing.T) {
+	files, err := Load(mapFS(map[string]string{
+		"V1_2__flyway_style.sql": "SELECT 1;",
+		"._3_appledouble.sql":    "garbage",
+		"4_idx.up.sql":           "CREATE INDEX CONCURRENTLY i ON t (a);",
+		"4_idx.down.sql":         "-- +goose NO TRANSACTION" + nl + "DROP INDEX CONCURRENTLY i;",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Version != "1.2" {
+		t.Fatalf("files = %+v", files)
+	}
+	if !files[1].Script.NoTx {
+		t.Error("NoTx from the .down.sql file must be kept")
+	}
+
+	for name, fsys := range map[string]map[string]string{
+		"single then down":      {"5_a.sql": "SELECT 1;", "5_a.down.sql": "SELECT 2;"},
+		"one vs one-point-zero": {"1_a.sql": "SELECT 1;", "1.0_b.sql": "SELECT 2;"},
+	} {
+		if _, err := Load(mapFS(fsys)); !errors.Is(err, ErrDuplicateVersion) {
+			t.Errorf("%s: err = %v, want ErrDuplicateVersion", name, err)
+		}
+	}
+	upInDown := map[string]string{"6_a.up.sql": "SELECT 1;", "6_a.down.sql": "-- +migrate Up" + nl + "SELECT 2;"}
+	if _, err := Load(mapFS(upInDown)); !errors.Is(err, ErrUpInDownFile) {
+		t.Errorf("Up section in down file: err = %v", err)
+	}
+}
+
+func TestChecksumCoversUpOnly(t *testing.T) {
+	load := func(files map[string]string) string {
+		t.Helper()
+		fs, err := Load(mapFS(files))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fs[0].Checksum
+	}
+	a := load(map[string]string{"1_a.sql": "-- +migrate Up" + nl + "SELECT 1;" + nl + "-- +migrate Down" + nl + "SELECT 2;"})
+	b := load(map[string]string{"1_a.sql": "-- +migrate Up" + nl + "SELECT 1;" + nl + "-- +migrate Down" + nl + "SELECT 3; -- fixed"})
+	c := load(map[string]string{"1_a.up.sql": "SELECT 1;" + nl, "1_a.down.sql": "SELECT 9;"})
+	if a != b || a != c {
+		t.Fatal("editing Down or switching to a pair must not change the checksum")
+	}
+}
+
+// nl keeps the multi-line fixtures above readable.
+const nl = "\n"

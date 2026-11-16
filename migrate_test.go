@@ -503,3 +503,21 @@ func TestMigrationErrorMessage(t *testing.T) {
 		t.Fatalf("message = %q", msg)
 	}
 }
+
+func TestTransactionControlRejectedInTransactionalMigration(t *testing.T) {
+	db := openDB(t)
+	_, err := New(db, "sqlite", WithFS(files("1_a.sql", "BEGIN;\nCREATE TABLE a (id INTEGER);\nCOMMIT;")))
+	if !errors.Is(err, ErrTransactionControl) {
+		t.Fatalf("err = %v, want ErrTransactionControl", err)
+	}
+	if _, err := New(db, "sqlite", WithFS(files("1_a.sql", "-- +migrate Up notransaction\nBEGIN;\nCREATE TABLE a (id INTEGER);\nCOMMIT;"))); err != nil {
+		t.Fatalf("notransaction migrations may manage their own transaction: %v", err)
+	}
+}
+
+func TestCommentOnlyDownIsIrreversible(t *testing.T) {
+	m := newM(t, openDB(t), files("1_a.sql", "-- +migrate Up\nCREATE TABLE a (id INTEGER);\n-- +migrate Down\n-- nothing to undo\n"))
+	if m.Migrations()[0].Reversible {
+		t.Fatal("a Down section with only comments must not count as reversible")
+	}
+}

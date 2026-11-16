@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
+	"github.com/go-gen-ecosystem/go-migrate/internal/script"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
 
@@ -119,14 +120,21 @@ func (m *Migrator) load() error {
 	}
 	lx := m.dialect.Lexical()
 	for _, f := range files {
+		stmts := [2][]string{f.Script.Up.Statements(lx), f.Script.Down.Statements(lx)}
+		if len(stmts[Up]) == 0 {
+			return fmt.Errorf("%s: %w", f.Name, source.ErrEmptyUp)
+		}
+		if err := m.checkTxControl(f, stmts); err != nil {
+			return err
+		}
 		u := &unit{
 			Migration: Migration{
 				Version: f.Version, Description: f.Description, Repeatable: f.Repeatable,
 				Source: f.Name, Checksum: f.Checksum, NoTx: f.Script.NoTx,
-				Reversible: !f.Script.Down.Empty(),
+				Reversible: len(stmts[Down]) > 0,
 			},
 			kind:  history.KindSQL,
-			stmts: [2][]string{f.Script.Up.Statements(lx), f.Script.Down.Statements(lx)},
+			stmts: stmts,
 		}
 		if f.Repeatable {
 			u.kind = history.KindRepeatable
@@ -176,4 +184,21 @@ func currentUser() string {
 		return u.Username
 	}
 	return "unknown"
+}
+
+// checkTxControl rejects BEGIN/COMMIT/ROLLBACK/... in migrations that run
+// inside a transaction: such a statement would commit part of the migration
+// and silently break atomicity. Mark the migration notransaction instead.
+func (m *Migrator) checkTxControl(f *source.File, stmts [2][]string) error {
+	if f.Script.NoTx || !m.dialect.TransactionalDDL() {
+		return nil
+	}
+	for dir, list := range stmts {
+		for i, s := range list {
+			if script.IsTransactionControl(s) {
+				return fmt.Errorf("%s: %s statement %d (%s): %w", f.Name, Direction(dir), i+1, truncateSQL(s), ErrTransactionControl)
+			}
+		}
+	}
+	return nil
 }

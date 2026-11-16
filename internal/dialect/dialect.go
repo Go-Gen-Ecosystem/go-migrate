@@ -58,7 +58,7 @@ var dialects = map[string]*Dialect{
 	},
 	MySQL: {
 		name:        MySQL,
-		lexical:     script.Lexical{Backticks: true, HashComments: true, BackslashEscapes: true},
+		lexical:     script.Lexical{Backticks: true, HashComments: true, BackslashEscapes: true, MySQLComments: true},
 		quote:       '`',
 		tsType:      "DATETIME(6)",
 		tableSuffix: " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",

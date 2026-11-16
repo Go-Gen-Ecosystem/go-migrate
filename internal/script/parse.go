@@ -40,17 +40,27 @@ type chunk struct {
 	verbatim bool
 }
 
-// Empty reports whether the section has no executable SQL.
-func (s Section) Empty() bool {
+// Empty reports whether the section has no executable SQL under lx.
+func (s Section) Empty(lx Lexical) bool {
 	for _, c := range s.chunks {
 		if c.verbatim && strings.TrimSpace(c.sql) != "" {
 			return false
 		}
-		if !c.verbatim && HasStatement(c.sql, Lexical{}) {
+		if !c.verbatim && HasStatement(c.sql, lx) {
 			return false
 		}
 	}
 	return true
+}
+
+// Text returns the section's source text (markers excluded), the input to
+// the migration checksum.
+func (s Section) Text() string {
+	var b strings.Builder
+	for _, c := range s.chunks {
+		b.WriteString(c.sql)
+	}
+	return b.String()
 }
 
 // Statements returns the section's statements in execution order.
@@ -85,7 +95,9 @@ var directive = regexp.MustCompile(`(?i)^\s*--\s*\+(?:migrate|goose)\s+(\S+)(?:\
 // as entirely belonging to direction def (Up for a single-file migration, or
 // the direction encoded in a paired *.up.sql / *.down.sql file name).
 func Parse(content []byte, def Direction) (Script, error) {
-	text := string(Normalize(content))
+	// Only line endings and the BOM are normalized for execution; trailing
+	// whitespace inside string literals must reach the database unchanged.
+	text := string(lineEndings(content))
 	var (
 		sc        Script
 		cur       *Section
@@ -134,7 +146,7 @@ func Parse(content []byte, def Direction) (Script, error) {
 			if seen[d] {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrDuplicateMarker)
 			}
-			if !markers && hasCode(buf.String()) {
+			if !markers && HasStatement(buf.String(), preambleLexical) {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrContentBeforeMarker)
 			}
 			if !markers {
@@ -183,21 +195,18 @@ func mayBeDirective(line string) bool {
 	return strings.HasPrefix(t, "--") && strings.IndexByte(t, '+') >= 0
 }
 
-// hasCode reports whether text contains anything other than whitespace and
-// '--' line comments.
-func hasCode(text string) bool {
-	for text != "" {
-		var line string
-		line, text, _ = strings.Cut(text, "\n")
-		t := strings.TrimSpace(line)
-		if t != "" && !strings.HasPrefix(t, "--") {
-			return true
-		}
-	}
-	return false
-}
-
 var bom = []byte("\xEF\xBB\xBF")
+
+// preambleLexical recognises every comment style, for checking that only
+// comments precede the first Up/Down marker.
+var preambleLexical = Lexical{HashComments: true}
+
+// lineEndings strips a UTF-8 BOM and converts CRLF/CR to LF.
+func lineEndings(content []byte) []byte {
+	content = bytes.TrimPrefix(content, bom)
+	content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	return bytes.ReplaceAll(content, []byte("\r"), []byte("\n"))
+}
 
 // Normalize strips a UTF-8 BOM, converts CRLF/CR line endings to LF and trims
 // trailing whitespace from every line, so that the same file checked out on
@@ -257,3 +266,50 @@ func writeNormalized(w io.Writer, p []byte) {
 }
 
 var newline = []byte{'\n'}
+
+// IsTransactionControl reports whether stmt starts a, or ends the current,
+// transaction (BEGIN, START TRANSACTION, COMMIT, END, ROLLBACK, ABORT). Such
+// a statement inside a migration that runs in a transaction would silently
+// commit part of it and break atomicity. ROLLBACK TO a savepoint is allowed.
+func IsTransactionControl(stmt string) bool {
+	words := strings.Fields(strings.ToUpper(skipLeadingComments(stmt)))
+	if len(words) == 0 {
+		return false
+	}
+	switch words[0] {
+	case "BEGIN", "COMMIT", "END", "ABORT":
+		return true
+	case "START":
+		return len(words) > 1 && words[1] == "TRANSACTION"
+	case "ROLLBACK":
+		for _, w := range words[1:] {
+			if w == "TO" {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func skipLeadingComments(s string) string {
+	for {
+		s = strings.TrimLeft(s, " \t\r\n")
+		switch {
+		case strings.HasPrefix(s, "--"), strings.HasPrefix(s, "#"):
+			_, rest, ok := strings.Cut(s, "\n")
+			if !ok {
+				return ""
+			}
+			s = rest
+		case strings.HasPrefix(s, "/*"):
+			_, rest, ok := strings.Cut(s[2:], "*/")
+			if !ok {
+				return ""
+			}
+			s = rest
+		default:
+			return s
+		}
+	}
+}

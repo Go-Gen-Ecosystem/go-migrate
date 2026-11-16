@@ -29,6 +29,7 @@ var (
 	ErrDuplicateVersion = errors.New("duplicate migration version")
 	ErrMissingUp        = errors.New("down migration has no matching up migration")
 	ErrEmptyUp          = errors.New("migration has no up SQL")
+	ErrUpInDownFile     = errors.New("a .down.sql file must not contain an Up section")
 )
 
 // File is one discovered migration (a single file or an up/down pair).
@@ -42,6 +43,10 @@ type File struct {
 	Checksum string
 	Script   script.Script
 }
+
+// flywayName matches Flyway's V<version>__<description>.sql, where '_' in
+// the version is a segment separator (V1_2__x.sql is version 1.2).
+var flywayName = regexp.MustCompile(`(?i)^v(\d+(?:[._]\d+)*)__(.+?)(\.up|\.down)?\.sql$`)
 
 var fileName = regexp.MustCompile(`(?i)^(?:v?(\d+(?:\.\d+)*)|(r))(?:_{1,2}(.*?))?(\.up|\.down)?\.sql$`)
 
@@ -70,7 +75,8 @@ func Load(fsys fs.FS) ([]*File, error) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(path.Ext(p), ".sql") {
+		// Skip non-SQL and hidden files (e.g. macOS "._001_init.sql").
+		if !strings.EqualFold(path.Ext(p), ".sql") || strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
 		return addFile(fsys, p, groups)
@@ -87,14 +93,16 @@ func Load(fsys fs.FS) ([]*File, error) {
 		}
 		files = append(files, f)
 	}
-	sort.Slice(files, func(i, j int) bool { return less(files[i], files[j]) })
+	sort.SliceStable(files, func(i, j int) bool { return less(files[i], files[j]) })
 	return files, nil
 }
 
 func addFile(fsys fs.FS, p string, groups map[string]*pair) error {
 	base := path.Base(p)
-	m := fileName.FindStringSubmatch(base)
-	if m == nil {
+	var m []string
+	if fm := flywayName.FindStringSubmatch(base); fm != nil {
+		m = []string{fm[0], strings.ReplaceAll(fm[1], "_", "."), "", fm[2], fm[3]}
+	} else if m = fileName.FindStringSubmatch(base); m == nil {
 		return fmt.Errorf("%s: %w", p, ErrBadFileName)
 	}
 	content, err := fs.ReadFile(fsys, p)
@@ -123,8 +131,8 @@ func addFile(fsys fs.FS, p string, groups map[string]*pair) error {
 		}
 		g.up, g.upName = content, p
 	case ".down":
-		if g.down != nil {
-			return dup(p, g.downName)
+		if g.down != nil || g.single {
+			return dup(p, g.downName+g.upName)
 		}
 		g.down, g.downName = content, p
 	default:
@@ -154,10 +162,8 @@ func (g *pair) build() (*File, error) {
 	var err error
 	if g.single {
 		f.Script, err = script.Parse(g.up, script.Up)
-		f.Checksum = script.Checksum(g.up)
 	} else {
 		f.Script, err = parsePair(g.up, g.down)
-		f.Checksum = script.Checksum(g.up, g.down)
 		if g.down != nil {
 			f.Name = g.upName + " | " + g.downName
 		}
@@ -165,9 +171,12 @@ func (g *pair) build() (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", f.Name, err)
 	}
-	if f.Script.Up.Empty() {
+	if f.Script.Up.Empty(anyComment) {
 		return nil, fmt.Errorf("%s: %w", f.Name, ErrEmptyUp)
 	}
+	// Only the Up section is checksummed: fixing a Down section or adding a
+	// missing .down.sql to an applied migration is not drift.
+	f.Checksum = script.Checksum([]byte(f.Script.Up.Text()))
 	return f, nil
 }
 
@@ -181,7 +190,11 @@ func parsePair(up, down []byte) (script.Script, error) {
 		if err != nil {
 			return script.Script{}, err
 		}
+		if !d.Up.Empty(anyComment) {
+			return script.Script{}, ErrUpInDownFile
+		}
 		u.Down = d.Down
+		u.NoTx = u.NoTx || d.NoTx
 	}
 	return u, nil
 }
@@ -193,11 +206,15 @@ func less(a, b *File) bool {
 	if a.Repeatable {
 		return strings.ToLower(a.Description) < strings.ToLower(b.Description)
 	}
-	return Compare(a.Version, b.Version) < 0
+	if c := Compare(a.Version, b.Version); c != 0 {
+		return c < 0
+	}
+	return a.Name < b.Name
 }
 
-// Canonical strips insignificant leading zeros from every dot-separated
-// segment: "001" -> "1", "1.02" -> "1.2", "0" -> "0".
+// Canonical strips insignificant zeros so that versions that compare equal
+// have one spelling: leading zeros per segment and trailing ".0" segments go
+// ("001" -> "1", "1.02" -> "1.2", "1.0" -> "1", "0.0" -> "0").
 func Canonical(v string) string {
 	segs := strings.Split(v, ".")
 	for i, s := range segs {
@@ -207,8 +224,15 @@ func Canonical(v string) string {
 			segs[i] = "0"
 		}
 	}
+	for len(segs) > 1 && segs[len(segs)-1] == "0" {
+		segs = segs[:len(segs)-1]
+	}
 	return strings.Join(segs, ".")
 }
+
+// anyComment recognises every comment style; used for structural checks
+// that do not depend on the target dialect.
+var anyComment = script.Lexical{HashComments: true}
 
 // Compare orders two canonical versions numerically per segment without
 // integer conversion, so arbitrarily long timestamps never overflow.

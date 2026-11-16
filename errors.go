@@ -23,6 +23,9 @@ var (
 	// ErrOutOfOrder means a pending migration has a lower version than the
 	// latest applied one; enable WithAllowOutOfOrder to apply it anyway.
 	ErrOutOfOrder = errors.New("pending migration is older than the latest applied version")
+	// ErrTransactionControl means a migration that runs in a transaction
+	// contains BEGIN/COMMIT/ROLLBACK; mark it "-- +migrate Up notransaction".
+	ErrTransactionControl = errors.New("transaction control statement in a transactional migration (use notransaction)")
 	// ErrInvalidVersion means a version is not numeric (digits, optionally dot-separated).
 	ErrInvalidVersion = errors.New("invalid version")
 	// ErrVersionNotFound means a requested target version does not exist.

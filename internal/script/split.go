@@ -18,6 +18,9 @@ type Lexical struct {
 	HashComments bool
 	// BackslashEscapes lets '\' escape the next character inside strings (MySQL default mode).
 	BackslashEscapes bool
+	// MySQLComments makes "--" a comment only when followed by whitespace,
+	// and treats /*! ... */ and /*+ ... */ as executable (MySQL rules).
+	MySQLComments bool
 }
 
 // Split returns the statements in sql, trimmed, without the terminating ';'.
@@ -66,11 +69,15 @@ func (s *splitter) run() []string {
 		case c == '`' && s.lx.Backticks:
 			s.hasCode = true
 			i = skipQuoted(src, i, '`', false)
-		case c == '-' && i+1 < len(src) && src[i+1] == '-':
+		case c == '-' && i+1 < len(src) && src[i+1] == '-' &&
+			(!s.lx.MySQLComments || i+2 >= len(src) || isSpace(src[i+2])):
 			i = skipLine(src, i)
 		case c == '#' && s.lx.HashComments:
 			i = skipLine(src, i)
 		case c == '/' && i+1 < len(src) && src[i+1] == '*':
+			if s.lx.MySQLComments && i+2 < len(src) && (src[i+2] == '!' || src[i+2] == '+') {
+				s.hasCode = true // executable comment or optimizer hint
+			}
 			i = skipBlock(src, i)
 		case c == '$' && s.lx.DollarQuotes:
 			s.hasCode = true
