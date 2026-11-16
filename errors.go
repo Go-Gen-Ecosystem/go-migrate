@@ -3,6 +3,7 @@ package migrate
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 )
@@ -74,10 +75,17 @@ func (e *MigrationError) Unwrap() []error {
 	return []error{e.Err}
 }
 
+// truncateSQL returns a one-line excerpt of a statement for error messages:
+// leading comment lines are skipped (they usually repeat the file header),
+// whitespace is collapsed and the result is capped at maxSQLInError runes.
 func truncateSQL(s string) string {
-	r := []rune(s)
+	lines := strings.Split(s, "\n")
+	for len(lines) > 1 && strings.HasPrefix(strings.TrimSpace(lines[0]), "--") {
+		lines = lines[1:]
+	}
+	r := []rune(strings.Join(strings.Fields(strings.Join(lines, " ")), " "))
 	if len(r) <= maxSQLInError {
-		return s
+		return string(r)
 	}
 	return string(r[:maxSQLInError]) + "…"
 }

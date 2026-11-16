@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/go-gen-ecosystem/halolog"
+	jsonfmt "github.com/go-gen-ecosystem/halolog/adapters/formatters/json"
+	textfmt "github.com/go-gen-ecosystem/halolog/adapters/formatters/text"
 	"github.com/go-gen-ecosystem/halolog/adapters/outputs/console"
 	"github.com/go-gen-ecosystem/halolog/core"
 	"github.com/go-gen-ecosystem/halolog/types"
@@ -27,6 +29,7 @@ type globals struct {
 	configPath string
 	overrides  config.Overrides
 	logLevel   string
+	logFormat  string
 	stderr     io.Writer
 	getenv     func(string) (string, bool)
 }
@@ -53,6 +56,7 @@ func newRoot(version string, stderr io.Writer, getenv func(string) (string, bool
 	pf.StringVar(&g.overrides.Dir, "dir", "", "migrations directory")
 	pf.StringVar(&g.overrides.Table, "table", "", "history table (name or schema.name)")
 	pf.StringVar(&g.logLevel, "log-level", "info", "debug | info | warn | error")
+	pf.StringVar(&g.logFormat, "log-format", "text", "text | json (logs go to stderr)")
 
 	root.AddCommand(
 		newInitCmd(g), newCreateCmd(g), newUpCmd(g), newDownCmd(g), newRedoCmd(g),
@@ -128,7 +132,16 @@ func (g *globals) logger() (halolog.Logger, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid --log-level %q (debug, info, warn, error)", g.logLevel)
 	}
-	return core.New().Component("gomigrate").Level(lvl).Adapter(console.NewWithWriter(g.stderr, nil)).Build()
+	var formatter types.Formatter
+	switch strings.ToLower(g.logFormat) {
+	case "text":
+		formatter = textfmt.NewTextFormatter()
+	case "json":
+		formatter = jsonfmt.NewJsonFormatter()
+	default:
+		return nil, fmt.Errorf("invalid --log-format %q (text, json)", g.logFormat)
+	}
+	return core.New().Component("gomigrate").Level(lvl).Adapter(console.NewWithWriter(g.stderr, formatter)).Build()
 }
 
 // withSession opens a session, runs fn, and always closes the database.
