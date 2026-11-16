@@ -92,6 +92,8 @@ type Info struct {
 	InstalledOn   time.Time
 	InstalledBy   string
 	ExecutionTime time.Duration
+	// Tag is the release tag on this migration, if any (see Migrator.Tag).
+	Tag string
 }
 
 // Status is a read-only snapshot of the database's migration state.

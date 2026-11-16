@@ -39,6 +39,8 @@ var (
 	// ErrPreconditionFailed means a migration's precondition with
 	// onFail=HALT did not hold; nothing of that migration ran.
 	ErrPreconditionFailed = errors.New("precondition failed")
+	// ErrTagNotFound means no applied migration carries the requested tag.
+	ErrTagNotFound = errors.New("tag not found")
 	// ErrInvalidVersion means a version is not numeric (digits, optionally dot-separated).
 	ErrInvalidVersion = errors.New("invalid version")
 	// ErrVersionNotFound means a requested target version does not exist.

@@ -136,6 +136,7 @@ func fillApplied(info *Info, r *history.Record) {
 	info.InstalledOn = r.InstalledOn
 	info.InstalledBy = r.InstalledBy
 	info.ExecutionTime = time.Duration(r.ExecutionMS) * time.Millisecond
+	info.Tag = r.Tag
 }
 
 // planUp returns the migrations Up (or UpTo target) would apply.
@@ -164,6 +165,7 @@ func (m *Migrator) planUp(s *snapshot, target string) ([]*unit, error) {
 type downSelector struct {
 	steps int
 	to    string
+	tag   string
 }
 
 // planDown returns the migrations to roll back, newest application first.
@@ -179,6 +181,17 @@ func (m *Migrator) planDown(s *snapshot, sel downSelector) ([]*unit, error) {
 		}
 	}
 
+	if sel.tag != "" {
+		sel.to = ""
+		for i := range s.records {
+			if s.records[i].Tag == sel.tag {
+				sel.to = s.records[i].Version
+			}
+		}
+		if sel.to == "" {
+			return nil, fmt.Errorf("tag %q: %w", sel.tag, ErrTagNotFound)
+		}
+	}
 	var chosen []*history.Record
 	if sel.to != "" {
 		t := source.Canonical(sel.to)

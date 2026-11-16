@@ -68,6 +68,45 @@ func (m *Migrator) DownTo(ctx context.Context, version string) (*Result, error) 
 	return m.down(ctx, downSelector{to: version})
 }
 
+// DownToTag rolls back every migration applied after the one carrying tag
+// (Liquibase "rollback to tag").
+func (m *Migrator) DownToTag(ctx context.Context, tag string) (*Result, error) {
+	if tag == "" {
+		return nil, fmt.Errorf("empty tag: %w", ErrTagNotFound)
+	}
+	return m.down(ctx, downSelector{tag: tag})
+}
+
+// Tag labels the most recently applied migration with tag (for example a
+// release name), so DownToTag can return to this point later. Tags are
+// unique: tagging again moves the tag.
+func (m *Migrator) Tag(ctx context.Context, tag string) error {
+	if tag == "" || len(tag) > maxDescription {
+		return fmt.Errorf("tag must be 1-%d characters", maxDescription)
+	}
+	return m.locked(ctx, func(ctx context.Context, r *runner) error {
+		s, err := r.snapshot(ctx)
+		if err != nil {
+			return err
+		}
+		for i := len(s.records) - 1; i >= 0; i-- {
+			rec := &s.records[i]
+			if rec.Success && rec.Kind != history.KindRepeatable {
+				tx, err := r.conn.BeginTx(ctx, nil)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = tx.Rollback() }()
+				if err := r.store.Tag(ctx, tx, rec.Version, tag); err != nil {
+					return err
+				}
+				return tx.Commit()
+			}
+		}
+		return fmt.Errorf("nothing applied to tag: %w", ErrNotEnoughApplied)
+	})
+}
+
 // Redo rolls back the most recently applied migration and applies it again,
 // under a single lock so no other run can interleave. The Result lists the
 // re-applied migration.

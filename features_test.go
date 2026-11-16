@@ -157,6 +157,46 @@ func TestSQLCallbacks(t *testing.T) {
 	eq(t, got, []string{"before", "each", "each", "after", "before", "error"})
 }
 
+func TestTagsAndStatements(t *testing.T) {
+	ctx := context.Background()
+	m := newM(t, openDB(t), basic, WithPlaceholders(map[string]string{}))
+	if _, err := m.UpTo(ctx, "9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Tag(ctx, "release-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := m.Status(ctx)
+	if st.Migrations[0].Tag != "release-1" || st.Migrations[1].Tag != "" {
+		t.Fatalf("tags = %q, %q", st.Migrations[0].Tag, st.Migrations[1].Tag)
+	}
+	plan, err := m.PlanDownToTag(ctx, "release-1")
+	if err != nil || len(plan) != 2 {
+		t.Fatalf("PlanDownToTag = %v, %v", plan, err)
+	}
+	stmts := m.Statements(plan[0], Down)
+	if len(stmts) != 1 || stmts[0] != "DROP TABLE eleven" {
+		t.Fatalf("Statements = %q", stmts)
+	}
+	res, err := m.DownToTag(ctx, "release-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, versions(res), []string{"11", "10"})
+	if _, err := m.DownToTag(ctx, "nope"); !errors.Is(err, ErrTagNotFound) {
+		t.Fatalf("unknown tag = %v", err)
+	}
+	if err := m.Tag(ctx, "release-1"); err != nil {
+		t.Fatalf("re-tagging moves the tag: %v", err)
+	}
+	if got := m.Statements(Migration{Version: "404"}, Up); got != nil {
+		t.Fatalf("unknown migration = %q", got)
+	}
+}
+
 func TestBaselineOnMigrate(t *testing.T) {
 	ctx := context.Background()
 	fsys := files("1_a.sql", "CREATE TABLE a (id INTEGER);", "2_b.sql", "CREATE TABLE b (id INTEGER);", "3_c.sql", "CREATE TABLE c (id INTEGER);")

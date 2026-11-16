@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
@@ -64,6 +66,29 @@ func (m *Migrator) PlanDownTo(ctx context.Context, version string) ([]Migration,
 		return nil, fmt.Errorf("empty target: %w", ErrVersionNotFound)
 	}
 	return m.planDownRead(ctx, downSelector{to: version})
+}
+
+// PlanDownToTag returns what DownToTag(tag) would roll back, without doing it.
+func (m *Migrator) PlanDownToTag(ctx context.Context, tag string) ([]Migration, error) {
+	if tag == "" {
+		return nil, fmt.Errorf("empty tag: %w", ErrTagNotFound)
+	}
+	return m.planDownRead(ctx, downSelector{tag: tag})
+}
+
+// Statements returns the SQL that mig runs in direction dir, after
+// placeholder substitution, exactly as it would be executed (Liquibase
+// updateSQL). Go migrations and unknown migrations return nil.
+func (m *Migrator) Statements(mig Migration, dir Direction) []string {
+	key := mig.Version
+	if mig.Repeatable {
+		key = history.RepeatablePrefix + strings.ToLower(mig.Description)
+	}
+	u, ok := m.byKey[key]
+	if !ok {
+		return nil
+	}
+	return slices.Clone(u.stmts[dir])
 }
 
 func (m *Migrator) planDownRead(ctx context.Context, sel downSelector) ([]Migration, error) {

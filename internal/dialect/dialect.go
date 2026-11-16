@@ -187,6 +187,7 @@ func (d *Dialect) HistoryDDL(t Table) string {
 		"  installed_on " + d.tsType + " NOT NULL,\n" +
 		"  execution_ms BIGINT NOT NULL,\n" +
 		"  success BOOLEAN NOT NULL,\n" +
+		"  tag VARCHAR(255) NULL,\n" +
 		"  CONSTRAINT " + q + t.Name + "_version_uk" + q + " UNIQUE (version)\n" +
 		")" + d.tableSuffix
 }

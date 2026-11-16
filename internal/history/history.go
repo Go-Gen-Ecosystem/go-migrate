@@ -9,6 +9,7 @@ package history
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -48,6 +49,8 @@ type Record struct {
 	InstalledOn time.Time
 	ExecutionMS int64
 	Success     bool
+	// Tag is a release label set by Store.Tag (Liquibase tags); "" if none.
+	Tag string
 }
 
 const columns = "installed_rank, version, description, kind, script, checksum, installed_by, installed_on, execution_ms, success"
@@ -62,14 +65,14 @@ type Store struct {
 }
 
 type queries struct {
-	list, nextRank, insert, complete, markDirty, reapply, realign, delete, deleteFailed string
+	list, nextRank, insert, complete, markDirty, reapply, realign, delete, deleteFailed, clearTag, setTag string
 }
 
 // New returns a store for table t on dialect d.
 func New(d *dialect.Dialect, t dialect.Table) *Store {
 	q, p := d.Quote(t), d.Placeholder
 	return &Store{d: d, table: t, sql: queries{
-		list:      "SELECT " + columns + " FROM " + q + " ORDER BY installed_rank",
+		list:      "SELECT " + columns + ", tag FROM " + q + " ORDER BY installed_rank",
 		nextRank:  "SELECT COALESCE(MAX(installed_rank), 0) + 1 FROM " + q,
 		insert:    "INSERT INTO " + q + " (" + columns + ") VALUES (" + d.Placeholders(10) + ")",
 		complete:  "UPDATE " + q + " SET success = " + p(1) + ", execution_ms = " + p(2) + " WHERE version = " + p(3),
@@ -80,6 +83,8 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 		realign:      "UPDATE " + q + " SET checksum = " + p(1) + ", kind = " + p(2) + " WHERE version = " + p(3),
 		delete:       "DELETE FROM " + q + " WHERE version = " + p(1),
 		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
+		clearTag:     "UPDATE " + q + " SET tag = NULL WHERE tag = " + p(1),
+		setTag:       "UPDATE " + q + " SET tag = " + p(1) + " WHERE version = " + p(2),
 	}}
 }
 
@@ -109,11 +114,13 @@ func (s *Store) List(ctx context.Context, q Querier) ([]Record, error) {
 	for rows.Next() {
 		var r Record
 		var kind string
+		var tag sql.NullString
 		if err := rows.Scan(&r.Rank, &r.Version, &r.Description, &kind, &r.Script, &r.Checksum,
-			&r.InstalledBy, timestamp{&r.InstalledOn}, &r.ExecutionMS, &r.Success); err != nil {
+			&r.InstalledBy, timestamp{&r.InstalledOn}, &r.ExecutionMS, &r.Success, &tag); err != nil {
 			return nil, fmt.Errorf("scan history: %w", err)
 		}
 		r.Kind = Kind(kind)
+		r.Tag = tag.String
 		r.InstalledOn = r.InstalledOn.UTC()
 		out = append(out, r)
 	}
@@ -205,4 +212,13 @@ func (s *Store) exec(ctx context.Context, q Querier, query string, args ...any) 
 // Now returns the current time in the precision every dialect can store.
 func Now() time.Time {
 	return time.Now().UTC().Truncate(time.Microsecond)
+}
+
+// Tag moves tag to version: tags are unique, so any row already carrying it
+// is cleared first. Run both statements in one transaction or under the lock.
+func (s *Store) Tag(ctx context.Context, q Querier, version, tag string) error {
+	if _, err := q.ExecContext(ctx, s.sql.clearTag, tag); err != nil {
+		return fmt.Errorf("clear tag %s: %w", tag, err)
+	}
+	return s.exec(ctx, q, s.sql.setTag, tag, version)
 }
