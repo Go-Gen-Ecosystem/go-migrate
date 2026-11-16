@@ -21,7 +21,7 @@ func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
-	in := m.plan.inspect(s)
+	in := m.plan.inspect(s, true)
 	return &Status{
 		Current:    s.latest,
 		Dirty:      len(s.dirty) > 0,
@@ -38,7 +38,7 @@ func (m *Migrator) Validate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(m.plan.inspect(s).problems...)
+	return errors.Join(m.plan.inspect(s, false).problems...)
 }
 
 // Plan returns what Up (target == "") or UpTo(target) would apply, without

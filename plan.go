@@ -61,68 +61,69 @@ type planner struct {
 	allowMissing bool
 }
 
-// inspect classifies every migration against s.
-func (p planner) inspect(s *snapshot) inspection {
-	in := inspection{infos: make([]Info, 0, len(p.cat.units)+len(s.records))}
+// inspect classifies every migration against s, collecting display rows only
+// for Status.
+func (p planner) inspect(s *snapshot, withStatus bool) inspection {
+	var in inspection
+	if withStatus {
+		in.infos = make([]Info, 0, len(p.cat.units)+len(s.records))
+	}
 	for _, v := range s.dirty {
 		in.problems = append(in.problems, fmt.Errorf("version %s: %w", v, ErrDirty))
 	}
 	for _, u := range p.cat.units {
-		info := Info{Migration: u.Migration}
 		rec := s.byKey[u.key]
-		if rec != nil {
-			fillApplied(&info, rec)
-		}
+		var state State
 		switch {
 		case rec != nil && !rec.Success:
-			info.State = StateFailed
+			state = StateFailed
 		case rec != nil && rec.Kind == history.KindBaseline:
-			info.State = StateBaseline
+			state = StateBaseline
 		case u.skipped && (rec == nil || u.Repeatable):
-			info.State = StateSkipped
+			state = StateSkipped
 		case u.Repeatable && u.runAlways && rec != nil:
-			info.State = StateRunAlways
+			state = StateRunAlways
 			in.pending = append(in.pending, u)
 			in.always++
 		case u.Repeatable && rec == nil:
-			info.State = StatePending
+			state = StatePending
 			in.pending = append(in.pending, u)
 		case u.Repeatable && rec.Checksum != u.Checksum:
-			info.State = StateOutdated
+			state = StateOutdated
 			in.pending = append(in.pending, u)
 		case rec != nil && drifted(u, rec):
-			info.State = StateModified
+			state = StateModified
 			in.problems = append(in.problems, fmt.Errorf("version %s (%s): %w", u.Version, u.Source, ErrChecksumMismatch))
 		case rec != nil && rec.Kind == history.KindMarked:
-			info.State = StateMarkedRan
+			state = StateMarkedRan
 		case rec != nil:
-			info.State = StateApplied
+			state = StateApplied
 		case s.baseline != "" && source.Compare(u.Version, s.baseline) <= 0:
-			info.State = StateBelowBase
+			state = StateBelowBase
 		case s.latest != "" && source.Compare(u.Version, s.latest) < 0 && !p.allowOOO && !u.retryable:
-			info.State = StateOutOfOrder
+			state = StateOutOfOrder
 			in.problems = append(in.problems, fmt.Errorf("version %s (latest applied %s): %w", u.Version, s.latest, ErrOutOfOrder))
 		default:
-			info.State = StatePending
+			state = StatePending
 			in.pending = append(in.pending, u)
 		}
-		in.infos = append(in.infos, info)
+		if withStatus {
+			in.addInfo(u.Migration, state, rec)
+		}
 	}
 	for i := range s.records {
 		r := &s.records[i]
 		if _, known := p.cat.byKey[r.Version]; known || r.Kind == history.KindBaseline {
 			continue
 		}
-		info := Info{
-			Migration: Migration{Version: r.Version, Description: r.Description, Source: r.Script,
-				Checksum: r.Checksum, Repeatable: r.Kind == history.KindRepeatable},
-			State: StateMissing,
+		if withStatus {
+			migration := Migration{Version: r.Version, Description: r.Description, Source: r.Script,
+				Checksum: r.Checksum, Repeatable: r.Kind == history.KindRepeatable}
+			if migration.Repeatable {
+				migration.Version = ""
+			}
+			in.addInfo(migration, StateMissing, r)
 		}
-		if info.Repeatable {
-			info.Version = ""
-		}
-		fillApplied(&info, r)
-		in.infos = append(in.infos, info)
 		if !p.allowMissing {
 			in.problems = append(in.problems, fmt.Errorf("version %s (%s): %w", r.Version, r.Script, ErrMissingMigration))
 		}
@@ -130,16 +131,20 @@ func (p planner) inspect(s *snapshot) inspection {
 	return in
 }
 
-func fillApplied(info *Info, r *history.Record) {
-	info.InstalledOn = r.InstalledOn
-	info.InstalledBy = r.InstalledBy
-	info.ExecutionTime = time.Duration(r.ExecutionMS) * time.Millisecond
-	info.Tag = r.Tag
+func (in *inspection) addInfo(m Migration, state State, r *history.Record) {
+	info := Info{Migration: m, State: state}
+	if r != nil {
+		info.InstalledOn = r.InstalledOn
+		info.InstalledBy = r.InstalledBy
+		info.ExecutionTime = time.Duration(r.ExecutionMS) * time.Millisecond
+		info.Tag = r.Tag
+	}
+	in.infos = append(in.infos, info)
 }
 
 // up returns the migrations Up (or UpTo target) would apply.
 func (p planner) up(s *snapshot, target string) ([]*unit, error) {
-	in := p.inspect(s)
+	in := p.inspect(s, false)
 	if len(in.problems) > 0 {
 		return nil, errors.Join(in.problems...)
 	}
