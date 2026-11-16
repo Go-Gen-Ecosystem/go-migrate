@@ -11,3 +11,37 @@ jobs:
     uses: go-gen-ecosystem/.github/.github/workflows/reusable-go-ci.yml@main
     with:
       coverage-threshold: 70
+
+  # Dialect conformance against real databases: lifecycle, transactional vs
+  # dirty failure semantics, dialect-specific SQL, and concurrent runs that
+  # must apply each migration exactly once (proves the advisory locks).
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GOMIGRATE_TEST_POSTGRES_DSN: postgres://postgres:pw@localhost:5432/postgres?sslmode=disable
+      GOMIGRATE_TEST_MYSQL_DSN: root:pw@tcp(localhost:3306)/
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: pw
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: pw
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ppw" --health-interval 2s --health-timeout 5s --health-retries 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Conformance (PostgreSQL, MySQL, SQLite) with race detector
+        run: go test ./... -race -count=1 -coverpkg=./... -coverprofile=coverage.out
+      - name: Coverage
+        run: go tool cover -func=coverage.out | tail -1

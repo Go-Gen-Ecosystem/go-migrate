@@ -1,68 +1,21 @@
-version: '3.8'
-
+# Databases for the dialect conformance suite (`make test-integration`).
 services:
-  postgres-test:
-    image: postgres:15-alpine
-    container_name: migrations-postgres-test
+  postgres:
+    image: postgres:17-alpine
     environment:
-      POSTGRES_DB: migrations_test
-      POSTGRES_USER: test_user
-      POSTGRES_PASSWORD: test_password
-      POSTGRES_HOST_AUTH_METHOD: trust
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_test_data:/var/lib/postgresql/data
-      - ./tests/integration/fixtures/postgres:/docker-entrypoint-initdb.d
+      POSTGRES_PASSWORD: pw
+    ports: ["55432:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U test_user -d migrations_test"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - migrations-test
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 30
 
-  mysql-test:
-    image: mysql:8.0
-    container_name: migrations-mysql-test
+  mysql:
+    image: mysql:8.4
     environment:
-      MYSQL_DATABASE: migrations_test
-      MYSQL_USER: test_user
-      MYSQL_PASSWORD: test_password
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_ALLOW_EMPTY_PASSWORD: "no"
-    ports:
-      - "3307:3306"
-    volumes:
-      - mysql_test_data:/var/lib/mysql
-      - ./tests/integration/fixtures/mysql:/docker-entrypoint-initdb.d
+      MYSQL_ROOT_PASSWORD: pw
+    ports: ["53306:3306"]
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "test_user", "-ptest_password"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - migrations-test
-
-  # SQLite doesn't need a container as it's file-based
-  # We'll use a shared volume for SQLite test databases
-  sqlite-test:
-    image: alpine:latest
-    container_name: migrations-sqlite-test
-    volumes:
-      - sqlite_test_data:/data
-    command: ["tail", "-f", "/dev/null"]
-    networks:
-      - migrations-test
-
-volumes:
-  postgres_test_data:
-    driver: local
-  mysql_test_data:
-    driver: local
-  sqlite_test_data:
-    driver: local
-
-networks:
-  migrations-test:
-    driver: bridge
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ppw"]
+      interval: 2s
+      retries: 60
