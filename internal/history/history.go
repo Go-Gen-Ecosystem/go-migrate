@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package history persists which migrations have been applied.
 //
 // The schema mirrors Flyway's: one row per applied version (repeatable

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package source discovers migration files in an fs.FS.
 //
 // Accepted file names (case-insensitive prefix and extension):

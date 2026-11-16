@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package config loads the gomigrate CLI configuration and opens the
 // database it describes.
 //

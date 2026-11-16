@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package compare benchmarks go-migrate against pressly/goose and
 // golang-migrate applying the same migrations to the same pure-Go SQLite
 // database. It is a separate module so competitors never become

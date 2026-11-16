@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// @author Admilson B. F. Cossa
+
 // Package dialect describes the SQL differences between supported databases:
 // identifier quoting, bind placeholders, lexical rules for statement
 // splitting, DDL transactionality, history-table DDL and migration locking.
