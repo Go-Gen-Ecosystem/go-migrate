@@ -141,24 +141,118 @@ func skipBlock(src string, i int) int {
 }
 
 // skipDollar handles a PostgreSQL dollar-quoted body starting at src[i]=='$'.
-// If src[i:] is not an opening tag ($$ or $name$), or the '$' continues an
-// identifier or a positional parameter, only the '$' is consumed.
+// If src[i:] is not an opening tag, only the '$' is consumed.
 func skipDollar(src string, i int) int {
-	if i > 0 && isIdentByte(src[i-1]) {
+	tag := dollarTag(src, i)
+	if tag == "" {
 		return i + 1
+	}
+	if k := strings.Index(src[i+len(tag):], tag); k >= 0 {
+		return i + len(tag) + k + len(tag)
+	}
+	return len(src)
+}
+
+// dollarTag returns the opening tag ($$ or $name$) at src[i], or "" when the
+// '$' continues an identifier or starts a positional parameter ($1).
+func dollarTag(src string, i int) string {
+	if i > 0 && isIdentByte(src[i-1]) {
+		return ""
 	}
 	j := i + 1
 	for j < len(src) && isIdentByte(src[j]) {
 		j++
 	}
 	if j >= len(src) || src[j] != '$' || (j > i+1 && isDigit(src[i+1])) {
-		return i + 1
+		return ""
 	}
-	tag := src[i : j+1]
-	if k := strings.Index(src[j+1:], tag); k >= 0 {
-		return j + 1 + k + len(tag)
+	return src[i : j+1]
+}
+
+// lexState is the lexer state at a line boundary: in code, or inside a
+// string literal, quoted identifier, block comment or dollar-quoted body.
+// Parse carries it from line to line, so text inside SQL (a literal that
+// contains "-- +migrate Down") is never taken for a directive, and trailing
+// whitespace is known to be significant or not.
+type lexState struct {
+	closer    string // what ends the open token; "" in code
+	backslash bool   // '\' escapes the next byte inside the open quote
+	escaped   bool   // the previous byte was an escaping '\'
+}
+
+func (st lexState) inCode() bool { return st.closer == "" }
+
+// line advances st over one line, given without its line break.
+func (st lexState) line(s string, lx Lexical) lexState {
+	for i := 0; i < len(s); {
+		if !st.inCode() {
+			i, st = st.inside(s, i)
+			continue
+		}
+		c := s[i]
+		switch {
+		case c == '\'':
+			st = lexState{closer: "'", backslash: lx.BackslashEscapes || (lx.DollarQuotes && isEStringPrefix(s, i))}
+			i++
+		case c == '"':
+			st = lexState{closer: `"`, backslash: lx.BackslashEscapes}
+			i++
+		case c == '`' && lx.Backticks:
+			st = lexState{closer: "`"}
+			i++
+		case c == '-' && i+1 < len(s) && s[i+1] == '-' && (!lx.MySQLComments || i+2 >= len(s) || isSpace(s[i+2])),
+			c == '#' && lx.HashComments:
+			return st // a line comment ends with the line
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			st = lexState{closer: "*/"}
+			i += 2
+		case c == '$' && lx.DollarQuotes:
+			if tag := dollarTag(s, i); tag != "" {
+				st = lexState{closer: tag}
+				i += len(tag)
+				continue
+			}
+			i++
+		default:
+			i++
+		}
 	}
-	return len(src)
+	return st
+}
+
+// inside consumes s from i while a token is open and returns where code
+// resumes (len(s) if the token continues on the next line).
+func (st lexState) inside(s string, i int) (int, lexState) {
+	if len(st.closer) > 1 { // block comment or dollar-quoted body
+		if j := strings.Index(s[i:], st.closer); j >= 0 {
+			return i + j + len(st.closer), lexState{}
+		}
+		return len(s), st
+	}
+	q := st.closer[0]
+	for ; i < len(s); i++ {
+		if st.escaped {
+			st.escaped = false
+			continue
+		}
+		switch s[i] {
+		case '\\':
+			st.escaped = st.backslash
+		case q:
+			if i+1 < len(s) && s[i+1] == q {
+				i++
+				continue
+			}
+			return i + 1, lexState{}
+		}
+	}
+	return len(s), st
+}
+
+// newline advances st over a line break (which a pending '\' escapes).
+func (st lexState) newline() lexState {
+	st.escaped = false
+	return st
 }
 
 // isEStringPrefix reports whether the quote at src[i] opens a PostgreSQL

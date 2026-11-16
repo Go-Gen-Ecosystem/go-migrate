@@ -5,10 +5,16 @@ package source
 
 import (
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/go-gen-ecosystem/go-migrate/internal/script"
 )
+
+func load(fsys fs.FS) ([]*File, error) { return Load(fsys, script.Lexical{}) }
+func loadAll(fsys fs.FS) (*Set, error) { return LoadAll(fsys, script.Lexical{}) }
 
 func mapFS(files map[string]string) fstest.MapFS {
 	m := fstest.MapFS{}
@@ -63,7 +69,7 @@ func TestLoad_OrderAndFormats(t *testing.T) {
 		"sub/nested/notes.txt":              "ignored",
 		"sub/nested/40_only_up_pair.up.sql": "SELECT 40;",
 	})
-	files, err := Load(fsys)
+	files, err := load(fsys)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -116,7 +122,7 @@ func TestLoad_Errors(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Load(mapFS(tc.files)); !errors.Is(err, tc.want) {
+			if _, err := load(mapFS(tc.files)); !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
 		})
@@ -124,18 +130,18 @@ func TestLoad_Errors(t *testing.T) {
 }
 
 func TestLoad_ParseErrorNamesFile(t *testing.T) {
-	_, err := Load(mapFS(map[string]string{"1_a.sql": "-- +migrate Up\n-- +migrate Up\n"}))
+	_, err := load(mapFS(map[string]string{"1_a.sql": "-- +migrate Up\n-- +migrate Up\n"}))
 	if err == nil || !strings.Contains(err.Error(), "1_a.sql") {
 		t.Fatalf("err = %v, want it to name the file", err)
 	}
 }
 
 func TestChecksumIgnoresLineEndings(t *testing.T) {
-	a, err := Load(mapFS(map[string]string{"1_a.sql": "SELECT 1;\n"}))
+	a, err := load(mapFS(map[string]string{"1_a.sql": "SELECT 1;\n"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Load(mapFS(map[string]string{"1_a.sql": "SELECT 1;\r\n"}))
+	b, err := load(mapFS(map[string]string{"1_a.sql": "SELECT 1;\r\n"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +151,7 @@ func TestChecksumIgnoresLineEndings(t *testing.T) {
 }
 
 func TestLoad_ReviewCases(t *testing.T) {
-	files, err := Load(mapFS(map[string]string{
+	files, err := load(mapFS(map[string]string{
 		"V1_2__flyway_style.sql": "SELECT 1;",
 		"._3_appledouble.sql":    "garbage",
 		"4_idx.up.sql":           "CREATE INDEX CONCURRENTLY i ON t (a);",
@@ -165,12 +171,12 @@ func TestLoad_ReviewCases(t *testing.T) {
 		"single then down":      {"5_a.sql": "SELECT 1;", "5_a.down.sql": "SELECT 2;"},
 		"one vs one-point-zero": {"1_a.sql": "SELECT 1;", "1.0_b.sql": "SELECT 2;"},
 	} {
-		if _, err := Load(mapFS(fsys)); !errors.Is(err, ErrDuplicateVersion) {
+		if _, err := load(mapFS(fsys)); !errors.Is(err, ErrDuplicateVersion) {
 			t.Errorf("%s: err = %v, want ErrDuplicateVersion", name, err)
 		}
 	}
 	upInDown := map[string]string{"6_a.up.sql": "SELECT 1;", "6_a.down.sql": "-- +migrate Up" + nl + "SELECT 2;"}
-	if _, err := Load(mapFS(upInDown)); !errors.Is(err, ErrUpInDownFile) {
+	if _, err := load(mapFS(upInDown)); !errors.Is(err, ErrUpInDownFile) {
 		t.Errorf("Up section in down file: err = %v", err)
 	}
 	// Directives where they would be silently ignored are rejected.
@@ -179,7 +185,7 @@ func TestLoad_ReviewCases(t *testing.T) {
 		"callback":  {"1_a.sql": "SELECT 1;", "beforeMigrate.sql": "-- +migrate DBMS postgres" + nl + "SELECT 1;"},
 	}
 	for name, fsys := range misplaced {
-		if _, err := LoadAll(mapFS(fsys)); !errors.Is(err, ErrMisplacedDirective) {
+		if _, err := loadAll(mapFS(fsys)); !errors.Is(err, ErrMisplacedDirective) {
 			t.Errorf("directive in %s: err = %v, want ErrMisplacedDirective", name, err)
 		}
 	}
@@ -188,7 +194,7 @@ func TestLoad_ReviewCases(t *testing.T) {
 func TestChecksumCoversUpOnly(t *testing.T) {
 	load := func(files map[string]string) string {
 		t.Helper()
-		fs, err := Load(mapFS(files))
+		fs, err := load(mapFS(files))
 		if err != nil {
 			t.Fatal(err)
 		}

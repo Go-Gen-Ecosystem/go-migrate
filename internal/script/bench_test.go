@@ -33,17 +33,19 @@ func BenchmarkParse(b *testing.B) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := Parse(src, Up); err != nil {
+		if _, err := Parse(src, Up, Lexical{}); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
 func BenchmarkChecksum(b *testing.B) {
-	src := []byte(strings.Repeat(benchUnit, 200))
-	b.SetBytes(int64(len(src)))
+	sc, err := Parse([]byte(strings.Repeat(benchUnit, 200)), Up, Lexical{DollarQuotes: true})
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = Checksum(src)
+		_ = sc.Up.Checksum()
 	}
 }

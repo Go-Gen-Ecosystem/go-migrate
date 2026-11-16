@@ -4,8 +4,6 @@
 package script
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -117,7 +115,7 @@ func TestParse(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sc, err := Parse([]byte(tc.in), tc.def)
+			sc, err := Parse([]byte(tc.in), tc.def, Lexical{})
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
@@ -149,7 +147,7 @@ func TestParseErrors(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Parse([]byte(tc.in), Up); !errors.Is(err, tc.want) {
+			if _, err := Parse([]byte(tc.in), Up, Lexical{}); !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
 		})
@@ -157,7 +155,7 @@ func TestParseErrors(t *testing.T) {
 }
 
 func TestSectionEmpty(t *testing.T) {
-	sc, err := Parse([]byte("-- +migrate Up\nSELECT 1;\n-- +migrate Down\n-- nothing to undo\n"), Up)
+	sc, err := Parse([]byte("-- +migrate Up\nSELECT 1;\n-- +migrate Down\n-- nothing to undo\n"), Up, Lexical{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,50 +164,61 @@ func TestSectionEmpty(t *testing.T) {
 	}
 }
 
-func TestChecksumStableAcrossLineEndings(t *testing.T) {
-	lf := Checksum([]byte("SELECT 1;\nSELECT 2;\n"))
-	crlf := Checksum([]byte("\xEF\xBB\xBFSELECT 1;  \r\nSELECT 2;\r\n\r\n"))
-	if lf != crlf {
-		t.Fatalf("checksum differs: %s vs %s", lf, crlf)
+func upChecksum(t *testing.T, src string, lx Lexical) string {
+	t.Helper()
+	sc, err := Parse([]byte(src), Up, lx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if lf == Checksum([]byte("SELECT 1;\nSELECT 3;\n")) {
-		t.Fatal("different content produced the same checksum")
+	return sc.Up.Checksum()
+}
+
+func TestChecksumIgnoresOnlyInsignificantWhitespace(t *testing.T) {
+	base := upChecksum(t, "SELECT 1;\nSELECT 2;\n", Lexical{})
+	if got := upChecksum(t, "\xEF\xBB\xBFSELECT 1;  \r\nSELECT 2;\r\n\r\n", Lexical{}); got != base {
+		t.Fatal("line endings, BOM and trailing whitespace outside literals must not change the checksum")
 	}
-	if Checksum([]byte("a"), []byte("b")) == Checksum([]byte("ab")) {
-		t.Fatal("part boundary must affect the checksum")
+	if upChecksum(t, "SELECT 1;\nSELECT 3;\n", Lexical{}) == base {
+		t.Fatal("different SQL produced the same checksum")
+	}
+	// #10: whitespace inside a multi-line literal is SQL-significant.
+	if upChecksum(t, "INSERT INTO t VALUES ('a  \nb');", Lexical{}) == upChecksum(t, "INSERT INTO t VALUES ('a\nb');", Lexical{}) {
+		t.Fatal("trailing whitespace inside a literal must change the checksum")
+	}
+	// #10: block structure is part of what executes.
+	plain := upChecksum(t, "SELECT 1;\nSELECT 2;", Lexical{})
+	block := upChecksum(t, "-- +migrate StatementBegin\nSELECT 1;\nSELECT 2;\n-- +migrate StatementEnd", Lexical{})
+	if plain == block {
+		t.Fatal("verbatim block boundaries must change the checksum")
 	}
 }
 
-func TestChecksumMatchesNormalize(t *testing.T) {
-	inputs := []string{
-		"", "a", "\n\na\n\n", "a  \r\nb\t\r\n\r\n", "\xEF\xBB\xBFx\ry\r\n\nz  ", "  \n \n", "a\n\n\nb",
+// #9: directive-shaped text inside SQL is SQL, not a directive.
+func TestDirectivesOnlyOutsideSQLText(t *testing.T) {
+	src := "-- +migrate Up\nINSERT INTO notes VALUES ('first\n-- +migrate Down\nlast');\n" +
+		"CREATE FUNCTION f() RETURNS int AS $$\n-- +migrate StatementEnd\nSELECT 1 $$ LANGUAGE sql;\n" +
+		"/*\n-- +migrate Down\n*/\nSELECT 2;\n-- +migrate Down\nDELETE FROM notes;"
+	sc, err := Parse([]byte(src), Up, pg)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, in := range inputs {
-		want := sha256Hex(Normalize([]byte(in)))
-		if got := Checksum([]byte(in)); got != want {
-			t.Errorf("Checksum(%q) = %s, want %s (streaming must equal Normalize)", in, got, want)
-		}
+	up := sc.Up.Statements(pg)
+	if len(up) != 3 || !strings.Contains(up[0], "-- +migrate Down\nlast'") || !strings.Contains(up[1], "-- +migrate StatementEnd") {
+		t.Fatalf("Up = %q", up)
 	}
-}
-
-func FuzzChecksumMatchesNormalize(f *testing.F) {
-	for _, s := range []string{"a\r\nb", "\n\n", " \t\r", "\xEF\xBB\xBFq"} {
-		f.Add(s)
+	if down := sc.Down.Statements(pg); len(down) != 1 || down[0] != "DELETE FROM notes" {
+		t.Fatalf("Down = %q", down)
 	}
-	f.Fuzz(func(t *testing.T, in string) {
-		if Checksum([]byte(in)) != sha256Hex(Normalize([]byte(in))) {
-			t.Fatalf("streaming checksum diverges from Normalize for %q", in)
-		}
-	})
-}
-
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	// MySQL: a backslash-escaped quote does not end the literal.
+	my := Lexical{BackslashEscapes: true, HashComments: true}
+	sc, err = Parse([]byte(`INSERT INTO t VALUES ('it\'s`+"\n-- +migrate Down\nok');"), Up, my)
+	if err != nil || len(sc.Up.Statements(my)) != 1 || !sc.Down.Empty(my) {
+		t.Fatalf("mysql escaped quote: %v %q", err, sc.Up.Statements(my))
+	}
 }
 
 func TestParseExecutesOriginalText(t *testing.T) {
-	sc, err := Parse([]byte("INSERT INTO t VALUES ('line1   \r\nline2');\r\n"), Up)
+	sc, err := Parse([]byte("INSERT INTO t VALUES ('line1   \r\nline2');\r\n"), Up, Lexical{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,14 +226,11 @@ func TestParseExecutesOriginalText(t *testing.T) {
 	if want := "INSERT INTO t VALUES ('line1   \nline2')"; len(got) != 1 || got[0] != want {
 		t.Fatalf("statement = %q, want %q (trailing spaces in literals must survive)", got, want)
 	}
-	if text := sc.Up.Text(); !strings.Contains(text, "line1   \n") {
-		t.Fatalf("Text() = %q", text)
-	}
 }
 
 func TestParseAllowsBlockCommentPreamble(t *testing.T) {
 	for _, pre := range []string{"/* header */\n", "# mysql header\n", "-- header\n\n"} {
-		sc, err := Parse([]byte(pre+"-- +migrate Up\nSELECT 1;"), Up)
+		sc, err := Parse([]byte(pre+"-- +migrate Up\nSELECT 1;"), Up, Lexical{})
 		if err != nil || sc.Up.Empty(Lexical{}) {
 			t.Errorf("preamble %q: %v", pre, err)
 		}
@@ -241,7 +247,7 @@ func TestSplitMySQLComments(t *testing.T) {
 }
 
 func TestSectionEmptyUsesDialect(t *testing.T) {
-	sc, err := Parse([]byte("-- +migrate Up\nSELECT 1;\n-- +migrate Down\n# only a mysql comment\n"), Up)
+	sc, err := Parse([]byte("-- +migrate Up\nSELECT 1;\n-- +migrate Down\n# only a mysql comment\n"), Up, Lexical{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,8 +262,9 @@ func TestIsTransactionControl(t *testing.T) {
 		"END": true, "ROLLBACK": true, "-- note\nCOMMIT": true, "/* x */ commit work": true, "ABORT": true,
 		"ROLLBACK TO SAVEPOINT s": false, "SAVEPOINT s": false, "CREATE TABLE begin_log (id INT)": false,
 		"DO $$ BEGIN PERFORM 1; END $$": false, "START REPLICA": false, "": false,
+		"BEGIN/* no space */": true, "COMMIT;": true, "SELECT 'COMMIT'": false,
 	} {
-		if got := IsTransactionControl(stmt); got != want {
+		if got := IsTransactionControl(stmt, pg); got != want {
 			t.Errorf("IsTransactionControl(%q) = %v, want %v", stmt, got, want)
 		}
 	}

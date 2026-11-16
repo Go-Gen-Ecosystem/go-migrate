@@ -6,7 +6,7 @@ package source
 import "testing"
 
 func TestLoadAllCallbacks(t *testing.T) {
-	set, err := LoadAll(mapFS(map[string]string{
+	set, err := loadAll(mapFS(map[string]string{
 		"1_a.sql":                   "SELECT 1;",
 		"afterMigrate__b.sql":       "SELECT 'b';",
 		"AfterMigrate__a.sql":       "SELECT 'a';",

@@ -69,9 +69,11 @@ type pair struct {
 
 // Load reads every *.sql file under fsys (recursively, skipping hidden
 // directories) and returns versioned migrations in ascending version order
-// followed by repeatable migrations ordered by description.
-func Load(fsys fs.FS) ([]*File, error) {
-	set, err := LoadAll(fsys)
+// followed by repeatable migrations ordered by description. lx is the
+// target dialect's lexical rules, which decide what is SQL text and what is
+// a directive.
+func Load(fsys fs.FS, lx script.Lexical) ([]*File, error) {
+	set, err := LoadAll(fsys, lx)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +113,7 @@ type Set struct {
 }
 
 // LoadAll is Load plus SQL callback files.
-func LoadAll(fsys fs.FS) (*Set, error) {
+func LoadAll(fsys fs.FS, lx script.Lexical) (*Set, error) {
 	groups := map[string]*pair{}
 	set := &Set{}
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -129,7 +131,7 @@ func LoadAll(fsys fs.FS) (*Set, error) {
 			return nil
 		}
 		if m := callbackName.FindStringSubmatch(d.Name()); m != nil {
-			cb, err := loadCallback(fsys, p, canonicalEvent[strings.ToLower(m[1])])
+			cb, err := loadCallback(fsys, p, canonicalEvent[strings.ToLower(m[1])], lx)
 			if err != nil {
 				return err
 			}
@@ -144,7 +146,7 @@ func LoadAll(fsys fs.FS) (*Set, error) {
 
 	set.Files = make([]*File, 0, len(groups))
 	for _, g := range groups {
-		f, err := g.build()
+		f, err := g.build(lx)
 		if err != nil {
 			return nil, err
 		}
@@ -155,12 +157,12 @@ func LoadAll(fsys fs.FS) (*Set, error) {
 	return set, nil
 }
 
-func loadCallback(fsys fs.FS, p, event string) (*Callback, error) {
+func loadCallback(fsys fs.FS, p, event string, lx script.Lexical) (*Callback, error) {
 	content, err := fs.ReadFile(fsys, p)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", p, err)
 	}
-	sc, err := script.Parse(content, script.Up)
+	sc, err := script.Parse(content, script.Up, lx)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p, err)
 	}
@@ -224,7 +226,7 @@ func dup(a, b string) error {
 	return fmt.Errorf("%w: %s and %s", ErrDuplicateVersion, a, b)
 }
 
-func (g *pair) build() (*File, error) {
+func (g *pair) build(lx script.Lexical) (*File, error) {
 	if g.up == nil {
 		return nil, fmt.Errorf("%s: %w", g.downName, ErrMissingUp)
 	}
@@ -234,9 +236,9 @@ func (g *pair) build() (*File, error) {
 	}
 	var err error
 	if g.single {
-		f.Script, err = script.Parse(g.up, script.Up)
+		f.Script, err = script.Parse(g.up, script.Up, lx)
 	} else {
-		f.Script, err = parsePair(g.up, g.down)
+		f.Script, err = parsePair(g.up, g.down, lx)
 		if g.down != nil {
 			f.Name = g.upName + " | " + g.downName
 		}
@@ -249,17 +251,17 @@ func (g *pair) build() (*File, error) {
 	}
 	// Only the Up section is checksummed: fixing a Down section or adding a
 	// missing .down.sql to an applied migration is not drift.
-	f.Checksum = script.Checksum([]byte(f.Script.Up.Text()))
+	f.Checksum = f.Script.Up.Checksum()
 	return f, nil
 }
 
-func parsePair(up, down []byte) (script.Script, error) {
-	u, err := script.Parse(up, script.Up)
+func parsePair(up, down []byte, lx script.Lexical) (script.Script, error) {
+	u, err := script.Parse(up, script.Up, lx)
 	if err != nil {
 		return script.Script{}, err
 	}
 	if down != nil {
-		d, err := script.Parse(down, script.Down)
+		d, err := script.Parse(down, script.Down, lx)
 		if err != nil {
 			return script.Script{}, err
 		}

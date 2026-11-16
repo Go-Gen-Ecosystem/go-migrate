@@ -28,7 +28,7 @@ func loadCatalog(d *dialect.Dialect, opts *options) (*catalog, error) {
 	set := &source.Set{}
 	if opts.fsys != nil {
 		var err error
-		if set, err = source.LoadAll(opts.fsys); err != nil {
+		if set, err = source.LoadAll(opts.fsys, d.Lexical()); err != nil {
 			return nil, err
 		}
 	}
@@ -80,15 +80,6 @@ func (l *loader) sqlUnit(f *source.File) (*unit, error) {
 	if len(stmts[Up]) == 0 {
 		return nil, fmt.Errorf("%s: %w", f.Name, source.ErrEmptyUp)
 	}
-	if err := l.checkTxControl(f, stmts); err != nil {
-		return nil, err
-	}
-	for dir := range stmts {
-		var err error
-		if stmts[dir], err = expandAll(stmts[dir], l.opts.placeholders); err != nil {
-			return nil, fmt.Errorf("%s: %w", f.Name, err)
-		}
-	}
 	meta := f.Script.Meta
 	if meta.RunAlways && !f.Repeatable {
 		return nil, fmt.Errorf("%s: RunAlways is only valid on repeatable (R__) migrations", f.Name)
@@ -100,19 +91,35 @@ func (l *loader) sqlUnit(f *source.File) (*unit, error) {
 	if err := checkLintIgnore(meta.LintIgnore); err != nil {
 		return nil, fmt.Errorf("%s: %w", f.Name, err)
 	}
-	pre, err := resolvePreconditions(meta.Preconditions, l.opts.placeholders)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	// Environment filters come first: a migration that never runs here may
+	// reference placeholders this environment deliberately leaves unset.
+	skipped := !dbmsOK || !matches(meta.Contexts, l.opts.contexts) || !matches(meta.Labels, l.opts.labels)
+	var pre []precondition
+	if !skipped {
+		for dir := range stmts {
+			if stmts[dir], err = expandAll(stmts[dir], l.opts.placeholders); err != nil {
+				return nil, fmt.Errorf("%s: %w", f.Name, err)
+			}
+		}
+		if pre, err = resolvePreconditions(meta.Preconditions, l.opts.placeholders); err != nil {
+			return nil, fmt.Errorf("%s: %w", f.Name, err)
+		}
+	}
+	// Checked on the SQL that will execute, after placeholder substitution.
+	if !f.Script.NoTx && l.d.TransactionalDDL() {
+		if err := l.checkTxControl(f.Name, stmts); err != nil {
+			return nil, err
+		}
 	}
 	u := &unit{
 		Migration: Migration{
 			Version: f.Version, Description: f.Description, Repeatable: f.Repeatable,
 			Source: f.Name, Checksum: f.Checksum, NoTx: f.Script.NoTx,
-			Reversible: len(stmts[Down]) > 0, Conditional: len(pre) > 0,
+			Reversible: len(stmts[Down]) > 0, Conditional: len(meta.Preconditions) > 0,
 		},
 		kind:       history.KindSQL,
 		stmts:      stmts,
-		skipped:    !dbmsOK || !matches(meta.Contexts, l.opts.contexts) || !matches(meta.Labels, l.opts.labels),
+		skipped:    skipped,
 		otherDBMS:  !dbmsOK,
 		retryable:  hasContinue(pre),
 		runAlways:  meta.RunAlways,
@@ -125,17 +132,15 @@ func (l *loader) sqlUnit(f *source.File) (*unit, error) {
 	return u, nil
 }
 
-// checkTxControl rejects BEGIN/COMMIT/ROLLBACK/... in migrations that run
-// inside a transaction: such a statement would commit part of the migration
-// and silently break atomicity. Mark the migration notransaction instead.
-func (l *loader) checkTxControl(f *source.File, stmts [2][]string) error {
-	if f.Script.NoTx || !l.d.TransactionalDDL() {
-		return nil
-	}
+// checkTxControl rejects BEGIN/COMMIT/ROLLBACK/... where go-migrate manages
+// the transaction or the session: such a statement would commit part of a
+// migration before its history row and silently break atomicity. Mark the
+// migration notransaction instead.
+func (l *loader) checkTxControl(name string, stmts [2][]string) error {
 	for dir, list := range stmts {
 		for i, s := range list {
-			if script.IsTransactionControl(s) {
-				return fmt.Errorf("%s: %s statement %d (%s): %w", f.Name, Direction(dir), i+1, truncateSQL(s), ErrTransactionControl)
+			if script.IsTransactionControl(s, l.d.Lexical()) {
+				return fmt.Errorf("%s: %s statement %d (%s): %w", name, Direction(dir), i+1, truncateSQL(s), ErrTransactionControl)
 			}
 		}
 	}
@@ -179,6 +184,11 @@ func (l *loader) addCallback(cb *source.Callback) error {
 	stmts, err := expandAll(cb.Script.Up.Statements(l.d.Lexical()), l.opts.placeholders)
 	if err != nil {
 		return fmt.Errorf("%s: %w", cb.Name, err)
+	}
+	// Callbacks share the migration's transaction (each-migration events)
+	// or its pinned session, so they may never control transactions.
+	if err := l.checkTxControl(cb.Name, [2][]string{Up: stmts}); err != nil {
+		return err
 	}
 	l.cat.callbacks[cb.Event] = append(l.cat.callbacks[cb.Event], callback{name: cb.Name, stmts: stmts})
 	return nil

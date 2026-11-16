@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
@@ -144,7 +145,12 @@ func (c *catalog) planID(dir Direction, plan []*unit) string {
 	}
 	write(c.scope, dir.String())
 	for _, u := range plan {
-		write(u.key, u.Checksum)
+		// Transaction mode and preconditions are directives, outside the
+		// SQL checksum, but they change what a run does.
+		write(u.key, u.Checksum, strconv.FormatBool(u.NoTx))
+		for _, p := range u.pre {
+			write(string(p.onFail), p.expect, p.sql)
+		}
 		write(u.stmts[dir]...)
 	}
 	for _, cb := range c.callbacksFor(dir) {

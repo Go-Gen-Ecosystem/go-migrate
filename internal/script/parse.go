@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -42,6 +41,10 @@ type Section struct {
 type chunk struct {
 	sql      string
 	verbatim bool
+	// canon is sql with insignificant whitespace removed: trailing
+	// whitespace on lines that end in code, and leading and trailing blank
+	// lines. It is the input to the checksum.
+	canon string
 }
 
 // Empty reports whether the section has no executable SQL under lx.
@@ -57,14 +60,30 @@ func (s Section) Empty(lx Lexical) bool {
 	return true
 }
 
-// Text returns the section's source text (markers excluded), the input to
-// the migration checksum.
-func (s Section) Text() string {
-	var b strings.Builder
+// checksumFormat versions the checksum input, so a future change to it can
+// be told apart from drift.
+const checksumFormat = "gomigrate/checksum/v1"
+
+// Checksum fingerprints what the section executes: its SQL with only
+// insignificant whitespace normalized (line endings, a BOM, trailing
+// whitespace outside literals, surrounding blank lines) and the boundaries
+// between plain and verbatim (StatementBegin/End) blocks. Any change to a
+// literal, a statement or block structure changes it.
+func (s Section) Checksum() string {
+	h := sha256.New()
+	h.Write([]byte(checksumFormat))
 	for _, c := range s.chunks {
-		b.WriteString(c.sql)
+		if c.canon == "" {
+			continue
+		}
+		kind := byte('p')
+		if c.verbatim {
+			kind = 'v'
+		}
+		h.Write([]byte{0, kind})
+		h.Write([]byte(c.canon))
 	}
-	return b.String()
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Statements returns the section's statements in execution order.
@@ -145,10 +164,12 @@ var ErrBadPrecondition = errors.New("malformed precondition (want: Precondition 
 // case-insensitively, so files written for sql-migrate or goose load as-is.
 var directive = regexp.MustCompile(`(?i)^\s*--\s*\+(?:migrate|goose)\s+(\S+)(?:\s+(.*?))?\s*$`)
 
-// Parse parses a migration file. Files without any Up/Down marker are treated
-// as entirely belonging to direction def (Up for a single-file migration, or
-// the direction encoded in a paired *.up.sql / *.down.sql file name).
-func Parse(content []byte, def Direction) (Script, error) {
+// Parse parses a migration file with the dialect's lexical rules lx. Files
+// without any Up/Down marker belong entirely to direction def (Up for a
+// single-file migration, or the direction encoded in a paired *.up.sql /
+// *.down.sql file name). A directive is recognized only on a line that
+// starts outside any literal, quoted identifier or comment.
+func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 	// Only line endings and the BOM are normalized for execution; trailing
 	// whitespace inside string literals must reach the database unchanged.
 	text := string(lineEndings(content))
@@ -159,13 +180,16 @@ func Parse(content []byte, def Direction) (Script, error) {
 		markers   bool
 		inBlock   bool
 		buf       strings.Builder
+		canon     strings.Builder
 		blockLine int
+		st        lexState
 	)
 	flush := func(verbatim bool) {
 		if buf.Len() > 0 && cur != nil {
-			cur.chunks = append(cur.chunks, chunk{sql: buf.String(), verbatim: verbatim})
+			cur.chunks = append(cur.chunks, chunk{sql: buf.String(), verbatim: verbatim, canon: strings.Trim(canon.String(), "\n")})
 		}
 		buf.Reset()
+		canon.Reset()
 	}
 	sectionFor := func(d Direction) *Section {
 		if d == Down {
@@ -178,12 +202,18 @@ func Parse(content []byte, def Direction) (Script, error) {
 	for n, line := range strings.Split(text, "\n") {
 		lineNo := n + 1
 		var m []string
-		if mayBeDirective(line) {
+		if st.inCode() && mayBeDirective(line) {
 			m = directive.FindStringSubmatch(line)
 		}
 		if m == nil {
 			buf.WriteString(line)
 			buf.WriteByte('\n')
+			if st = st.line(line, lx); st.inCode() {
+				line = strings.TrimRight(line, " \t") // insignificant outside literals
+			}
+			canon.WriteString(line)
+			canon.WriteByte('\n')
+			st = st.newline()
 			continue
 		}
 		word := strings.ToLower(m[1])
@@ -205,6 +235,7 @@ func Parse(content []byte, def Direction) (Script, error) {
 			}
 			if !markers {
 				buf.Reset() // leading comments/whitespace belong to no section
+				canon.Reset()
 			} else {
 				flush(false)
 			}
@@ -282,71 +313,16 @@ func lineEndings(content []byte) []byte {
 	return bytes.ReplaceAll(content, []byte("\r"), []byte("\n"))
 }
 
-// Normalize strips a UTF-8 BOM, converts CRLF/CR line endings to LF and trims
-// trailing whitespace from every line, so that the same file checked out on
-// Windows and Linux parses and checksums identically.
-func Normalize(content []byte) []byte {
-	content = bytes.TrimPrefix(content, bom)
-	content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
-	content = bytes.ReplaceAll(content, []byte("\r"), []byte("\n"))
-	lines := bytes.Split(content, []byte("\n"))
-	for i, l := range lines {
-		lines[i] = bytes.TrimRight(l, " \t")
-	}
-	return bytes.TrimRight(bytes.Join(lines, []byte("\n")), "\n")
-}
-
-// Checksum returns the hex SHA-256 of the normalized contents of all parts,
-// in order. It is stable across line-ending and BOM differences.
-func Checksum(parts ...[]byte) string {
-	h := sha256.New()
-	for i, p := range parts {
-		if i > 0 {
-			h.Write([]byte{0})
-		}
-		writeNormalized(h, p)
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// writeNormalized streams Normalize(p) into w without building the
-// normalized copy: one pass, no allocations. Line breaks are buffered and
-// only written before the next non-empty line, which drops trailing blank
-// lines exactly as Normalize does.
-func writeNormalized(w io.Writer, p []byte) {
-	p = bytes.TrimPrefix(p, bom)
-	pending := 0
-	for len(p) > 0 {
-		end := bytes.IndexAny(p, "\r\n")
-		line, rest := p, []byte(nil)
-		if end >= 0 {
-			line, rest = p[:end], p[end+1:]
-			if p[end] == '\r' && len(rest) > 0 && rest[0] == '\n' {
-				rest = rest[1:]
-			}
-		}
-		if line = bytes.TrimRight(line, " \t"); len(line) > 0 {
-			for ; pending > 0; pending-- {
-				_, _ = w.Write(newline)
-			}
-			_, _ = w.Write(line)
-		}
-		if end < 0 {
-			break
-		}
-		pending++
-		p = rest
-	}
-}
-
-var newline = []byte{'\n'}
-
 // IsTransactionControl reports whether stmt starts a, or ends the current,
 // transaction (BEGIN, START TRANSACTION, COMMIT, END, ROLLBACK, ABORT). Such
 // a statement inside a migration that runs in a transaction would silently
 // commit part of it and break atomicity. ROLLBACK TO a savepoint is allowed.
-func IsTransactionControl(stmt string) bool {
-	words := strings.Fields(strings.ToUpper(skipLeadingComments(stmt)))
+// Keywords are read from the code under lx, so comments anywhere (BEGIN/**/)
+// and literals never hide or fake one.
+func IsTransactionControl(stmt string, lx Lexical) bool {
+	words := strings.FieldsFunc(strings.ToUpper(Code(stmt, lx)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	})
 	if len(words) == 0 {
 		return false
 	}
@@ -364,28 +340,6 @@ func IsTransactionControl(stmt string) bool {
 		return true
 	}
 	return false
-}
-
-func skipLeadingComments(s string) string {
-	for {
-		s = strings.TrimLeft(s, " \t\r\n")
-		switch {
-		case strings.HasPrefix(s, "--"), strings.HasPrefix(s, "#"):
-			_, rest, ok := strings.Cut(s, "\n")
-			if !ok {
-				return ""
-			}
-			s = rest
-		case strings.HasPrefix(s, "/*"):
-			_, rest, ok := strings.Cut(s[2:], "*/")
-			if !ok {
-				return ""
-			}
-			s = rest
-		default:
-			return s
-		}
-	}
 }
 
 // list splits a comma- or space-separated directive value (lower-cased).
