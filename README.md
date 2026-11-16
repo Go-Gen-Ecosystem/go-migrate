@@ -140,12 +140,14 @@ Supporting rules:
 | Severity | Rule IDs |
 |---|---|
 | error | `add-not-null-without-default`, `concurrently-in-transaction`, `sqlite-unsupported-alter` |
-| warning | `index-not-concurrent`, `column-type-change`, `foreign-key-not-valid`, `check-not-valid`, `set-not-null`, `rename`, `drop-table`, `drop-column`, `truncate`, `unbounded-write`, `full-table-rewrite` |
+| warning | `index-not-concurrent`, `column-type-change`, `foreign-key-not-valid`, `check-not-valid`, `set-not-null`, `rename`, `drop-table`, `drop-schema`, `drop-column`, `truncate`, `unbounded-write`, `full-table-rewrite` |
 | info | `missing-lock-timeout`, `irreversible` |
 
 How it works:
 
 - Rules know the dialect.
+- `ALTER TABLE` is split into its actions, so `ADD a int DEFAULT 0, ADD b int NOT NULL` is judged per column.
+- Serial, identity and generated columns count as defaulted; quoted and schema-qualified names are matched.
 - They ignore text inside strings and comments.
 - They skip tables created in the same migration.
 - `-o github` turns findings into pull-request annotations.

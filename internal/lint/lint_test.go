@@ -64,6 +64,29 @@ func TestCheck(t *testing.T) {
 			up: []string{"INSERT INTO audit (msg) VALUES ('DROP TABLE users; UPDATE x SET y = 1') -- DROP TABLE t"}},
 		{name: "suppressed", dialect: "mysql", ignore: []string{"drop-table"}, up: []string{"DROP TABLE legacy"}},
 		{name: "vacuum full", dialect: "postgres", up: []string{"VACUUM FULL users"}, want: []string{"full-table-rewrite"}},
+		// Second review: false positives.
+		{name: "recommended NOT VALID check is not a NOT NULL column", dialect: "postgres",
+			up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE t ADD CONSTRAINT c_nn CHECK (c IS NOT NULL) NOT VALID"}},
+		{name: "serial and identity columns have defaults", dialect: "postgres", up: []string{"SET LOCAL lock_timeout = '5s'",
+			"ALTER TABLE t ADD COLUMN id bigserial NOT NULL", "ALTER TABLE t ADD COLUMN n int GENERATED ALWAYS AS IDENTITY NOT NULL"}},
+		{name: "refresh concurrently is legal in a transaction", dialect: "postgres", up: []string{"REFRESH MATERIALIZED VIEW CONCURRENTLY mv"}},
+		{name: "quoted table created here", dialect: "postgres", up: []string{`CREATE TABLE "users" (id int)`, "CREATE INDEX i ON users (id)"}},
+		{name: "schema-qualified table created here", dialect: "postgres", up: []string{"CREATE TABLE app.users (id int)", "CREATE INDEX i ON app.users (id)"}},
+		// Second review: false negatives.
+		{name: "not null with parenthesised type", dialect: "postgres", up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE t ADD COLUMN price numeric(10,2) NOT NULL"},
+			want: []string{"add-not-null-without-default"}},
+		{name: "multi-action alter", dialect: "postgres", up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE t ADD COLUMN a int DEFAULT 0, ADD COLUMN b int NOT NULL"},
+			want: []string{"add-not-null-without-default"}},
+		{name: "unnamed index", dialect: "postgres", up: []string{"CREATE INDEX ON t (a)"}, want: []string{"index-not-concurrent", "missing-lock-timeout"}},
+		{name: "drop without COLUMN keyword", dialect: "mysql", up: []string{"ALTER TABLE t DROP c"}, want: []string{"drop-column"}},
+		{name: "drop constraint is not a dropped column", dialect: "mysql", up: []string{"ALTER TABLE t DROP INDEX i", "ALTER TABLE t DROP FOREIGN KEY f"}},
+		{name: "drop schema", dialect: "postgres", up: []string{"DROP SCHEMA app CASCADE"}, want: []string{"drop-schema"}},
+		{name: "where only inside a subquery", dialect: "sqlite", up: []string{"UPDATE t SET a = (SELECT b FROM u WHERE u.id = 1)"}, want: []string{"unbounded-write"}},
+		{name: "rename with IF EXISTS", dialect: "postgres", up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE IF EXISTS t RENAME TO t2"}, want: []string{"rename"}},
+		{name: "SET LOCAL does nothing outside a transaction", dialect: "postgres", noTx: true,
+			up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE t ADD COLUMN a int"}, want: []string{"missing-lock-timeout"}},
+		{name: "sqlite multi-action alter is unsupported", dialect: "sqlite", up: []string{"ALTER TABLE t ADD COLUMN a INT, ADD COLUMN b INT"},
+			want: []string{"sqlite-unsupported-alter"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
