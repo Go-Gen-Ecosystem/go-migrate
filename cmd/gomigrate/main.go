@@ -7,8 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,22 +17,11 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const (
-	exitError   = 1
-	exitPending = 2
-)
-
 func main() {
 	// Ctrl-C / SIGTERM cancel the context; in-flight transactions roll back
 	// and the migration lock is released before exit.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := cli.NewRoot(version).ExecuteContext(ctx)
+	code := cli.Run(ctx, version, os.Args[1:], os.Stdout, os.Stderr, os.LookupEnv)
 	stop()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		if errors.Is(err, cli.ErrPending) {
-			os.Exit(exitPending)
-		}
-		os.Exit(exitError)
-	}
+	os.Exit(code)
 }

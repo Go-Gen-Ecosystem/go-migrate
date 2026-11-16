@@ -27,9 +27,6 @@ const (
 	timestampFmt  = "20060102150405"
 )
 
-// ErrPending is returned by `status --fail-on-pending` when migrations are pending.
-var ErrPending = errors.New("pending migrations")
-
 func newInitCmd(g *globals) *cobra.Command {
 	var driver, dsn string
 	cmd := &cobra.Command{
@@ -56,8 +53,10 @@ func newInitCmd(g *globals) *cobra.Command {
 			if err := os.MkdirAll(dir, dirPerm); err != nil {
 				return fmt.Errorf("create migrations directory: %w", err)
 			}
-			p := newPrinter(cmd)
-			p.printf("Created %s and %s/\nNext: gomigrate create add_users_table\n", path, dir)
+			p := newPrinter(cmd, g)
+			p.emit(map[string]string{"config": path, "dir": dir}, func() {
+				p.printf("Created %s and %s/\nNext: gomigrate create add_users_table\n", path, dir)
+			})
 			return p.result(nil)
 		},
 	}
@@ -101,7 +100,7 @@ func newCreateCmd(g *globals) *cobra.Command {
 				files = []file{{version + "_" + name + ".up.sql", "\n"}, {version + "_" + name + ".down.sql", "\n"}}
 			}
 			// All-or-nothing: a failure removes the files already written.
-			var written []string
+			written := make([]string, 0, len(files))
 			for _, f := range files {
 				path := filepath.Join(dir, f.name)
 				if err := writeNew(path, f.body, migrationPerm); err != nil {
@@ -112,10 +111,12 @@ func newCreateCmd(g *globals) *cobra.Command {
 				}
 				written = append(written, path)
 			}
-			p := newPrinter(cmd)
-			for _, w := range written {
-				p.printf("Created %s\n", w)
-			}
+			p := newPrinter(cmd, g)
+			p.emit(map[string]any{"version": version, "files": written}, func() {
+				for _, w := range written {
+					p.printf("Created %s\n", w)
+				}
+			})
 			return p.result(nil)
 		},
 	}
@@ -181,21 +182,21 @@ func writeNew(path, body string, perm os.FileMode) error {
 
 func newUpCmd(g *globals) *cobra.Command {
 	var to string
-	var dryRun bool
+	var dryRun, showSQL bool
 	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Apply pending migrations (all, or up to --to)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
-				out := newPrinter(cmd)
-				if dryRun {
+				p := newPrinter(cmd, g)
+				if dryRun || showSQL {
 					plan, err := s.m.Plan(ctx, to)
 					if err != nil {
 						return err
 					}
-					out.plan("apply", plan)
-					return out.result(nil)
+					p.plan(s, migrate.Up, plan, showSQL)
+					return p.result(nil)
 				}
 				var res *migrate.Result
 				var err error
@@ -204,63 +205,72 @@ func newUpCmd(g *globals) *cobra.Command {
 				} else {
 					res, err = s.m.Up(ctx)
 				}
-				out.run("Applied", res, err)
-				return out.result(err)
+				p.run("Applied", res, err)
+				return p.result(err)
 			})
 		},
 	}
 	cmd.Flags().StringVar(&to, "to", "", "apply up to and including this version")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be applied without changing anything")
+	cmd.Flags().BoolVar(&showSQL, "sql", false, "dry run that also prints the exact SQL of every migration")
 	return cmd
 }
 
 func newDownCmd(g *globals) *cobra.Command {
 	var steps int
-	var to string
-	var all, dryRun bool
+	var to, toTag string
+	var all, dryRun, showSQL bool
 	cmd := &cobra.Command{
 		Use:   "down",
-		Short: "Roll back migrations (last one by default, --steps N, --to V or --all)",
+		Short: "Roll back migrations (last one by default, --steps N, --to V, --to-tag T or --all)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if n := countSet(cmd, "steps", "to", "all"); n > 1 {
-				return errors.New("use only one of --steps, --to and --all")
+			if n := countSet(cmd, "steps", "to", "to-tag", "all"); n > 1 {
+				return errors.New("use only one of --steps, --to, --to-tag and --all")
 			}
 			if all {
 				to = "0"
 			}
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
-				out := newPrinter(cmd)
-				if dryRun {
+				p := newPrinter(cmd, g)
+				if dryRun || showSQL {
 					var plan []migrate.Migration
 					var err error
-					if to != "" {
+					switch {
+					case toTag != "":
+						plan, err = s.m.PlanDownToTag(ctx, toTag)
+					case to != "":
 						plan, err = s.m.PlanDownTo(ctx, to)
-					} else {
+					default:
 						plan, err = s.m.PlanDown(ctx, steps)
 					}
 					if err != nil {
 						return err
 					}
-					out.plan("roll back", plan)
-					return out.result(nil)
+					p.plan(s, migrate.Down, plan, showSQL)
+					return p.result(nil)
 				}
 				var res *migrate.Result
 				var err error
-				if to != "" {
+				switch {
+				case toTag != "":
+					res, err = s.m.DownToTag(ctx, toTag)
+				case to != "":
 					res, err = s.m.DownTo(ctx, to)
-				} else {
+				default:
 					res, err = s.m.Down(ctx, steps)
 				}
-				out.run("Rolled back", res, err)
-				return out.result(err)
+				p.run("Rolled back", res, err)
+				return p.result(err)
 			})
 		},
 	}
 	cmd.Flags().IntVarP(&steps, "steps", "n", 1, "number of migrations to roll back")
 	cmd.Flags().StringVar(&to, "to", "", "roll back every migration above this version")
+	cmd.Flags().StringVar(&toTag, "to-tag", "", "roll back every migration applied after the one tagged with this name")
 	cmd.Flags().BoolVar(&all, "all", false, "roll back every migration")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be rolled back without changing anything")
+	cmd.Flags().BoolVar(&showSQL, "sql", false, "dry run that also prints the exact SQL of every rollback")
 	return cmd
 }
 
@@ -271,17 +281,17 @@ func newRedoCmd(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
-				out := newPrinter(cmd)
+				p := newPrinter(cmd, g)
 				res, err := s.m.Redo(ctx)
-				out.run("Redid", res, err)
-				return out.result(err)
+				p.run("Redid", res, err)
+				return p.result(err)
 			})
 		},
 	}
 }
 
 func newStatusCmd(g *globals) *cobra.Command {
-	var asJSON, failOnPending bool
+	var failOnPending bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show every migration's state (read-only)",
@@ -292,10 +302,10 @@ func newStatusCmd(g *globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				out := newPrinter(cmd)
-				out.status(st, asJSON)
-				if out.err != nil {
-					return out.err
+				p := newPrinter(cmd, g)
+				p.status(st)
+				if p.err != nil {
+					return p.err
 				}
 				if failOnPending && st.Pending > 0 {
 					return fmt.Errorf("%w: %d", ErrPending, st.Pending)
@@ -304,8 +314,7 @@ func newStatusCmd(g *globals) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
-	cmd.Flags().BoolVar(&failOnPending, "fail-on-pending", false, "exit non-zero when migrations are pending (for CI)")
+	cmd.Flags().BoolVar(&failOnPending, "fail-on-pending", false, "exit with code 2 when migrations are pending (for CI)")
 	return cmd
 }
 
@@ -319,8 +328,8 @@ func newValidateCmd(g *globals) *cobra.Command {
 				if err := s.m.Validate(ctx); err != nil {
 					return err
 				}
-				p := newPrinter(cmd)
-				p.printf("OK: migrations are valid.\n")
+				p := newPrinter(cmd, g)
+				p.emit(map[string]bool{"valid": true}, func() { p.printf("OK: migrations are valid.\n") })
 				return p.result(nil)
 			})
 		},
@@ -338,9 +347,32 @@ func newRepairCmd(g *globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				p := newPrinter(cmd)
-				p.printf("Removed %d failed row(s); realigned %d checksum(s) %v\n",
-					res.RemovedFailed, len(res.Realigned), res.Realigned)
+				realigned := res.Realigned
+				if realigned == nil {
+					realigned = []string{}
+				}
+				p := newPrinter(cmd, g)
+				p.emit(map[string]any{"removed_failed": res.RemovedFailed, "realigned": realigned}, func() {
+					p.printf("Removed %d failed row(s); realigned %d checksum(s) %v\n", res.RemovedFailed, len(res.Realigned), res.Realigned)
+				})
+				return p.result(nil)
+			})
+		},
+	}
+}
+
+func newMarkAppliedCmd(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:   "mark-applied VERSION",
+		Short: "Record a migration as applied without running it (e.g. after finishing a dirty one by hand)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return g.withSession(cmd, func(ctx context.Context, s *session) error {
+				if err := s.m.MarkApplied(ctx, args[0]); err != nil {
+					return err
+				}
+				p := newPrinter(cmd, g)
+				p.emit(map[string]string{"version": args[0]}, func() { p.printf("Marked %s as applied\n", args[0]) })
 				return p.result(nil)
 			})
 		},
@@ -361,8 +393,8 @@ func newBaselineCmd(g *globals) *cobra.Command {
 				if err := s.m.Baseline(ctx, version, description); err != nil {
 					return err
 				}
-				p := newPrinter(cmd)
-				p.printf("Baselined at version %s\n", version)
+				p := newPrinter(cmd, g)
+				p.emit(map[string]string{"version": version}, func() { p.printf("Baselined at version %s\n", version) })
 				return p.result(nil)
 			})
 		},
@@ -370,6 +402,24 @@ func newBaselineCmd(g *globals) *cobra.Command {
 	cmd.Flags().StringVar(&version, "version", "", "version the database already matches")
 	cmd.Flags().StringVar(&description, "description", "baseline", "description recorded for the baseline")
 	return cmd
+}
+
+func newTagCmd(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tag NAME",
+		Short: "Tag the most recently applied migration (roll back to it later with down --to-tag)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return g.withSession(cmd, func(ctx context.Context, s *session) error {
+				if err := s.m.Tag(ctx, args[0]); err != nil {
+					return err
+				}
+				p := newPrinter(cmd, g)
+				p.emit(map[string]string{"tag": args[0]}, func() { p.printf("Tagged current version as %s\n", args[0]) })
+				return p.result(nil)
+			})
+		},
+	}
 }
 
 // countSet returns how many of the named flags were set explicitly.
@@ -381,22 +431,4 @@ func countSet(cmd *cobra.Command, names ...string) int {
 		}
 	}
 	return n
-}
-
-func newMarkAppliedCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
-		Use:   "mark-applied VERSION",
-		Short: "Record a migration as applied without running it (e.g. after finishing a dirty one by hand)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return g.withSession(cmd, func(ctx context.Context, s *session) error {
-				if err := s.m.MarkApplied(ctx, args[0]); err != nil {
-					return err
-				}
-				p := newPrinter(cmd)
-				p.printf("Marked %s as applied\n", args[0])
-				return p.result(nil)
-			})
-		},
-	}
 }

@@ -17,12 +17,22 @@ import (
 func run(t *testing.T, env map[string]string, args ...string) (string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	root := newRoot("test", &errOut, func(k string) (string, bool) { v, ok := env[k]; return v, ok })
-	root.SetOut(&out)
-	root.SetErr(&errOut)
+	root, _ := newRoot("test", &out, &errOut, envFunc(env))
 	root.SetArgs(args)
 	err := root.Execute()
 	return out.String(), err
+}
+
+func envFunc(env map[string]string) func(string) (string, bool) {
+	return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+}
+
+// runCLI executes through Run (as main does) and returns stdout and the exit code.
+func runCLI(t *testing.T, env map[string]string, args ...string) (string, int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code := Run(t.Context(), "test", args, &out, &errOut, envFunc(env))
+	return out.String(), code
 }
 
 func write(t *testing.T, path, body string) {
@@ -91,12 +101,16 @@ func TestEndToEnd(t *testing.T) {
 	}
 	mustContain(t, out, "Nothing to do.")
 
-	if out, err = run(t, none, "status", "--json"); err != nil {
+	if out, err = run(t, none, "-o", "json", "status"); err != nil {
 		t.Fatal(err)
 	}
-	var st migrate.Status
-	if err := json.Unmarshal([]byte(out), &st); err != nil {
-		t.Fatalf("status --json is not JSON: %v\n%s", err, out)
+	var st struct {
+		Current    string            `json:"current"`
+		Pending    int               `json:"pending"`
+		Migrations []json.RawMessage `json:"migrations"`
+	}
+	if err := json.Unmarshal(decode(t, out).Data, &st); err != nil {
+		t.Fatalf("status -o json data: %v\n%s", err, out)
 	}
 	if st.Current != "3" || st.Pending != 0 || len(st.Migrations) != 3 {
 		t.Fatalf("status = %+v", st)
@@ -234,7 +248,7 @@ func TestReviewFixes(t *testing.T) {
 	if _, err := run(t, none, "--dsn", "x.db", "up"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := run(t, none, "--dsn", "x.db", "status", "--json")
+	out, err := run(t, none, "--dsn", "x.db", "-o", "json", "status")
 	if err != nil {
 		t.Fatal(err)
 	}

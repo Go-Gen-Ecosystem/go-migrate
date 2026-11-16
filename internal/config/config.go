@@ -60,6 +60,13 @@ type Migrations struct {
 	LockTimeout     time.Duration `yaml:"lock_timeout"`
 	AllowOutOfOrder bool          `yaml:"allow_out_of_order"`
 	AllowMissing    bool          `yaml:"allow_missing"`
+	// Contexts and Labels select Liquibase-style targeted migrations.
+	Contexts []string `yaml:"contexts"`
+	Labels   []string `yaml:"labels"`
+	// Placeholders enables ${name} substitution in SQL (Flyway placeholders).
+	Placeholders map[string]string `yaml:"placeholders"`
+	// BaselineOnMigrate baselines an existing schema at this version on up.
+	BaselineOnMigrate string `yaml:"baseline_on_migrate"`
 }
 
 // Default returns the configuration used when nothing else is set.
@@ -108,12 +115,23 @@ func (cfg *Config) expand(lookup func(string) (string, bool)) error {
 		}
 		db.Params[k] = ev
 	}
+	for k, v := range mg.Placeholders {
+		ev, err := ExpandEnv(v, lookup)
+		if err != nil {
+			return err
+		}
+		mg.Placeholders[k] = ev
+	}
 	return nil
 }
 
 // Overrides are values from flags; empty fields leave the config unchanged.
 type Overrides struct {
 	DSN, Driver, Dir, Table string
+	BaselineOnMigrate       string
+	Contexts, Labels        []string
+	// Placeholders are merged over the file's, key by key.
+	Placeholders map[string]string
 }
 
 // Apply layers environment variables and then flags over cfg, in increasing
@@ -153,6 +171,21 @@ func (cfg *Config) Apply(o Overrides, explicitConfig bool, lookup func(string) (
 	set(&cfg.Database.Driver, o.Driver, fromFlag, &driverLevel)
 	set(&cfg.Migrations.Dir, o.Dir, fromFlag, nil)
 	set(&cfg.Migrations.Table, o.Table, fromFlag, nil)
+	set(&cfg.Migrations.BaselineOnMigrate, o.BaselineOnMigrate, fromFlag, nil)
+	if len(o.Contexts) > 0 {
+		cfg.Migrations.Contexts = o.Contexts
+	}
+	if len(o.Labels) > 0 {
+		cfg.Migrations.Labels = o.Labels
+	}
+	if len(o.Placeholders) > 0 {
+		if cfg.Migrations.Placeholders == nil {
+			cfg.Migrations.Placeholders = map[string]string{}
+		}
+		for k, v := range o.Placeholders {
+			cfg.Migrations.Placeholders[k] = v
+		}
+	}
 
 	if dsnLevel > driverLevel {
 		if d := inferDriver(cfg.Database.DSN); d != "" {

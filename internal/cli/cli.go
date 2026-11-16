@@ -1,12 +1,15 @@
 // Package cli implements the gomigrate command line.
 //
-// Results go to stdout (machine-readable with --json); progress logs go to
-// stderr through halolog, so `gomigrate status --json | jq` stays clean.
+// Every command has two renderings of the same result: human text (default)
+// and a JSON envelope (--output json) with a stable schema and stable error
+// codes, so CI pipelines and AI agents act on structure, never on prose.
+// Progress logs go to stderr through halolog in both modes.
 package cli
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,23 +27,54 @@ import (
 	"github.com/go-gen-ecosystem/go-migrate/internal/config"
 )
 
+// Exit codes.
+const (
+	ExitOK      = 0
+	ExitError   = 1
+	ExitPending = 2 // status --fail-on-pending found pending migrations
+)
+
+// ErrPending is returned by `status --fail-on-pending` when migrations are pending.
+var ErrPending = errors.New("pending migrations")
+
 // globals holds the persistent flags shared by every command.
 type globals struct {
 	configPath string
 	overrides  config.Overrides
 	logLevel   string
 	logFormat  string
+	output     string
 	stderr     io.Writer
 	getenv     func(string) (string, bool)
 }
 
-// NewRoot builds the gomigrate command tree. version is injected at build time.
-func NewRoot(version string) *cobra.Command {
-	return newRoot(version, os.Stderr, os.LookupEnv)
+func (g *globals) json() bool { return strings.EqualFold(g.output, "json") }
+
+// Run executes gomigrate with args and returns the process exit code. In JSON
+// mode errors are reported as a JSON envelope on stdout as well.
+func Run(ctx context.Context, version string, args []string, stdout, stderr io.Writer, getenv func(string) (string, bool)) int {
+	root, g := newRoot(version, stdout, stderr, getenv)
+	root.SetArgs(args)
+	cmd, err := root.ExecuteContextC(ctx)
+	if err == nil {
+		return ExitOK
+	}
+	pending := errors.Is(err, ErrPending)
+	switch {
+	case g.json() && !pending: // with --fail-on-pending the status is already on stdout
+		writeErrorJSON(stdout, cmd.Name(), err)
+	case !g.json():
+		_, _ = fmt.Fprintln(stderr, "Error:", err)
+	}
+	if pending {
+		return ExitPending
+	}
+	return ExitError
 }
 
-// newRoot takes its environment explicitly so tests need no global state.
-func newRoot(version string, stderr io.Writer, getenv func(string) (string, bool)) *cobra.Command {
+// newRoot builds the command tree with its environment passed in, so tests
+// need no global state.
+func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (string, bool)) (*cobra.Command, *globals) {
 	g := &globals{stderr: stderr, getenv: getenv}
 	root := &cobra.Command{
 		Use:           "gomigrate",
@@ -49,20 +83,28 @@ func newRoot(version string, stderr io.Writer, getenv func(string) (string, bool
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
 	pf := root.PersistentFlags()
 	pf.StringVarP(&g.configPath, "config", "c", "", "config file (default "+config.DefaultPath+")")
-	pf.StringVar(&g.overrides.DSN, "dsn", "", "database DSN or URL (overrides config and env)")
+	pf.StringVar(&g.overrides.DSN, "dsn", "", "database DSN or URL (prefer GOMIGRATE_DSN: command lines are visible to other processes)")
 	pf.StringVar(&g.overrides.Driver, "driver", "", "postgres | mysql | sqlite (inferred from the DSN when omitted)")
 	pf.StringVar(&g.overrides.Dir, "dir", "", "migrations directory")
 	pf.StringVar(&g.overrides.Table, "table", "", "history table (name or schema.name)")
+	pf.StringSliceVar(&g.overrides.Contexts, "context", nil, "active contexts for Context-targeted migrations (repeatable)")
+	pf.StringSliceVar(&g.overrides.Labels, "label", nil, "active labels for Labels-targeted migrations (repeatable)")
+	pf.StringToStringVar(&g.overrides.Placeholders, "placeholder", nil, "placeholder value name=value for ${name} in SQL (repeatable)")
+	pf.StringVar(&g.overrides.BaselineOnMigrate, "baseline-on-migrate", "", "baseline an existing, untracked schema at this version before up")
+	pf.StringVarP(&g.output, "output", "o", "text", "text | json (stable schema for CI and agents)")
 	pf.StringVar(&g.logLevel, "log-level", "info", "debug | info | warn | error")
 	pf.StringVar(&g.logFormat, "log-format", "text", "text | json (logs go to stderr)")
 
 	root.AddCommand(
 		newInitCmd(g), newCreateCmd(g), newUpCmd(g), newDownCmd(g), newRedoCmd(g),
-		newStatusCmd(g), newValidateCmd(g), newRepairCmd(g), newMarkAppliedCmd(g), newBaselineCmd(g),
+		newStatusCmd(g), newValidateCmd(g), newRepairCmd(g), newMarkAppliedCmd(g),
+		newBaselineCmd(g), newTagCmd(g),
 	)
-	return root
+	return root, g
 }
 
 // session is an opened database plus a Migrator for one command.
@@ -88,6 +130,9 @@ func (g *globals) loadConfig() (config.Config, error) {
 }
 
 func (g *globals) open(ctx context.Context) (*session, error) {
+	if out := strings.ToLower(g.output); out != "text" && out != "json" {
+		return nil, fmt.Errorf("invalid --output %q (text, json)", g.output)
+	}
 	cfg, err := g.loadConfig()
 	if err != nil {
 		return nil, err
@@ -104,24 +149,37 @@ func (g *globals) open(ctx context.Context) (*session, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	opts := []migrate.Option{
-		migrate.WithFS(os.DirFS(cfg.Migrations.Dir)),
-		migrate.WithLogger(logger),
-		migrate.WithAllowOutOfOrder(cfg.Migrations.AllowOutOfOrder),
-		migrate.WithAllowMissing(cfg.Migrations.AllowMissing),
-	}
-	if cfg.Migrations.Table != "" {
-		opts = append(opts, migrate.WithTable(cfg.Migrations.Table))
-	}
-	if cfg.Migrations.LockTimeout > 0 {
-		opts = append(opts, migrate.WithLockWait(cfg.Migrations.LockTimeout))
-	}
-	m, err := migrate.New(db, dialectName, opts...)
+	m, err := migrate.New(db, dialectName, migratorOptions(cfg, logger)...)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &session{db: db, m: m, cfg: cfg}, nil
+}
+
+func migratorOptions(cfg config.Config, logger halolog.Logger) []migrate.Option {
+	mc := cfg.Migrations
+	opts := []migrate.Option{
+		migrate.WithFS(os.DirFS(mc.Dir)),
+		migrate.WithLogger(logger),
+		migrate.WithAllowOutOfOrder(mc.AllowOutOfOrder),
+		migrate.WithAllowMissing(mc.AllowMissing),
+		migrate.WithContexts(mc.Contexts...),
+		migrate.WithLabels(mc.Labels...),
+	}
+	if mc.Table != "" {
+		opts = append(opts, migrate.WithTable(mc.Table))
+	}
+	if mc.LockTimeout > 0 {
+		opts = append(opts, migrate.WithLockWait(mc.LockTimeout))
+	}
+	if mc.Placeholders != nil {
+		opts = append(opts, migrate.WithPlaceholders(mc.Placeholders))
+	}
+	if mc.BaselineOnMigrate != "" {
+		opts = append(opts, migrate.WithBaselineOnMigrate(mc.BaselineOnMigrate))
+	}
+	return opts
 }
 
 func (g *globals) logger() (halolog.Logger, error) {
