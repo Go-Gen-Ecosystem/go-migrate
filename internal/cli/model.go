@@ -119,6 +119,9 @@ type migrationJSON struct {
 	ExecutionMS *int64     `json:"execution_ms,omitempty"`
 	DurationMS  *int64     `json:"duration_ms,omitempty"`
 	MarkedRan   bool       `json:"marked_ran,omitempty"`
+	// Conditional is set when preconditions decide at run time whether the
+	// migration executes, is recorded without running, or is skipped.
+	Conditional bool `json:"conditional,omitempty"`
 	// NoTransaction is set when the migration runs outside a transaction
 	// (a partial failure leaves the database dirty).
 	NoTransaction bool     `json:"no_transaction,omitempty"`
@@ -126,7 +129,8 @@ type migrationJSON struct {
 }
 
 func describe(m migrate.Migration) migrationJSON {
-	return migrationJSON{Version: m.Version, Description: m.Description, Repeatable: m.Repeatable, Source: m.Source, NoTransaction: m.NoTx}
+	return migrationJSON{Version: m.Version, Description: m.Description, Repeatable: m.Repeatable, Source: m.Source,
+		NoTransaction: m.NoTx, Conditional: m.Conditional}
 }
 
 func (m migrationJSON) label() string {
@@ -140,6 +144,15 @@ type planJSON struct {
 	// or plan_id (MCP) and the run fails with plan_changed if anything differs.
 	PlanID     string          `json:"plan_id"`
 	Migrations []migrationJSON `json:"migrations"`
+	// Callbacks run around the migrations, even when none is pending.
+	Callbacks []callbackJSON `json:"callbacks,omitempty"`
+}
+
+// callbackJSON is one SQL callback file in a plan.
+type callbackJSON struct {
+	Event      string   `json:"event"`
+	Source     string   `json:"source"`
+	Statements []string `json:"statements,omitempty"`
 }
 
 // newPlan describes a dry run; with sql each migration carries its exact statements.
@@ -151,6 +164,13 @@ func newPlan(m *migrate.Migrator, dir migrate.Direction, ms []migrate.Migration,
 			mj.Statements = m.Statements(mig, dir)
 		}
 		out.Migrations = append(out.Migrations, mj)
+	}
+	for _, cb := range m.Callbacks(dir) {
+		cj := callbackJSON{Event: cb.Event, Source: cb.Source}
+		if sql {
+			cj.Statements = cb.Statements
+		}
+		out.Callbacks = append(out.Callbacks, cj)
 	}
 	return out
 }
@@ -203,6 +223,7 @@ type findingJSON struct {
 	Hint      string `json:"hint"`
 	Version   string `json:"version"`
 	Source    string `json:"source"`
+	Event     string `json:"event,omitempty"` // set for callback files
 	Statement int    `json:"statement,omitempty"`
 	SQL       string `json:"sql,omitempty"`
 }

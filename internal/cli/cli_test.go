@@ -280,3 +280,41 @@ func TestFailedRunDoesNotSayNothingToDo(t *testing.T) {
 		t.Fatalf("out = %q, err = %v", out, err)
 	}
 }
+
+// A dry run with nothing pending still shows the callbacks Up would run.
+func TestDryRunShowsCallbacks(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("migrations", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, "migrations/1_a.sql", "CREATE TABLE a (id INTEGER);")
+	write(t, "migrations/afterMigrate.sql", "INSERT INTO a VALUES (1);")
+	env := map[string]string{"GOMIGRATE_DSN": "app.db"}
+	if _, err := run(t, env, "up"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, env, "up", "--sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, "Would apply 0 migration(s)", "Callbacks:", "afterMigrate", "INSERT INTO a VALUES (1);", "Plan ID: ")
+	if strings.Contains(out, "Nothing to do") {
+		t.Fatalf("callbacks still run, so there is something to do:\n%s", out)
+	}
+	out, err = run(t, env, "-o", "json", "up", "--sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e struct {
+		Data struct {
+			Callbacks []struct {
+				Event, Source string
+				Statements    []string
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &e); err != nil || len(e.Data.Callbacks) != 1 ||
+		e.Data.Callbacks[0].Event != "afterMigrate" || e.Data.Callbacks[0].Statements[0] != "INSERT INTO a VALUES (1)" {
+		t.Fatalf("JSON plan callbacks = %+v, %v", e.Data.Callbacks, err)
+	}
+}

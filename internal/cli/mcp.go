@@ -271,7 +271,7 @@ func lintErrors(findings []migrate.Finding, plan []migrate.Migration) []migrate.
 	}
 	var out []migrate.Finding
 	for _, f := range findings {
-		if f.Severity == "error" && inPlan[f.Version] {
+		if f.Severity == "error" && (inPlan[f.Version] || f.Event != "") { // callbacks run on every apply
 			out = append(out, f)
 		}
 	}

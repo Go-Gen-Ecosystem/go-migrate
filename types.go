@@ -60,6 +60,17 @@ type Migration struct {
 	Checksum   string
 	NoTx       bool
 	Reversible bool
+	// Conditional is set when the migration has preconditions: a run may
+	// skip it or record it without executing its SQL.
+	Conditional bool
+}
+
+// Callback is an SQL callback file and the statements it runs, after
+// placeholder substitution. Event is its Flyway event name.
+type Callback struct {
+	Event      string
+	Source     string
+	Statements []string
 }
 
 // Label names the migration in logs and output: its version, or

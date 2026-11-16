@@ -49,7 +49,9 @@ kept under `_parked/v0` for reference.
   gate, and directive-free typed migration authoring; `AGENTS.md`.
 - Plan binding: `PlanID`, `ExpectPlan` and `--expect-plan` re-check the plan
   under the migration lock and fail with `plan_changed` instead of running
-  anything the reviewer did not see.
+  anything the reviewer did not see. The ID covers the dialect, history
+  table and SQL callbacks; `Callbacks(dir)` and `--sql` plans show the
+  callbacks, and precondition-gated migrations are flagged `conditional`.
 - GitHub Action (`action.yml`) for lint annotations, gates and deploys.
 - Dialect conformance suite on real PostgreSQL 17 and MySQL 8.4 (CI job),
   fuzzed SQL splitter, benchmarks including a comparison with goose and

@@ -75,7 +75,7 @@ _, err = m.Up(ctx)
 
 - **Migrator methods:**
   - apply and roll back: `Up`, `UpTo`, `Down(ctx, migrate.DownTarget{Steps: 1})` (or `To: "3"`, or `Tag: "v1"`), `Redo`;
-  - read-only: `Plan`, `PlanDown`, `PlanID`, `Statements`, `Status`, `Validate`, `Lint`, `Migrations`;
+  - read-only: `Plan`, `PlanDown`, `PlanID`, `Statements`, `Callbacks`, `Status`, `Validate`, `Lint`, `Migrations`;
   - history administration: `Repair`, `MarkApplied`, `Baseline`, `Tag`.
 - **Approved plans:** `m.Up(ctx, migrate.ExpectPlan(id))` runs only if the plan, computed again under the lock, still has the ID that was reviewed; otherwise it fails with `ErrPlanChanged` and runs nothing.
 - **Options:**
@@ -114,7 +114,8 @@ Supporting rules:
 - **Placeholders:** `${name}` is replaced from `--placeholder name=value` or the `placeholders:` config. Built-ins are `${migrate:dialect}`, `${migrate:table}` and `${migrate:user}`.
 - **Versions** compare numerically: `9 < 10`, `1.9 < 1.10`, `001 == 1 == 1.0`.
 - **Checksums** cover the Up section and ignore line endings, BOMs and trailing whitespace. The SQL runs exactly as written.
-- **Preconditions:** `HALT` fails the run, `MARK_RAN` records the migration without running it, and `CONTINUE` leaves it pending.
+- **Preconditions:** `HALT` fails the run, `MARK_RAN` records the migration without running it, and `CONTINUE` leaves it pending. Plans flag such migrations as `conditional`.
+- **Callbacks** appear in `--sql` plans (they run even when nothing is pending), are covered by the plan ID and are linted.
 
 ## Safety model
 
@@ -131,7 +132,7 @@ Supporting rules:
   - PostgreSQL and SQLite commit each migration with its history row.
   - MySQL cannot roll back DDL, so the row is marked dirty first. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
-- **Approval binds execution:** a plan ID hashes the direction, versions, checksums and exact statements. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
+- **Approval binds execution:** a plan ID hashes the dialect, history table, direction, versions, checksums, exact statements and the SQL callbacks that will run. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
 - **Read-only means read-only:** `status`, `validate`, `lint` and dry runs never create tables.
 - **No connection secrets in output:** DSNs and passwords never appear in errors or logs. Placeholder values do appear in `--sql` plans and SQL excerpts, as they are part of the SQL; do not put secrets in placeholders.
 

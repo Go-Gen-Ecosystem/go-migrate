@@ -16,9 +16,11 @@ type Finding struct {
 	Severity string // "error", "warning" or "info"
 	Message  string
 	Hint     string
-	// Version is the migration's Label; Source its file.
+	// Version is the migration's Label; Source its file. For a callback
+	// file, Version is empty and Event names the callback event.
 	Version string
 	Source  string
+	Event   string
 	// Statement is the 1-based Up statement, or 0 for the whole migration.
 	Statement int
 	SQL       string
@@ -47,12 +49,22 @@ func (m *Migrator) Lint() []Finding {
 			Dialect: m.dialect.Name(), Up: u.stmts[Up], Down: u.stmts[Down], NoTx: u.NoTx,
 			Versioned: !u.Repeatable, Reversible: u.Reversible, Ignore: u.lintIgnore, Lexical: m.dialect.Lexical(),
 		})
-		for _, is := range issues {
-			out = append(out, Finding{
-				Rule: is.Rule, Severity: string(is.Severity), Message: is.Message, Hint: is.Hint,
-				Version: u.Label(), Source: u.Source, Statement: is.Statement, SQL: truncateSQL(is.SQL),
-			})
-		}
+		out = appendFindings(out, issues, Finding{Version: u.Label(), Source: u.Source})
+	}
+	for _, cb := range m.cat.callbacksFor(Up) {
+		issues := lint.Check(lint.Migration{Dialect: m.dialect.Name(), Up: cb.Statements, Lexical: m.dialect.Lexical()})
+		out = appendFindings(out, issues, Finding{Source: cb.Source, Event: cb.Event})
+	}
+	return out
+}
+
+// appendFindings converts lint issues into Findings located by at.
+func appendFindings(out []Finding, issues []lint.Issue, at Finding) []Finding {
+	for _, is := range issues {
+		f := at
+		f.Rule, f.Severity, f.Message, f.Hint = is.Rule, string(is.Severity), is.Message, is.Hint
+		f.Statement, f.SQL = is.Statement, truncateSQL(is.SQL)
+		out = append(out, f)
 	}
 	return out
 }

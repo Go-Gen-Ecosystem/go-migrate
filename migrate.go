@@ -105,6 +105,7 @@ func build(db *sql.DB, dialectName string, opts []Option) (*Migrator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	cat.scope = d.Name() + "/" + tbl.String()
 	return &Migrator{
 		db: db, dialect: d, table: tbl, store: history.New(d, tbl), opts: o, cat: cat,
 		plan: planner{cat: cat, allowOOO: o.allowOOO, allowMissing: o.allowMissing},

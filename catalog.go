@@ -63,6 +63,9 @@ type catalog struct {
 	units     []*unit
 	byKey     map[string]*unit
 	callbacks map[string][]callback
+	// scope identifies where plans run (dialect and history table), so a
+	// plan approved for one target never matches another.
+	scope string
 }
 
 // historyKey is the version column value for a migration.
@@ -133,12 +136,37 @@ func migrationsOf(us []*unit) []Migration {
 // and exact statements. Any change to what would run changes the ID.
 func (c *catalog) planID(dir Direction, plan []*unit) string {
 	h := sha256.New()
-	h.Write([]byte(dir.String()))
-	for _, u := range plan {
-		for _, part := range append([]string{u.key, u.Checksum}, u.stmts[dir]...) {
+	write := func(parts ...string) {
+		for _, p := range parts {
 			h.Write([]byte{0})
-			h.Write([]byte(part))
+			h.Write([]byte(p))
 		}
 	}
+	write(c.scope, dir.String())
+	for _, u := range plan {
+		write(u.key, u.Checksum)
+		write(u.stmts[dir]...)
+	}
+	for _, cb := range c.callbacksFor(dir) {
+		write(cb.Event, cb.Source)
+		write(cb.Statements...)
+	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// callbackEvents lists the events a run executes, in execution order.
+// Rollbacks run none (Flyway defines callbacks for migrate only).
+var callbackEvents = [2][]string{
+	Up: {source.BeforeMigrate, source.BeforeEachMigrate, source.AfterEachMigrate, source.AfterMigrate, source.AfterMigrateError},
+}
+
+// callbacksFor returns the callbacks a run in dir executes, in event order.
+func (c *catalog) callbacksFor(dir Direction) []Callback {
+	var out []Callback
+	for _, ev := range callbackEvents[dir] {
+		for _, cb := range c.callbacks[ev] {
+			out = append(out, Callback{Event: ev, Source: cb.name, Statements: slices.Clone(cb.stmts)})
+		}
+	}
+	return out
 }

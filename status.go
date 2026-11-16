@@ -90,6 +90,18 @@ func (m *Migrator) PlanID(dir Direction, plan []Migration) string {
 	return m.cat.planID(dir, units)
 }
 
+// Callbacks returns the SQL callbacks a run in direction dir executes, in
+// order: beforeMigrate once, beforeEachMigrate and afterEachMigrate around
+// every migration, then afterMigrate on success or afterMigrateError on
+// failure. They run even when no migration is pending. Rollbacks run none.
+// PlanID covers them, so an edited callback invalidates an approval.
+func (m *Migrator) Callbacks(dir Direction) []Callback {
+	if dir != Up && dir != Down {
+		return nil
+	}
+	return m.cat.callbacksFor(dir)
+}
+
 // Statements returns the SQL that mig runs in direction dir, after
 // placeholder substitution, exactly as it would be executed (Liquibase
 // updateSQL). Go migrations and unknown migrations return nil.

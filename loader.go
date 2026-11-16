@@ -108,7 +108,7 @@ func (l *loader) sqlUnit(f *source.File) (*unit, error) {
 		Migration: Migration{
 			Version: f.Version, Description: f.Description, Repeatable: f.Repeatable,
 			Source: f.Name, Checksum: f.Checksum, NoTx: f.Script.NoTx,
-			Reversible: len(stmts[Down]) > 0,
+			Reversible: len(stmts[Down]) > 0, Conditional: len(pre) > 0,
 		},
 		kind:       history.KindSQL,
 		stmts:      stmts,
