@@ -173,11 +173,7 @@ func (r runner) down(ctx context.Context, t DownTarget, res *Result) error {
 	if err := r.verify(Down, plan); err != nil {
 		return err
 	}
-	err = r.execute(ctx, plan, Down, s, res)
-	if len(res.Applied) > 0 { // even after a partial failure: something was dropped
-		err = errors.Join(err, r.invalidateRepeatables(ctx, s))
-	}
-	return err
+	return r.execute(ctx, plan, Down, s, res)
 }
 
 func (r runner) redo(ctx context.Context, res *Result) error {
@@ -190,9 +186,6 @@ func (r runner) redo(ctx context.Context, res *Result) error {
 		return err
 	}
 	if err := r.execute(ctx, plan, Down, s, &Result{Direction: Down}); err != nil {
-		return err
-	}
-	if err := r.invalidateRepeatables(ctx, s); err != nil {
 		return err
 	}
 	if s, err = r.snapshot(ctx); err != nil {
@@ -254,21 +247,6 @@ func (r runner) bypass(ctx context.Context, u *unit, dir Direction, s *snapshot,
 	default:
 		return false, nil
 	}
-}
-
-// invalidateRepeatables clears the stored checksum of every repeatable
-// migration after a rollback, so the next Up re-applies them: a rollback can
-// drop the objects they create (a view over a dropped table).
-func (r runner) invalidateRepeatables(ctx context.Context, s *snapshot) error {
-	for _, rec := range s.records {
-		if rec.Kind != history.KindRepeatable {
-			continue
-		}
-		if err := r.a.store.Realign(ctx, r.a.conn, rec.Version, "", history.KindRepeatable); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // baselineOnMigrate inserts the configured baseline when the history is

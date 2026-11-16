@@ -63,11 +63,13 @@ var dialects = map[string]*Dialect{
 		locker:           pgLocker{},
 	},
 	MySQL: {
-		name:        MySQL,
-		lexical:     script.Lexical{Backticks: true, HashComments: true, BackslashEscapes: true, MySQLComments: true},
-		quote:       '`',
-		tsType:      "DATETIME(6)",
-		tableSuffix: " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+		name:    MySQL,
+		lexical: script.Lexical{Backticks: true, HashComments: true, BackslashEscapes: true, MySQLComments: true},
+		quote:   '`',
+		tsType:  "DATETIME(6)",
+		// Binary collation: history keys and tags compare byte for byte,
+		// as in Go (the default utf8mb4 collation folds case and accents).
+		tableSuffix: " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin",
 		exists:      infoSchemaExists("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ?"),
 		schemaSQL:   "SELECT DATABASE()",
 		tables:      infoSchemaTables("SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'"),

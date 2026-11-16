@@ -64,11 +64,20 @@ var transitions = [2]struct{ done, begin, finish transition }{
 			return a.store.Complete(ctx, q, u.key, ms(st.start))
 		},
 	},
+	// A rollback can drop what repeatable migrations build on (the table
+	// under a view), so it invalidates them in its own history change:
+	// atomically with the row, or before any rollback SQL runs.
 	Down: {
 		done: func(a *applier, ctx context.Context, q history.Querier, u *unit, _ step) error {
+			if err := a.store.InvalidateRepeatables(ctx, q); err != nil {
+				return err
+			}
 			return a.store.Delete(ctx, q, u.key)
 		},
 		begin: func(a *applier, ctx context.Context, q history.Querier, u *unit, _ step) error {
+			if err := a.store.InvalidateRepeatables(ctx, q); err != nil {
+				return err
+			}
 			return a.store.MarkDirty(ctx, q, u.key)
 		},
 		finish: func(a *applier, ctx context.Context, q history.Querier, u *unit, _ step) error {

@@ -167,6 +167,7 @@ func TestConformance(t *testing.T) {
 			t.Run("one-connection pool", func(t *testing.T) { conformSingleConn(t, tg) })
 			t.Run("session state isolation", func(t *testing.T) { conformSessionState(t, tg) })
 			t.Run("baseline on migrate", func(t *testing.T) { conformBaselineOnMigrate(t, tg) })
+			t.Run("history identity and rollbacks", func(t *testing.T) { conformIdentity(t, tg) })
 		})
 	}
 }
@@ -399,6 +400,52 @@ func conformBaselineOnMigrate(t *testing.T, tg target) {
 		t.Fatalf("Up: %v", err)
 	}
 	eq(t, versions(res), []string{"2"})
+}
+
+// conformIdentity pins history semantics that databases differ on by
+// default: keys and tags compare byte for byte as in Go (MySQL's default
+// collation folds case and accents), repeated rollbacks succeed although
+// MySQL reports unchanged rows as unaffected, and every rollback re-arms
+// the repeatable migrations.
+func conformIdentity(t *testing.T, tg target) {
+	ctx := context.Background()
+	db := tg.open(t)
+	fsys := files(
+		"1_a.sql", "-- +migrate Up\nCREATE TABLE a (id INT);\n-- +migrate Down\nDROP TABLE a;",
+		"2_b.sql", "-- +migrate Up\nCREATE TABLE b (id INT);\n-- +migrate Down\nDROP TABLE b;",
+		"R__cafe.sql", "CREATE TABLE IF NOT EXISTS r_plain (id INT);",
+		"R__café.sql", "CREATE TABLE IF NOT EXISTS r_accent (id INT);",
+	)
+	m, err := New(db, tg.dialect, WithFS(fsys))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.UpTo(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Tag(ctx, "rel"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Up(ctx)
+	if err != nil {
+		t.Fatalf("Up with accent-distinct repeatables: %v", err)
+	}
+	eq(t, versions(res), []string{"2", "R:cafe", "R:café"})
+	if err := m.Tag(ctx, "Rel"); err != nil { // a different tag: must not move "rel"
+		t.Fatal(err)
+	}
+	if res, err = m.Down(ctx, DownTarget{Tag: "rel"}); err != nil {
+		t.Fatalf("Down to tag rel: %v", err)
+	}
+	eq(t, versions(res), []string{"2"})
+	if res, err = m.Down(ctx, DownTarget{Steps: 1}); err != nil {
+		t.Fatalf("second consecutive rollback: %v", err)
+	}
+	eq(t, versions(res), []string{"1"})
+	if res, err = m.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, versions(res), []string{"1", "2", "R:cafe", "R:café"})
 }
 
 // conformExamples proves examples/migrations is portable: it applies and

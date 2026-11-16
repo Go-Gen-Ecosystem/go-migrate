@@ -71,7 +71,7 @@ type Store struct {
 }
 
 type queries struct {
-	list, nextRank, insert, complete, markDirty, reapply, realign, delete, deleteFailed, clearTag, setTag string
+	list, nextRank, insert, complete, markDirty, reapply, realign, invalidate, delete, deleteFailed, clearTag, setTag, has string
 }
 
 // New returns a store for table t on dialect d.
@@ -87,10 +87,12 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 			", installed_by = " + p(4) + ", installed_on = " + p(5) + ", execution_ms = " + p(6) + ", success = " + p(7) +
 			" WHERE version = " + p(8),
 		realign:      "UPDATE " + q + " SET checksum = " + p(1) + ", kind = " + p(2) + " WHERE version = " + p(3),
+		invalidate:   "UPDATE " + q + " SET checksum = '' WHERE kind = " + p(1),
 		delete:       "DELETE FROM " + q + " WHERE version = " + p(1),
 		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
 		clearTag:     "UPDATE " + q + " SET tag = NULL WHERE tag = " + p(1),
 		setTag:       "UPDATE " + q + " SET tag = " + p(1) + " WHERE version = " + p(2),
+		has:          "SELECT COUNT(*) FROM " + q + " WHERE version = " + p(1),
 	}}
 }
 
@@ -185,6 +187,17 @@ func (s *Store) Realign(ctx context.Context, q Querier, version, checksum string
 	return s.exec(ctx, q, s.sql.realign, checksum, string(kind), version)
 }
 
+// InvalidateRepeatables clears the checksum of every repeatable migration,
+// so the next Up re-applies them. A rollback calls it in the same
+// transaction as its own history change: whatever the rollback drops (a
+// table under a view) is then always rebuilt. It is idempotent.
+func (s *Store) InvalidateRepeatables(ctx context.Context, q Querier) error {
+	if _, err := q.ExecContext(ctx, s.sql.invalidate, string(KindRepeatable)); err != nil {
+		return fmt.Errorf("invalidate repeatable migrations: %w", err)
+	}
+	return nil
+}
+
 // Delete removes the row for version.
 func (s *Store) Delete(ctx context.Context, q Querier, version string) error {
 	return s.exec(ctx, q, s.sql.delete, version)
@@ -199,7 +212,9 @@ func (s *Store) DeleteFailed(ctx context.Context, q Querier) (int64, error) {
 	return res.RowsAffected()
 }
 
-// exec runs a single-row write and reports ErrNotFound when no row matched.
+// exec runs a single-row write whose last argument is the version, and
+// reports ErrNotFound when that row does not exist. Zero affected rows alone
+// does not prove that: MySQL counts only rows whose values changed.
 func (s *Store) exec(ctx context.Context, q Querier, query string, args ...any) error {
 	res, err := q.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -209,7 +224,14 @@ func (s *Store) exec(ctx context.Context, q Querier, query string, args ...any) 
 	if err != nil {
 		return fmt.Errorf("update history: %w", err)
 	}
-	if n == 0 {
+	if n > 0 {
+		return nil
+	}
+	var rows int
+	if err := q.QueryRowContext(ctx, s.sql.has, args[len(args)-1]).Scan(&rows); err != nil {
+		return fmt.Errorf("update history: %w", err)
+	}
+	if rows == 0 {
 		return ErrNotFound
 	}
 	return nil
