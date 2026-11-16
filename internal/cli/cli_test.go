@@ -124,7 +124,7 @@ func TestEndToEnd(t *testing.T) {
 	if out, err = run(t, none, "redo"); err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, out, "Rolled back 1 ", "Applied 1 ")
+	mustContain(t, out, "Redid 1 ", "Redid 1 migration(s).")
 	if out, err = run(t, none, "validate"); err != nil {
 		t.Fatal(err)
 	}
@@ -198,5 +198,68 @@ func TestErrors(t *testing.T) {
 	write(t, "migrations/bad name.sql", "SELECT 1;")
 	if _, err := run(t, nil, "--dsn", "x.db", "status"); err == nil {
 		t.Fatal("malformed migration file name must fail")
+	}
+}
+
+func TestReviewFixes(t *testing.T) {
+	t.Chdir(t.TempDir())
+	none := map[string]string{}
+
+	// init quotes values, so a DSN with YAML-significant characters survives.
+	if _, err := run(t, none, "init", "--init-dsn", "odd #name: *x.db"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.DefaultPath, true)
+	if err != nil || cfg.Database.DSN != "odd #name: *x.db" {
+		t.Fatalf("round-tripped DSN = %q, %v", cfg.Database.DSN, err)
+	}
+	if err := os.Remove(config.DefaultPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two timestamped creates in the same second get distinct versions.
+	for range 2 {
+		if _, err := run(t, none, "--dsn", "x.db", "create", "same"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _ := os.ReadDir("migrations")
+	if len(entries) != 2 || entries[0].Name()[:14] == entries[1].Name()[:14] {
+		t.Fatalf("timestamp collision: %v", entries)
+	}
+	for _, e := range entries {
+		write(t, filepath.Join("migrations", e.Name()), "-- +migrate Up\nCREATE TABLE t_"+e.Name()[:14]+" (id INTEGER);\n-- +migrate Down\nDROP TABLE t_"+e.Name()[:14]+";")
+	}
+
+	if _, err := run(t, none, "--dsn", "x.db", "up"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, none, "--dsn", "x.db", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, `"current":`, `"installed_on":`, `"execution_ms":`, `"state": "applied"`)
+	if strings.Contains(out, "InstalledOn") || strings.Contains(out, "ExecutionTime") {
+		t.Fatalf("status --json must use the snake_case contract:\n%s", out)
+	}
+
+	if _, err := run(t, none, "--dsn", "x.db", "down", "--to", "0", "--all"); err == nil {
+		t.Fatal("--to with --all must be rejected")
+	}
+	out, err = run(t, none, "--dsn", "x.db", "mark-applied", entries[0].Name()[:14])
+	if err != nil || !strings.Contains(out, "Marked") {
+		t.Fatalf("mark-applied = %q, %v", out, err)
+	}
+}
+
+func TestFailedRunDoesNotSayNothingToDo(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("migrations", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, "migrations/1_bad.sql", "INSERT INTO missing VALUES (1);")
+	out, err := run(t, nil, "--dsn", "x.db", "up")
+	if err == nil || strings.Contains(out, "Nothing to do") {
+		t.Fatalf("out = %q, err = %v", out, err)
 	}
 }

@@ -23,7 +23,6 @@ func TestExpandEnv(t *testing.T) {
 		{"x: ${EMPTY:-def}", "x: def"},
 		{"x: ${EMPTY}", "x: "},
 		{"literal $dollar and $$ stay", "literal $dollar and $$ stay"},
-		{"  # comment mentions ${UNSET}\nx: ${PASS}", "  # comment mentions ${UNSET}\nx: s3cr$t"},
 	}
 	for _, tc := range tests {
 		got, err := ExpandEnv(tc.in, look)
@@ -74,17 +73,73 @@ func TestLoad(t *testing.T) {
 func TestApplyPrecedence(t *testing.T) {
 	cfg := Default()
 	cfg.Database.DSN = "from-file"
-	cfg.Apply(Overrides{}, env(map[string]string{EnvDatabaseURL: "from-database-url"}))
+	cfg.Apply(Overrides{}, false, env(map[string]string{EnvDatabaseURL: "from-database-url"}))
 	if cfg.Database.DSN != "from-database-url" {
 		t.Fatalf("DATABASE_URL should override file: %s", cfg.Database.DSN)
 	}
-	cfg.Apply(Overrides{}, env(map[string]string{EnvDatabaseURL: "x", EnvDSN: "from-gomigrate-dsn", EnvDriver: "mysql"}))
+	cfg.Apply(Overrides{}, false, env(map[string]string{EnvDatabaseURL: "x", EnvDSN: "from-gomigrate-dsn", EnvDriver: "mysql"}))
 	if cfg.Database.DSN != "from-gomigrate-dsn" || cfg.Database.Driver != "mysql" {
 		t.Fatalf("GOMIGRATE_* should win over DATABASE_URL: %+v", cfg.Database)
 	}
-	cfg.Apply(Overrides{DSN: "flag", Driver: "sqlite", Dir: "d", Table: "t"}, env(map[string]string{EnvDSN: "env"}))
+	cfg.Apply(Overrides{DSN: "flag", Driver: "sqlite", Dir: "d", Table: "t"}, false, env(map[string]string{EnvDSN: "env"}))
 	if cfg.Database.DSN != "flag" || cfg.Database.Driver != "sqlite" || cfg.Migrations.Dir != "d" || cfg.Migrations.Table != "t" {
 		t.Fatalf("flags should win: %+v", cfg)
+	}
+}
+
+func TestApplyDriverFollowsOverridingDSN(t *testing.T) {
+	cfg := Default()
+	cfg.Database.Driver, cfg.Database.DSN = "sqlite", "app.db" // as written by `gomigrate init`
+	cfg.Apply(Overrides{}, false, env(map[string]string{EnvDatabaseURL: "postgres://u:p@db/prod"}))
+	if cfg.Database.Driver != "postgres" {
+		t.Fatalf("driver = %s; a postgres:// DATABASE_URL must not be opened with the file's sqlite driver", cfg.Database.Driver)
+	}
+	cfg = Default()
+	cfg.Apply(Overrides{DSN: "postgres://x/y", Driver: "pgx"}, false, env(nil))
+	if cfg.Database.Driver != "pgx" {
+		t.Fatalf("a driver given at the same level as the DSN must be kept: %s", cfg.Database.Driver)
+	}
+}
+
+func TestApplyExplicitConfigIgnoresDatabaseURL(t *testing.T) {
+	cfg := Default()
+	cfg.Database.DSN = "prod-from-file"
+	cfg.Apply(Overrides{}, true, env(map[string]string{EnvDatabaseURL: "postgres://ambient/dev"}))
+	if cfg.Database.DSN != "prod-from-file" {
+		t.Fatalf("explicit --config must not be retargeted by DATABASE_URL: %s", cfg.Database.DSN)
+	}
+}
+
+func TestLoadExpandsAfterParsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	t.Setenv("GM_ODD_PW", "*abc: x #y")
+	body := `# ${GM_NOT_SET} in a comment is fine
+database:
+  password: ${GM_ODD_PW}
+  params:
+    application_name: ${GM_APP:-gomigrate}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.Password != "*abc: x #y" || cfg.Database.Params["application_name"] != "gomigrate" {
+		t.Fatalf("cfg = %+v", cfg.Database)
+	}
+}
+
+func TestPostgresDSNMergesParams(t *testing.T) {
+	_, dsn, err := Resolve(Database{Driver: "postgres", DSN: "postgres://u@h/db?sslmode=require", SSLMode: "disable",
+		Params: map[string]string{"application_name": "gm"}})
+	if err != nil || !strings.Contains(dsn, "sslmode=require") || !strings.Contains(dsn, "application_name=gm") {
+		t.Fatalf("URL DSN = %s, %v (explicit DSN values win, missing params are added)", dsn, err)
+	}
+	_, dsn, err = Resolve(Database{Driver: "postgres", DSN: "host=h dbname=d", SSLMode: "disable"})
+	if err != nil || dsn != "host=h dbname=d sslmode=disable" {
+		t.Fatalf("keyword DSN = %q, %v", dsn, err)
 	}
 }
 

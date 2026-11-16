@@ -60,7 +60,7 @@ func newRoot(version string, stderr io.Writer, getenv func(string) (string, bool
 
 	root.AddCommand(
 		newInitCmd(g), newCreateCmd(g), newUpCmd(g), newDownCmd(g), newRedoCmd(g),
-		newStatusCmd(g), newValidateCmd(g), newRepairCmd(g), newBaselineCmd(g),
+		newStatusCmd(g), newValidateCmd(g), newRepairCmd(g), newMarkAppliedCmd(g), newBaselineCmd(g),
 	)
 	return root
 }
@@ -83,7 +83,7 @@ func (g *globals) loadConfig() (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
-	cfg.Apply(g.overrides, g.getenv)
+	cfg.Apply(g.overrides, explicit, g.getenv)
 	return cfg, nil
 }
 

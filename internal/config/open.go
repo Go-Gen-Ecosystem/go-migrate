@@ -116,7 +116,7 @@ func inferDriver(dsn string) string {
 
 func postgresDSN(db Database) (string, error) {
 	if db.DSN != "" {
-		return db.DSN, nil
+		return mergePostgresParams(db)
 	}
 	if db.Name == "" {
 		return "", ErrNoDatabase
@@ -239,4 +239,40 @@ func orInt(v, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+// mergePostgresParams adds params/sslmode from the config to an explicit DSN
+// (URL or keyword form) without overriding values the DSN already sets.
+func mergePostgresParams(db Database) (string, error) {
+	extra := map[string]string{}
+	for k, v := range db.Params {
+		extra[k] = v
+	}
+	if db.SSLMode != "" {
+		extra["sslmode"] = db.SSLMode
+	}
+	if len(extra) == 0 {
+		return db.DSN, nil
+	}
+	if strings.Contains(db.DSN, "://") {
+		u, err := url.Parse(db.DSN)
+		if err != nil {
+			return "", errors.New("invalid postgres URL") // the parser error can echo the DSN
+		}
+		q := u.Query()
+		for k, v := range extra {
+			if !q.Has(k) {
+				q.Set(k, v)
+			}
+		}
+		u.RawQuery = q.Encode()
+		return u.String(), nil
+	}
+	dsn := db.DSN
+	for k, v := range extra {
+		if !strings.Contains(dsn, k+"=") {
+			dsn += " " + k + "=" + v
+		}
+	}
+	return dsn, nil
 }

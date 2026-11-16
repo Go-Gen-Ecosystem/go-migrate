@@ -80,14 +80,35 @@ func Load(path string, explicit bool) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
-	expanded, err := ExpandEnv(string(raw), os.LookupEnv)
-	if err != nil {
-		return Config{}, fmt.Errorf("config %s: %w", path, err)
-	}
-	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	// Expand ${VAR} after parsing, inside string values only: a secret such
+	// as "*abc" or "a: b" can then never change the YAML structure.
+	if err := cfg.expand(os.LookupEnv); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	}
 	return cfg, nil
+}
+
+func (cfg *Config) expand(lookup func(string) (string, bool)) error {
+	db, mg := &cfg.Database, &cfg.Migrations
+	fields := []*string{&db.Driver, &db.DSN, &db.Host, &db.Name, &db.User, &db.Password, &db.SSLMode, &mg.Dir, &mg.Table}
+	for _, f := range fields {
+		v, err := ExpandEnv(*f, lookup)
+		if err != nil {
+			return err
+		}
+		*f = v
+	}
+	for k, v := range db.Params {
+		ev, err := ExpandEnv(v, lookup)
+		if err != nil {
+			return err
+		}
+		db.Params[k] = ev
+	}
+	return nil
 }
 
 // Overrides are values from flags; empty fields leave the config unchanged.
@@ -95,57 +116,65 @@ type Overrides struct {
 	DSN, Driver, Dir, Table string
 }
 
-// Apply layers environment variables and then flags over cfg.
-func (cfg *Config) Apply(o Overrides, lookup func(string) (string, bool)) {
-	if v, ok := lookup(EnvDatabaseURL); ok && v != "" {
-		cfg.Database.DSN = v
-	}
-	if v, ok := lookup(EnvDSN); ok && v != "" {
-		cfg.Database.DSN = v
-	}
-	if v, ok := lookup(EnvDriver); ok && v != "" {
-		cfg.Database.Driver = v
-	}
-	set := func(dst *string, v string) {
+// Apply layers environment variables and then flags over cfg, in increasing
+// precedence: DATABASE_URL, GOMIGRATE_DSN / GOMIGRATE_DRIVER, flags.
+//
+// The generic DATABASE_URL is ignored when the config file was named
+// explicitly (--config), so an ambient variable never retargets a run aimed
+// at a specific database. When a DSN overrides the file and its scheme
+// identifies a driver (postgres://, mysql://, sqlite://), that driver wins
+// over any driver set at a lower level.
+func (cfg *Config) Apply(o Overrides, explicitConfig bool, lookup func(string) (string, bool)) {
+	const (
+		fromFile = iota
+		fromDatabaseURL
+		fromEnv
+		fromFlag
+	)
+	dsnLevel, driverLevel := fromFile, fromFile
+	set := func(dst *string, v string, level int, track *int) {
 		if v != "" {
 			*dst = v
+			if track != nil {
+				*track = level
+			}
 		}
 	}
-	set(&cfg.Database.DSN, o.DSN)
-	set(&cfg.Database.Driver, o.Driver)
-	set(&cfg.Migrations.Dir, o.Dir)
-	set(&cfg.Migrations.Table, o.Table)
+	if v, ok := lookup(EnvDatabaseURL); ok && !explicitConfig {
+		set(&cfg.Database.DSN, v, fromDatabaseURL, &dsnLevel)
+	}
+	if v, ok := lookup(EnvDSN); ok {
+		set(&cfg.Database.DSN, v, fromEnv, &dsnLevel)
+	}
+	if v, ok := lookup(EnvDriver); ok {
+		set(&cfg.Database.Driver, v, fromEnv, &driverLevel)
+	}
+	set(&cfg.Database.DSN, o.DSN, fromFlag, &dsnLevel)
+	set(&cfg.Database.Driver, o.Driver, fromFlag, &driverLevel)
+	set(&cfg.Migrations.Dir, o.Dir, fromFlag, nil)
+	set(&cfg.Migrations.Table, o.Table, fromFlag, nil)
+
+	if dsnLevel > driverLevel {
+		if d := inferDriver(cfg.Database.DSN); d != "" {
+			cfg.Database.Driver = d
+		}
+	}
 }
 
-// ExpandEnv replaces ${VAR} and ${VAR:-default} in s. Full-line '#'
-// comments are left untouched, and a bare '$' is never expanded, so
-// passwords containing '$' survive. An unset variable without a default is an
-// error rather than a silent empty string.
+// ExpandEnv replaces ${VAR} and ${VAR:-default} in s. A bare '$' is never
+// expanded, so values containing '$' survive. An unset variable without a
+// default is an error rather than a silent empty string.
 func ExpandEnv(s string, lookup func(string) (string, bool)) (string, error) {
-	lines := strings.SplitAfter(s, "\n")
 	var b strings.Builder
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			b.WriteString(line)
-			continue
-		}
-		if err := expandLine(&b, line, lookup); err != nil {
-			return "", err
-		}
-	}
-	return b.String(), nil
-}
-
-func expandLine(b *strings.Builder, s string, lookup func(string) (string, bool)) error {
 	for {
 		i := strings.Index(s, "${")
 		if i < 0 {
 			b.WriteString(s)
-			return nil
+			return b.String(), nil
 		}
 		j := strings.IndexByte(s[i:], '}')
 		if j < 0 {
-			return errors.New("unterminated ${ in config")
+			return "", errors.New("unterminated ${ in config")
 		}
 		b.WriteString(s[:i])
 		name, def, hasDef := strings.Cut(s[i+2:i+j], ":-")
@@ -157,7 +186,7 @@ func expandLine(b *strings.Builder, s string, lookup func(string) (string, bool)
 			b.WriteString(def)
 		case ok:
 		default:
-			return fmt.Errorf("environment variable %s is not set", name)
+			return "", fmt.Errorf("environment variable %s is not set", name)
 		}
 		s = s[i+j+1:]
 	}

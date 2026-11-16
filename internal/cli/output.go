@@ -39,19 +39,22 @@ func (p *printer) plan(verb string, ms []migrate.Migration) {
 	}
 	p.printf("Would %s %d migration(s):\n", verb, len(ms))
 	for _, m := range ms {
-		p.printf("  %s\t%s\n", label(m), m.Source)
+		p.printf("  %s\t%s\n", m.Label(), m.Source)
 	}
 }
 
-// run prints what a (possibly partial) run did; it is called even when the
-// run failed part-way, so the user sees which migrations did complete.
-func (p *printer) run(verb string, r *migrate.Result) {
+// run prints what a run did. It is also called when the run failed part-way,
+// so the user sees which migrations did complete; "Nothing to do." is only
+// printed for a successful run.
+func (p *printer) run(verb string, r *migrate.Result, runErr error) {
 	if r == nil || len(r.Applied) == 0 {
-		p.printf("Nothing to do.\n")
+		if runErr == nil {
+			p.printf("Nothing to do.\n")
+		}
 		return
 	}
 	for _, a := range r.Applied {
-		p.printf("%s %s (%s) in %s\n", verb, label(a.Migration), a.Description, a.Duration.Round(time.Millisecond))
+		p.printf("%s %s (%s) in %s\n", verb, a.Label(), a.Description, a.Duration.Round(time.Millisecond))
 	}
 	p.printf("%s %d migration(s).\n", verb, len(r.Applied))
 }
@@ -63,7 +66,7 @@ func (p *printer) status(st *migrate.Status, asJSON bool) {
 	if asJSON {
 		enc := json.NewEncoder(p.w)
 		enc.SetIndent("", "  ")
-		p.err = enc.Encode(st)
+		p.err = enc.Encode(newStatusJSON(st))
 		return
 	}
 	tab := tabwriter.NewWriter(p.w, 0, 0, 2, ' ', 0)
@@ -74,7 +77,7 @@ func (p *printer) status(st *migrate.Status, asJSON bool) {
 		if !mi.InstalledOn.IsZero() {
 			on = mi.InstalledOn.Format(time.RFC3339)
 		}
-		tw.printf("%s\t%s\t%s\t%s\t%s\n", label(mi.Migration), mi.Description, mi.State, on, mi.Source)
+		tw.printf("%s\t%s\t%s\t%s\t%s\n", mi.Label(), mi.Description, mi.State, on, mi.Source)
 	}
 	if tw.err == nil {
 		tw.err = tab.Flush()
@@ -89,9 +92,39 @@ func (p *printer) status(st *migrate.Status, asJSON bool) {
 	p.printf("\nCurrent version: %s | Pending: %d | Dirty: %t\n", current, st.Pending, st.Dirty)
 }
 
-func label(m migrate.Migration) string {
-	if m.Repeatable {
-		return "R__" + m.Description
+// statusJSON is the stable `status --json` contract: snake_case keys,
+// durations in milliseconds, and absent fields omitted rather than zero.
+type statusJSON struct {
+	Current    string          `json:"current,omitempty"`
+	Dirty      bool            `json:"dirty"`
+	Pending    int             `json:"pending"`
+	Migrations []migrationJSON `json:"migrations"`
+}
+
+type migrationJSON struct {
+	Version     string     `json:"version,omitempty"`
+	Description string     `json:"description"`
+	Repeatable  bool       `json:"repeatable,omitempty"`
+	State       string     `json:"state"`
+	Source      string     `json:"source"`
+	Checksum    string     `json:"checksum,omitempty"`
+	InstalledOn *time.Time `json:"installed_on,omitempty"`
+	InstalledBy string     `json:"installed_by,omitempty"`
+	ExecutionMS *int64     `json:"execution_ms,omitempty"`
+}
+
+func newStatusJSON(st *migrate.Status) statusJSON {
+	out := statusJSON{Current: st.Current, Dirty: st.Dirty, Pending: st.Pending, Migrations: make([]migrationJSON, 0, len(st.Migrations))}
+	for _, mi := range st.Migrations {
+		mj := migrationJSON{
+			Version: mi.Version, Description: mi.Description, Repeatable: mi.Repeatable,
+			State: string(mi.State), Source: mi.Source, Checksum: mi.Checksum, InstalledBy: mi.InstalledBy,
+		}
+		if !mi.InstalledOn.IsZero() {
+			on, ms := mi.InstalledOn, mi.ExecutionTime.Milliseconds()
+			mj.InstalledOn, mj.ExecutionMS = &on, &ms
+		}
+		out.Migrations = append(out.Migrations, mj)
 	}
-	return m.Version
+	return out
 }
