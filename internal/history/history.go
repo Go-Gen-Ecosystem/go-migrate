@@ -115,7 +115,7 @@ func (s *Store) List(ctx context.Context, q Querier) ([]Record, error) {
 		var r Record
 		var kind string
 		if err := rows.Scan(&r.Rank, &r.Version, &r.Description, &kind, &r.Script, &r.Checksum,
-			&r.InstalledBy, &r.InstalledOn, &r.ExecutionMS, &r.Success); err != nil {
+			&r.InstalledBy, timestamp{&r.InstalledOn}, &r.ExecutionMS, &r.Success); err != nil {
 			return nil, fmt.Errorf("scan history: %w", err)
 		}
 		r.Kind = Kind(kind)

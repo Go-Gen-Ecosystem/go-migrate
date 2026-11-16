@@ -110,7 +110,8 @@ func openMySQL(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = admin.Exec("DROP DATABASE " + name) })
-	return mustOpen(t, "mysql", base+name+"?parseTime=true&loc=UTC")
+	// Deliberately no parseTime=true: the library must not depend on it.
+	return mustOpen(t, "mysql", base+name)
 }
 
 func mustOpen(t *testing.T, driver, dsn string) *sql.DB {
