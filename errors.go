@@ -24,6 +24,11 @@ var (
 	// ErrCallbackRecoveryRequired also matches ErrDirty. Inspect the callback
 	// effects, then clear RunCallbacksRepairKey only when another run is safe.
 	ErrCallbackRecoveryRequired error = callbackRecoveryError{}
+	// ErrCommitOutcomeUnknown means a migration transaction may have committed
+	// even though Commit returned an error. The migration and its history change
+	// share that outcome. Inspect them on the writable database and make a
+	// fresh plan before retrying.
+	ErrCommitOutcomeUnknown = errors.New("transaction commit outcome unknown; reconnect to the writable database, inspect the schema and migration history, and generate a fresh plan before retrying")
 	// ErrBelowBaseline means a rollback target lies below the baseline,
 	// which cannot be rolled back.
 	ErrBelowBaseline = errors.New("target version is below the baseline")
@@ -104,11 +109,13 @@ var (
 // so large seed statements are not copied into logs wholesale.
 const maxSQLInError = 120
 
-// MigrationError reports which migration and statement failed.
+// MigrationError identifies the migration and, when relevant, the statement
+// associated with an error.
 type MigrationError struct {
 	Version   string
 	Direction Direction
-	// Statement is the 1-based index of the failing statement (0 for Go migrations).
+	// Statement is the 1-based index of the failing statement, or 0 if the
+	// error is not tied to a statement (for example, during Commit).
 	Statement int
 	// SQL is the start of the failing statement, truncated.
 	SQL string

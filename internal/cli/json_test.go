@@ -5,8 +5,13 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
+	"slices"
 	"testing"
+
+	migrate "github.com/go-gen-ecosystem/go-migrate"
 )
 
 type testEnvelope struct {
@@ -19,6 +24,7 @@ type testEnvelope struct {
 		Message   string   `json:"message"`
 		Migration *struct {
 			Version   string `json:"version"`
+			Direction string `json:"direction"`
 			Statement int    `json:"statement"`
 			Dirty     bool   `json:"dirty"`
 		} `json:"migration"`
@@ -32,6 +38,32 @@ func decode(t *testing.T, out string) testEnvelope {
 		t.Fatalf("output is not one JSON document: %v\n%s", err, out)
 	}
 	return e
+}
+
+func TestUnknownCommitJSONError(t *testing.T) {
+	err := &migrate.MigrationError{
+		Version: "2", Direction: migrate.Up,
+		Err: fmt.Errorf("%w: %w", migrate.ErrCommitOutcomeUnknown, io.EOF),
+	}
+	result := &migrate.Result{Direction: migrate.Up, Applied: []migrate.Applied{{Migration: migrate.Migration{Version: "1"}}}}
+	out, marshalErr := json.Marshal(errEnvelope("up", withData(err, newRun(result))))
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	e := decode(t, string(out))
+	if e.OK || e.Error == nil || e.Error.Code != "commit_outcome_unknown" ||
+		!slices.Equal(e.Error.Codes, []string{"commit_outcome_unknown"}) {
+		t.Fatalf("unknown commit envelope = %s", out)
+	}
+	m := e.Error.Migration
+	if m == nil || m.Version != "2" || m.Direction != "up" || m.Statement != 0 || m.Dirty {
+		t.Fatalf("unknown commit migration = %s", out)
+	}
+	mustContain(t, e.Error.Message, "inspect the schema and migration history", "generate a fresh plan", io.EOF.Error())
+	var run runJSON
+	if err := json.Unmarshal(e.Data, &run); err != nil || len(run.Applied) != 1 || run.Applied[0].Version != "1" {
+		t.Fatalf("unknown commit partial result = %s (%v)", out, err)
+	}
 }
 
 func TestRepairCommandRequiresOneTargetAndAction(t *testing.T) {

@@ -58,11 +58,14 @@ func ErrorCodes(err error) []string {
 		return nil
 	}
 	var out []string
+	if errors.Is(err, ErrCommitOutcomeUnknown) {
+		out = append(out, "commit_outcome_unknown")
+	}
 	if errors.Is(err, ErrCallbackRecoveryRequired) {
 		out = append(out, "callback_recovery_required")
 	}
 	var me *MigrationError
-	if errors.As(err, &me) {
+	if errors.As(err, &me) && !errors.Is(me, ErrCommitOutcomeUnknown) {
 		out = append(out, "migration_failed")
 	}
 	for _, c := range codes {

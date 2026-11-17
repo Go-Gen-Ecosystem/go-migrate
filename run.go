@@ -180,6 +180,11 @@ func (r runner) up(ctx context.Context, target string, res *Result) error {
 		return guard.protect(err)
 	}
 	if err := r.execute(ctx, plan, Up, s, res); err != nil {
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			// Either outcome is possible. Leave any active recovery marker
+			// intact and let the operator inspect the database first.
+			return guard.protect(err)
+		}
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		return guard.protect(errors.Join(err, guard.run(cctx, source.AfterMigrateError)))

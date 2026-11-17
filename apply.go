@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
@@ -128,13 +131,14 @@ func (a *applier) apply(ctx context.Context, u *unit, dir Direction, s *snapshot
 }
 
 // atomic runs callbacks, the migration, the lock fence and the history change
-// in one transaction: on any failure nothing is applied and nothing recorded.
+// in one transaction. A failure before commit leaves neither the migration
+// nor its history change. A commit error may leave the outcome unknown.
 func (a *applier) atomic(ctx context.Context, u *unit, dir Direction, st step) error {
 	tx, err := a.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction for %s: %w", u.Label(), err)
 	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	defer func() { _ = tx.Rollback() }()
 
 	ev := eachEvents[dir]
 	steps := []func() error{
@@ -149,8 +153,16 @@ func (a *applier) atomic(ctx context.Context, u *unit, dir Direction, st step) e
 			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	// Cancellation observed here proves Commit was never called. A context
+	// error returned by Commit itself can also come from the driver after send.
+	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("commit %s: %w", u.Label(), err)
+	}
+	if err := tx.Commit(); err != nil {
+		if a.d.Name() == dialect.Postgres && (errors.Is(err, pgx.ErrTxCommitRollback) || pgconn.SafeToRetry(err)) {
+			return fmt.Errorf("commit %s: %w", u.Label(), err)
+		}
+		return &MigrationError{Version: u.Label(), Direction: dir, Err: fmt.Errorf("%w: %w", ErrCommitOutcomeUnknown, err)}
 	}
 	return nil
 }
