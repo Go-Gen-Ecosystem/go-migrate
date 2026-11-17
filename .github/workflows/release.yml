@@ -1,6 +1,3 @@
-# Per-module release workflow. Copy to <module>/.github/workflows/release.yml.
-# Runs goreleaser on v* tags (libraries publish changelog+release; CLIs also build binaries).
-#
 # @author Admilson B. F. Cossa
 name: Release
 
@@ -8,24 +5,149 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GOWORK: "off"
+  GOTOOLCHAIN: local
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    env:
-      GOWORK: off
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: stable
-      - uses: goreleaser/goreleaser-action@v6
+          go-version-file: go.mod
+      - name: Verify release source
+        run: go run ./internal/releasecheck source "$GITHUB_REF_NAME" "$GITHUB_SHA"
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: latest
-          args: release --clean
+          version: v2.20.2
+          args: release --clean --skip=publish
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+      - name: Verify and collect release files
+        run: |
+          go run ./internal/releasecheck source "$GITHUB_REF_NAME" "$GITHUB_SHA"
+          payload="$RUNNER_TEMP/release-payload"
+          mkdir "$payload"
+          cp dist/*.tar.gz dist/*.zip dist/checksums.txt dist/CHANGELOG.md "$payload/"
+          go run ./internal/releasecheck payload "$GITHUB_REF_NAME" "$payload"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/release-payload/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload
+        with:
+          name: release-payload-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-payload/*
+          if-no-files-found: error
+          compression-level: 0
+
+  smoke:
+    needs: build
+    permissions:
+      contents: read
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, goos: linux, goarch: amd64}
+          - {runner: ubuntu-24.04-arm, goos: linux, goarch: arm64}
+          - {runner: macos-15-intel, goos: darwin, goarch: amd64}
+          - {runner: macos-15, goos: darwin, goarch: arm64}
+          - {runner: windows-2025, goos: windows, goarch: amd64}
+          - {runner: windows-11-arm, goos: windows, goarch: arm64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          architecture: ${{ matrix.goarch == 'amd64' && 'x64' || 'arm64' }}
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/release-payload
+          digest-mismatch: error
+      - name: Verify release provenance
+        run: go run ./internal/releasecheck attest "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-payload" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Smoke test the installed CLI against SQLite
+        run: |
+          test "$RUNNER_ARCH" = "$SMOKE_RUNNER_ARCH"
+          go run ./internal/releasecheck smoke "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-payload" "$GITHUB_SHA" "$SMOKE_GOOS" "$SMOKE_GOARCH"
+        env:
+          SMOKE_RUNNER_ARCH: ${{ matrix.goarch == 'amd64' && 'X64' || 'ARM64' }}
+          SMOKE_GOOS: ${{ matrix.goos }}
+          SMOKE_GOARCH: ${{ matrix.goarch }}
+
+  publish:
+    needs: [build, smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/release-payload
+          digest-mismatch: error
+      - name: Reverify release provenance and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          payload="$RUNNER_TEMP/release-payload"
+          verify_tag() {
+            local object object_type object_sha
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')"
+            read -r object_type object_sha <<< "$object"
+            while [[ "$object_type" = tag ]]; do
+              object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq '.object.type + " " + .object.sha')"
+              read -r object_type object_sha <<< "$object"
+            done
+            test "$object_type" = commit && test "$object_sha" = "$GITHUB_SHA"
+          }
+          go run ./internal/releasecheck attest "$GITHUB_REF_NAME" "$payload" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+          verify_tag
+          gh release create "$GITHUB_REF_NAME" "$payload"/*.tar.gz "$payload"/*.zip "$payload/checksums.txt" --draft \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --notes-file "$payload/CHANGELOG.md"
+          release_id="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
+          release="repos/$GITHUB_REPOSITORY/releases/$release_id"
+          test "$(gh api "$release" --jq .draft)" = true
+          expected="$(cd "$payload"; cat checksums.txt; sha256sum checksums.txt)"
+          uploaded="$(gh api "$release/assets?per_page=100" --jq '.[] | (.digest | ltrimstr("sha256:")) + "  " + .name')"
+          diff <(sort <<< "$expected") <(sort <<< "$uploaded")
+          verify_tag
+          gh api --method PATCH "$release" -F draft=false --jq .html_url
