@@ -17,6 +17,10 @@ jobs:
   # must apply each migration exactly once (proves the advisory locks).
   integration:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      statement-coverage: ${{ steps.coverage.outputs.percent }}
     env:
       GOWORK: "off"
       GOMIGRATE_TEST_POSTGRES_DSN: postgres://postgres:pw@localhost:5432/postgres?sslmode=disable
@@ -44,7 +48,32 @@ jobs:
       - name: Conformance (PostgreSQL, MySQL, SQLite) with race detector
         run: go test ./... -race -count=1 -coverpkg=./... -coverprofile=coverage.out
       - name: Coverage
-        run: go tool cover -func=coverage.out | tail -1
+        id: coverage
+        run: |
+          set -o pipefail
+          percent=$(go tool cover -func=coverage.out | awk '$1 == "total:" && $2 == "(statements)" {print $3}')
+          [[ "$percent" =~ ^([0-9]{1,2}\.[0-9]|100\.0)%$ ]]
+          printf 'Total statement coverage: %s\n' "$percent"
+          printf 'percent=%s\n' "$percent" >> "$GITHUB_OUTPUT"
+
+  publish-coverage:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: integration
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Publish statement coverage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COVERAGE: ${{ needs.integration.outputs.statement-coverage }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name=statement-coverage -f "head_sha=$GITHUB_SHA" -f conclusion=success \
+            -f "details_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f "output[title]=$COVERAGE" \
+            -f "output[summary]=Statement coverage measured by the PostgreSQL, MySQL, and SQLite integration suite." \
+            --silent
 
   sqlserver-conformance:
     # Enable only after the repository owner accepts Microsoft's license

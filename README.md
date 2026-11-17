@@ -9,6 +9,8 @@ and one static CLI. It has Flyway's safety model and Liquibase's targeting, need
 lints migration SQL for production risks, and includes an MCP server so agents can
 migrate safely.
 
+[![Latest release](https://img.shields.io/github/v/release/Go-Gen-Ecosystem/go-migrate?label=release)](https://github.com/Go-Gen-Ecosystem/go-migrate/releases/latest)
+[![Integration statement coverage](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2FGo-Gen-Ecosystem%2Fgo-migrate%2Fcommits%2Fmain%2Fcheck-runs%3Fcheck_name%3Dstatement-coverage&query=%24.check_runs%5B0%5D.output.title&label=coverage)](https://github.com/Go-Gen-Ecosystem/go-migrate/actions/workflows/ci.yml?query=branch%3Amain)
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-gen-ecosystem/go-migrate.svg)](https://pkg.go.dev/github.com/go-gen-ecosystem/go-migrate)
 
 ```bash
