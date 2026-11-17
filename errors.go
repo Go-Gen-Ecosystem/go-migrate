@@ -81,6 +81,7 @@ var (
 	ErrUnknownDirective    = script.ErrUnknownDirective
 	ErrTSQLBatch           = script.ErrTSQLBatch
 	ErrPLSQLBlock          = script.ErrPLSQLBlock
+	ErrSQLPLBlock          = script.ErrSQLPLBlock
 	ErrUnsupportedDialect  = dialect.ErrUnsupported
 	ErrInvalidIdentifier   = dialect.ErrInvalidIdentifier
 	ErrHistoryRowNotFound  = history.ErrNotFound

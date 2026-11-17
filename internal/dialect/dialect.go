@@ -26,6 +26,7 @@ const (
 	SQLite    = "sqlite"
 	SQLServer = "sqlserver"
 	Oracle    = "oracle"
+	DB2       = "db2"
 )
 
 // ErrUnsupported is returned by Lookup for an unknown dialect name.
@@ -109,6 +110,17 @@ var dialects = map[string]*Dialect{
 		tables:     infoSchemaTables("SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :1 AND NESTED = 'NO' AND SECONDARY = 'N'"),
 		locker:     (*Dialect).oracleLock,
 	},
+	DB2: {
+		name:             DB2,
+		lexical:          script.Lexical{SQLPL: true},
+		transactionalDDL: true,
+		quote:            '"',
+		tsType:           "TIMESTAMP(6)",
+		exists:           db2Exists,
+		schemaSQL:        "VALUES RTRIM(CURRENT SCHEMA)",
+		tables:           infoSchemaTables("SELECT TABNAME FROM SYSCAT.TABLES WHERE TABSCHEMA = ? AND TYPE = 'T'"),
+		locker:           (*Dialect).db2Lock,
+	},
 }
 
 // Lookup returns the dialect for a driver or dialect name. Common aliases
@@ -125,6 +137,8 @@ func Lookup(name string) (*Dialect, error) {
 		return dialects[SQLServer], nil
 	case "oracle", "oracledb":
 		return dialects[Oracle], nil
+	case "db2", "db2luw":
+		return dialects[DB2], nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupported, name)
 	}
@@ -190,7 +204,7 @@ func (t Table) String() string { return t.qualified(func(s string) string { retu
 
 // Quote returns t quoted for this dialect.
 func (d *Dialect) Quote(t Table) string {
-	if d.name == Oracle {
+	if d.name == Oracle || d.name == DB2 {
 		t.Name = strings.ToUpper(t.Name)
 	}
 	return t.qualified(d.quoteIdentifier)
@@ -228,6 +242,8 @@ func (d *Dialect) HistoryDDL(t Table) string {
 	case Oracle:
 		textType, shortType, boolType, msType, textUnits = "VARCHAR2", "VARCHAR2", "NUMBER(1)", "NUMBER(19)", " CHAR"
 		nullableText = "" // Oracle stores empty descriptions and checksums as NULL.
+	case DB2:
+		prefix, boolType, textUnits = "CREATE TABLE ", "SMALLINT", " CODEUNITS32"
 	}
 	return prefix + table + " (\n" +
 		"  installed_rank INTEGER NOT NULL PRIMARY KEY,\n" +
@@ -276,8 +292,8 @@ func (d *Dialect) ResolveTable(ctx context.Context, conn *sql.Conn, table Table)
 	if d.name == SQLServer {
 		return resolveSQLServerTable(ctx, conn, table)
 	}
-	if d.name == Oracle {
-		// The option accepts ordinary, undelimited Oracle identifiers. Keep
+	if d.name == Oracle || d.name == DB2 {
+		// The option accepts ordinary, undelimited identifiers. Keep
 		// the database's exact spelling when resolving a session's schema.
 		table.Name = strings.ToUpper(table.Name)
 		table.Schema = strings.ToUpper(table.Schema)

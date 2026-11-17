@@ -5,6 +5,7 @@ go 1.26.9
 toolchain go1.26.11
 
 require (
+	github.com/go-db2/go-db2 v0.0.0-20261116215536-929eea019401
 	github.com/go-gen-ecosystem/halolog v1.3.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/gofrs/flock v0.13.2

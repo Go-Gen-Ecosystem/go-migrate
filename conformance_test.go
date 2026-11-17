@@ -10,6 +10,8 @@ package migrate
 //	GOMIGRATE_TEST_MYSQL_DSN=root:pw@tcp(localhost:3306)/
 //	GOMIGRATE_TEST_SQLSERVER_DSN=sqlserver://sa:<password>@localhost:1433?database=master&trustservercertificate=true
 //	GOMIGRATE_TEST_ORACLE_DSN=oracle://fixture_admin:<password>@localhost:1521/FREEPDB1?protocol=tcp
+//	GOMIGRATE_TEST_DB2_DSN=db2://fixture_admin:<password>@localhost:50001/GTMTEST?ssl_ca=/path/to/test-ca.pem
+//	GOMIGRATE_TEST_DB2_APP_DSN=db2://fixture_app:<password>@localhost:50001/GTMTEST?ssl_ca=/path/to/test-ca.pem
 //
 // (see `make test-integration`). Each test gets its own schema/database.
 
@@ -86,6 +88,7 @@ func targets() []target {
 		},
 		sqlServerTarget(),
 		oracleTarget(),
+		db2Target(),
 	}
 }
 
@@ -155,8 +158,8 @@ func count(t *testing.T, db *sql.DB, q string) int {
 }
 
 var lifecycle = files(
-	"1_users.sql", "-- +migrate Up\nCREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));\n-- +migrate Down\nDROP TABLE users;",
-	"2_posts.up.sql", "CREATE TABLE posts (id INT PRIMARY KEY, user_id INT);",
+	"1_users.sql", "-- +migrate Up\nCREATE TABLE users (id INT NOT NULL PRIMARY KEY, name VARCHAR(50));\n-- +migrate Down\nDROP TABLE users;",
+	"2_posts.up.sql", "CREATE TABLE posts (id INT NOT NULL PRIMARY KEY, user_id INT);",
 	"2_posts.down.sql", "DROP TABLE posts;",
 	"10_seed.sql", "-- +migrate Up\nINSERT INTO users VALUES (1, 'ada; lovelace');\n-- +migrate Down\nDELETE FROM users;",
 )
@@ -165,7 +168,7 @@ func TestConformance(t *testing.T) {
 	for _, tg := range targets() {
 		t.Run(tg.dialect, func(t *testing.T) {
 			t.Run("lifecycle", func(t *testing.T) { conformLifecycle(t, tg) })
-			t.Run("failure", func(t *testing.T) { conformFailure(t, tg) })
+			t.Run("failure", func(t *testing.T) { conformFailure(t, tg, false) })
 			t.Run("dialect SQL", func(t *testing.T) { conformSpecial(t, tg) })
 			t.Run("concurrent runs", func(t *testing.T) { conformConcurrent(t, tg) })
 			t.Run("status is read-only", func(t *testing.T) { conformReadOnly(t, tg) })
@@ -184,6 +187,12 @@ func TestConformance(t *testing.T) {
 				t.Run("engine version", conformOracleVersion)
 				t.Run("session lock across DDL", conformOracleLock)
 				t.Run("Go checksums and baseline", conformOracleEmptyChecksum)
+			}
+			if tg.dialect == dialect.DB2 {
+				t.Run("engine version", conformDB2Version)
+				t.Run("session lock across commit", conformDB2Lock)
+				t.Run("TLS verification", conformDB2TLS)
+				t.Run("nontransactional failure", func(t *testing.T) { conformFailure(t, tg, true) })
 			}
 		})
 	}
@@ -225,10 +234,14 @@ func conformLifecycle(t *testing.T, tg target) {
 	eq(t, versions(res), []string{"1"})
 }
 
-func conformFailure(t *testing.T, tg target) {
+func conformFailure(t *testing.T, tg target, noTx bool) {
 	ctx := context.Background()
 	db := tg.open(t)
-	fsys := files("1_ok.sql", "CREATE TABLE ok (id INT);", "2_bad.sql", tg.failing)
+	failing := tg.failing
+	if noTx {
+		failing = "-- +migrate Up notransaction\n" + failing
+	}
+	fsys := files("1_ok.sql", "CREATE TABLE ok (id INT);", "2_bad.sql", failing)
 	m, err := New(db, tg.dialect, WithFS(fsys))
 	if err != nil {
 		t.Fatal(err)
@@ -238,8 +251,11 @@ func conformFailure(t *testing.T, tg target) {
 	if !errors.As(err, &me) || me.Version != "2" || me.Statement != 2 {
 		t.Fatalf("err = %v", err)
 	}
-	st, _ := m.Status(ctx)
-	if tg.dialect == dialect.MySQL || tg.dialect == dialect.Oracle {
+	st, statusErr := m.Status(ctx)
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if noTx || tg.dialect == dialect.MySQL || tg.dialect == dialect.Oracle {
 		// No transactional DDL: the first statement stuck, the row is dirty.
 		if !errors.Is(err, ErrDirty) || !st.Dirty {
 			t.Fatalf("%s failure must be dirty: err=%v status=%+v", tg.dialect, err, st)
@@ -379,6 +395,9 @@ func conformSessionState(t *testing.T, tg target) {
 	case dialect.Oracle:
 		conformOracleSession(t, tg)
 		return
+	case dialect.DB2:
+		conformDB2Session(t, tg)
+		return
 	default:
 		t.Skip("no session-level schema switch on SQLite")
 	}
@@ -440,6 +459,9 @@ func conformIdentity(t *testing.T, tg target) {
 	if tg.dialect == dialect.SQLServer {
 		repeat = "IF OBJECT_ID(N'%[1]s', N'U') IS NULL CREATE TABLE %[1]s (id INT);"
 	}
+	if tg.dialect == dialect.DB2 {
+		repeat = "CREATE OR REPLACE VIEW %s AS SELECT 1 AS ID FROM SYSIBM.SYSDUMMY1;"
+	}
 	fsys := files(
 		"1_a.sql", "-- +migrate Up\nCREATE TABLE a (id INT);\n-- +migrate Down\nDROP TABLE a;",
 		"2_b.sql", "-- +migrate Up\nCREATE TABLE b (id INT);\n-- +migrate Down\nDROP TABLE b;",
@@ -493,6 +515,9 @@ func conformExamples(t *testing.T, tg target) {
 	}
 	if tg.dialect == dialect.Oracle {
 		dir = "examples/oracle"
+	}
+	if tg.dialect == dialect.DB2 {
+		dir = "examples/db2"
 	}
 	m, err := New(db, tg.dialect, WithFS(os.DirFS(dir)))
 	if err != nil {

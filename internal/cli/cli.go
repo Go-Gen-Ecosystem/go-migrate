@@ -90,7 +90,7 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 	g := &globals{stderr: stderr, getenv: getenv}
 	root := &cobra.Command{
 		Use:           "gomigrate",
-		Short:         "Versioned SQL and Go migrations for PostgreSQL, MySQL, SQLite, SQL Server and Oracle",
+		Short:         "Versioned SQL and Go migrations for PostgreSQL, MySQL, SQLite, SQL Server, Oracle and Db2",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -100,7 +100,7 @@ func newRoot(version string, stdout, stderr io.Writer, getenv func(string) (stri
 	pf := root.PersistentFlags()
 	pf.StringVarP(&g.configPath, "config", "c", "", "config file (default "+config.DefaultPath+")")
 	pf.StringVar(&g.overrides.DSN, "dsn", "", "database DSN or URL (prefer GOMIGRATE_DSN: command lines are visible to other processes)")
-	pf.StringVar(&g.overrides.Driver, "driver", "", "postgres | mysql | sqlite | sqlserver | oracle (inferred from the DSN when omitted)")
+	pf.StringVar(&g.overrides.Driver, "driver", "", "postgres | mysql | sqlite | sqlserver | oracle | db2 (inferred from the DSN when omitted)")
 	pf.StringVar(&g.overrides.Dir, "dir", "", "migrations directory")
 	pf.StringVar(&g.overrides.Table, "table", "", "history table (name or schema.name)")
 	pf.StringSliceVar(&g.overrides.Contexts, "context", nil, "active contexts for Context-targeted migrations (repeatable)")

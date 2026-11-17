@@ -4,7 +4,7 @@
 # go-migrate
 
 **Database migrations for Go teams, CI pipelines and AI agents.** Versioned SQL and
-Go migrations for PostgreSQL, MySQL/MariaDB, SQLite, SQL Server and Oracle Database, delivered as a driver-free library
+Go migrations for PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, Oracle Database and IBM Db2 LUW, delivered as a driver-free library
 and one static CLI. It has Flyway's safety model and Liquibase's targeting, needs no JVM,
 lints migration SQL for production risks, and includes an MCP server so agents can
 migrate safely.
@@ -169,12 +169,38 @@ routines in `-- +migrate StatementBegin` and `-- +migrate StatementEnd`. Keep th
 final `END;` and omit the SQL*Plus slash command. Oracle `q'[...]'` and `nq'[...]'`
 literals can contain semicolons and newlines. See [the Oracle example](examples/oracle).
 
+## IBM Db2 LUW
+
+Use the `db2` dialect or a `db2://user:password@host:port/database` URL in
+`GOMIGRATE_DSN`. The CLI bundles the independent, MIT-licensed
+[go-db2 driver](https://github.com/go-db2/go-db2) and remains CGO-free. Library
+callers can register the `db2` driver and supply a `database/sql` pool. The
+conformance target is IBM Db2 Community Edition 12.1.5.0 on Linux x86-64
+with the default database collation.
+
+The CLI enables certificate-verified TLS and defaults to port 50001. Provide
+the instance's TLS listener port and `ssl_ca` if you use a private CA (`tls` and
+`ssl_ca` can also be set in `database.params`). An isolated fixture can opt in to
+unencrypted TCP with `tls=false&allow_plaintext_auth=true`. The CLI supports
+username and password authentication.
+
+Db2 history identifiers use uppercase names for ordinary unquoted identifiers.
+An unqualified history table uses the initial current schema. The migration
+login needs permission to create and modify its history and application objects
+and `EXECUTE` on the `SYSIBMADM.DBMS_LOCK` module. Use Db2 LUW 12.1.3 or newer
+with the Db2 native `DBMS_LOCK` module installed. Regular schema migrations run
+in a transaction. Use `notransaction` for statements that cannot run in one.
+Wrap Db2 SQL PL routines or compound statements in `StatementBegin` and
+`StatementEnd`. Keep the semicolons inside the block and omit CLP terminators
+such as `@`. See [the Db2 example](examples/db2).
+
 ## Safety model
 
 - **Locking:** a cross-process lock scoped to the configured migration history.
   - PostgreSQL and MySQL: `pg_advisory_lock` / `GET_LOCK`, which the server releases if the process dies.
   - SQL Server: a session-owned `sp_getapplock` per database. Distinct history tables in the same database share that lock so aliases of a table under a case-insensitive or accent-insensitive collation cannot bypass it.
   - Oracle: an exclusive `DBMS_LOCK` session lock per schema and history table that survives Oracle DDL commits.
+  - Db2: a numeric `SYSIBMADM.DBMS_LOCK` session lock derived from the schema and history table. Db2 keeps the lock across commits and releases it when the session ends. Histories that hash to the same ID serialize.
   - SQLite: a run-lifetime OS lock on `<database>.gomigrate-<history-table>.lock` beside the database file, with a fenced lease row. The containing directory must allow creation of that coordination file, and each migrator must be able to open it. Keep the file in place while any migrator might use it. In-memory SQLite databases coordinate within the process.
   - After a SQLite process exits, the OS lock is released and an abandoned lease can be reclaimed once it expires. Drain older versions before rolling out the SQLite lock change so all running migrators use the same coordination protocol.
   - Ten replicas can run `up` at boot, and each migration still runs exactly once.
@@ -184,7 +210,7 @@ literals can contain semicolons and newlines. See [the Oracle example](examples/
   - History writes use the schema selected before the run. SQL Server also qualifies them with the starting database, so `SET search_path` or `USE` in a migration cannot redirect history writes.
   - Session-lock connections are discarded afterwards, never returned to the pool.
 - **Atomicity.**
-  - PostgreSQL, SQLite and SQL Server normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
+  - PostgreSQL, SQLite, SQL Server and Db2 normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
   - MySQL, Oracle, and migrations marked `notransaction` commit a dirty row first. Oracle DDL commits implicitly. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
 - **Approval binds execution:** a plan ID hashes the dialect, history table, direction, versions, checksums, exact statements and the SQL callbacks that will run. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
@@ -332,5 +358,14 @@ isolated Oracle Database Free PDB with a fixture administrator that can create
 and drop disposable users and grant `EXECUTE` on `SYS.DBMS_LOCK`. Test users
 receive only the schema privileges needed by the suite and are dropped after
 each case.
+
+Set `GOMIGRATE_TEST_DB2_DSN` to an isolated Db2 fixture administrator URL that
+can create and drop temporary schemas and flush the fixture's dynamic package
+cache. The fixture needs the `SYSTOOLSPACE` tablespace for
+`SYSPROC.ADMIN_DROP_SCHEMA`. Set `GOMIGRATE_TEST_DB2_APP_DSN` to
+the low-privilege migration user's URL on the same database. To also run the TLS
+rejection checks, use a fixture certificate signed by its own CA and set
+`GOMIGRATE_TEST_DB2_TLS_MISMATCH_HOST` to an alias that resolves to the fixture
+and is absent from its certificate.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design. Licensed under Apache-2.0.

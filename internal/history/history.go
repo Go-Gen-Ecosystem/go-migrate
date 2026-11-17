@@ -110,6 +110,13 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 
 // Ensure creates the history table if it does not exist.
 func (s *Store) Ensure(ctx context.Context, q Querier) error {
+	if s.d.Name() == dialect.DB2 {
+		// Db2 has no native CREATE TABLE IF NOT EXISTS. The caller holds
+		// the history table's session lock across the check and creation.
+		if exists, err := s.Exists(ctx, q); err != nil || exists {
+			return err
+		}
+	}
 	if _, err := q.ExecContext(ctx, s.d.HistoryDDL(s.table)); err != nil {
 		return fmt.Errorf("create history table %s: %w", s.table, err)
 	}
@@ -238,7 +245,7 @@ func (s *Store) DeleteFailed(ctx context.Context, q Querier) (int64, error) {
 }
 
 func (s *Store) bindSuccess(success bool) any {
-	if s.d.Name() != dialect.Oracle {
+	if s.d.Name() != dialect.Oracle && s.d.Name() != dialect.DB2 {
 		return success
 	}
 	if success {

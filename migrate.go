@@ -2,12 +2,12 @@
 // @author Admilson B. F. Cossa
 
 // Package migrate applies versioned SQL and Go migrations to PostgreSQL,
-// MySQL/MariaDB, SQLite, SQL Server, and Oracle Database.
+// MySQL/MariaDB, SQLite, SQL Server, Oracle Database, and IBM Db2 LUW.
 //
 // A Migrator is built once from a *sql.DB and a migration source and is then
 // immutable and safe for concurrent use. Runs that change the database (Up,
 // Down, Repair, Baseline) hold a cross-process lock: a session advisory lock
-// on PostgreSQL, MySQL, SQL Server, and Oracle and a run-lifetime file lock with a lease on SQLite.
+// on PostgreSQL, MySQL, SQL Server, Oracle, and Db2 and a run-lifetime file lock with a lease on SQLite.
 // In-memory SQLite databases coordinate within the process. Transactional
 // migrations and their history row commit together. A failed nontransactional
 // migration leaves a "dirty" row that blocks further runs until Repair.
@@ -18,6 +18,7 @@
 //	import _ "github.com/go-sql-driver/mysql" // "mysql"
 //	import _ "github.com/microsoft/go-mssqldb" // "sqlserver"
 //	import _ "github.com/oracle/go-oracledb/v26/oracle" // "oracledb"
+//	import _ "github.com/go-db2/go-db2"                // "db2"
 //	import _ "modernc.org/sqlite"             // "sqlite", pure Go
 package migrate
 
@@ -55,7 +56,7 @@ const (
 )
 
 // New builds a Migrator for db. dialectName is "postgres", "mysql", "sqlite",
-// "sqlserver", or "oracle" (aliases include "pgx", "mariadb", "sqlite3", "mssql", and "oracledb").
+// "sqlserver", "oracle", or "db2". Common driver aliases are accepted.
 // The migration source is loaded and validated immediately, so malformed
 // files and duplicate versions fail here rather than mid-run.
 func New(db *sql.DB, dialectName string, opts ...Option) (*Migrator, error) {

@@ -32,6 +32,8 @@ type Lexical struct {
 	TSQL bool
 	// Oracle enables alternative q-quoted literals and explicit PL/SQL blocks.
 	Oracle bool
+	// SQLPL enables explicit compound blocks for Db2 SQL PL.
+	SQLPL bool
 }
 
 // Split returns the statements in sql, trimmed, without the terminating ';'.

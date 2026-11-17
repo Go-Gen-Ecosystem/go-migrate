@@ -25,6 +25,8 @@ kept under `_parked/v0` for reference.
 - Oracle AI Database 26ai Free support with Oracle's native Go driver, explicit
   PL/SQL blocks, and migration locks that survive implicit DDL commits. The
   Oracle driver raises the Go module minimum to 1.26.9.
+- IBM Db2 LUW support with a pure-Go driver, verified TLS by default,
+  transactional schema migrations, SQL PL blocks, and Db2 application locks.
 - Migration formats: `001_x.sql` / `V1.2__x.sql` with `-- +migrate` or
   `-- +goose` markers, golang-migrate `.up.sql`/`.down.sql` pairs, Flyway
   `R__x.sql` repeatable migrations, Go migrations, `fs.FS` / `embed.FS`.

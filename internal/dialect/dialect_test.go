@@ -31,13 +31,14 @@ func TestLookup(t *testing.T) {
 		"mysql": MySQL, "mariadb": MySQL, "sqlite": SQLite, "sqlite3": SQLite,
 		"sqlserver": SQLServer, "mssql": SQLServer,
 		"oracle": Oracle, "oracledb": Oracle,
+		"db2": DB2, "db2luw": DB2,
 	} {
 		d, err := Lookup(in)
 		if err != nil || d.Name() != want {
 			t.Errorf("Lookup(%q) = %v, %v", in, d, err)
 		}
 	}
-	if _, err := Lookup("db2"); !errors.Is(err, ErrUnsupported) {
+	if _, err := Lookup("not-a-dialect"); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -52,6 +53,22 @@ func TestOracleHistoryDDL(t *testing.T) {
 	}
 	ddl := d.HistoryDDL(Table{Schema: "owner", Name: "history"})
 	for _, part := range []string{`CREATE TABLE IF NOT EXISTS "owner"."HISTORY"`, "TIMESTAMP(6) WITH TIME ZONE", "success NUMBER(1) NOT NULL", "checksum VARCHAR2(64),"} {
+		if !strings.Contains(ddl, part) {
+			t.Errorf("history DDL missing %q", part)
+		}
+	}
+}
+
+func TestDB2HistoryDDL(t *testing.T) {
+	d, err := Lookup(DB2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.TransactionalDDL() || d.Placeholders(2) != "?, ?" {
+		t.Fatal("Db2 uses positional placeholders and transactional DDL")
+	}
+	ddl := d.HistoryDDL(Table{Schema: "FIXTURE", Name: "history"})
+	for _, part := range []string{`CREATE TABLE "FIXTURE"."HISTORY"`, "TIMESTAMP(6)", "success SMALLINT NOT NULL"} {
 		if !strings.Contains(ddl, part) {
 			t.Errorf("history DDL missing %q", part)
 		}

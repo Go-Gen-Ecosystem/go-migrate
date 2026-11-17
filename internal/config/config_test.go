@@ -264,7 +264,7 @@ func TestResolve(t *testing.T) {
 		{name: "sqlite name field", db: Database{Driver: "sqlite3", Name: "x.db"}, dialect: "sqlite", contains: []string{"x.db?"}},
 		{name: "nothing configured", db: Database{}, err: true},
 		{name: "cannot infer", db: Database{DSN: "host=x"}, err: true},
-		{name: "unknown driver", db: Database{Driver: "db2", DSN: "x"}, err: true},
+		{name: "unknown driver", db: Database{Driver: "not-a-dialect", DSN: "x"}, err: true},
 		{name: "bad mysql dsn", db: Database{Driver: "mysql", DSN: "no-slash"}, err: true},
 	}
 	for _, tc := range tests {

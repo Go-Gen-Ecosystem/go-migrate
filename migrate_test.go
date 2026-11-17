@@ -623,7 +623,7 @@ func TestNewErrors(t *testing.T) {
 	if _, err := New(nil, "sqlite"); err == nil {
 		t.Error("nil db")
 	}
-	if _, err := New(db, "db2"); err == nil {
+	if _, err := New(db, "not-a-dialect"); err == nil {
 		t.Error("bad dialect")
 	}
 	if _, err := New(db, "sqlite", WithTable("x; DROP TABLE y")); err == nil {
@@ -737,7 +737,7 @@ func TestReexportedErrorsAndOptions(t *testing.T) {
 	if _, err := New(db, "sqlite", WithFS(files("1_a.sql", "SELECT 1;", "001_b.sql", "SELECT 2;"))); !errors.Is(err, ErrDuplicateVersion) {
 		t.Errorf("duplicate = %v", err)
 	}
-	if _, err := New(db, "db2"); !errors.Is(err, ErrUnsupportedDialect) {
+	if _, err := New(db, "not-a-dialect"); !errors.Is(err, ErrUnsupportedDialect) {
 		t.Errorf("dialect = %v", err)
 	}
 	if _, err := New(db, "sqlite", WithTable("a;b")); !errors.Is(err, ErrInvalidIdentifier) {
