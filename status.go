@@ -83,8 +83,11 @@ func (m *Migrator) planDown(ctx context.Context, t DownTarget, bound bool) ([]Mi
 // PlanID fingerprints a plan returned by Plan or PlanDown: its direction and
 // each migration's identity, checksum and exact statements. Pass it to
 // ExpectPlan so the run fails with ErrPlanChanged unless it executes exactly
-// what was approved.
+// what was approved. It returns an empty ID for an invalid direction.
 func (m *Migrator) PlanID(dir Direction, plan []Migration) string {
+	if !dir.valid() {
+		return ""
+	}
 	units := make([]*unit, 0, len(plan))
 	for _, mig := range plan {
 		if u, ok := m.cat.byKey[historyKey(mig)]; ok {
@@ -102,7 +105,7 @@ func (m *Migrator) PlanID(dir Direction, plan []Migration) string {
 // failure. They run even when no migration is pending. Rollbacks run none.
 // PlanID covers them, so an edited callback invalidates an approval.
 func (m *Migrator) Callbacks(dir Direction) []Callback {
-	if dir != Up && dir != Down {
+	if !dir.valid() {
 		return nil
 	}
 	return m.cat.callbacksFor(dir)

@@ -56,6 +56,55 @@ func TestCallbacksArePartOfThePlan(t *testing.T) {
 	}
 }
 
+func TestInvalidDirectionDoesNotPanicOrApproveExecution(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	m := newM(t, db, files(
+		"beforeMigrate.sql", "CREATE TABLE callback_ran (id INTEGER);",
+		"1_a.sql", "-- +migrate Up\nCREATE TABLE a (id INTEGER);\n-- +migrate Down\nDROP TABLE a;",
+	))
+	plan := m.Migrations()
+	upID, downID := m.PlanID(Up, plan), m.PlanID(Down, plan)
+	if upID == "" || downID == "" || upID == downID {
+		t.Fatalf("valid plan IDs = %q, %q", upID, downID)
+	}
+	if got := m.Statements(plan[0], Up); len(got) != 1 || got[0] != "CREATE TABLE a (id INTEGER)" {
+		t.Fatalf("Up statements = %q", got)
+	}
+	if got := m.Statements(plan[0], Down); len(got) != 1 || got[0] != "DROP TABLE a" {
+		t.Fatalf("Down statements = %q", got)
+	}
+	for _, dir := range []Direction{-1, 2, 127} {
+		if got := m.Statements(plan[0], dir); got != nil {
+			t.Errorf("Statements(%d) = %q, want nil", dir, got)
+		}
+		if got := m.Callbacks(dir); got != nil {
+			t.Errorf("Callbacks(%d) = %+v, want nil", dir, got)
+		}
+		if got := m.PlanID(dir, nil); got != "" {
+			t.Errorf("PlanID(%d, nil) = %q", dir, got)
+		}
+		if got := m.PlanID(dir, plan); got != "" {
+			t.Errorf("PlanID(%d, plan) = %q", dir, got)
+		}
+		if got := dir.String(); got == "up" || got == "down" {
+			t.Errorf("Direction(%d).String() = %q", dir, got)
+		}
+	}
+	if m.PlanID(Up, plan) != upID || m.PlanID(Down, plan) != downID {
+		t.Fatal("invalid direction changed a valid plan ID")
+	}
+	if _, err := m.Up(ctx, ExpectPlan(m.PlanID(Direction(-1), plan))); !errors.Is(err, ErrPlanChanged) {
+		t.Fatalf("Up with empty invalid-direction approval = %v", err)
+	}
+	if _, err := m.Up(ctx, ExpectPlan("")); !errors.Is(err, ErrPlanChanged) {
+		t.Fatalf("Up with explicit empty approval = %v", err)
+	}
+	if tableExists(t, db, "gomigrate_history") || tableExists(t, db, "a") || tableExists(t, db, "callback_ran") {
+		t.Fatal("rejected approval changed migration history or application schema")
+	}
+}
+
 // #5: migrations with preconditions are flagged as conditional in plans.
 func TestPreconditionMigrationsAreConditional(t *testing.T) {
 	m := newM(t, openDB(t), files(

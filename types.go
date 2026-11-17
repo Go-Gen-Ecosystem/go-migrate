@@ -19,11 +19,16 @@ const (
 	Down
 )
 
+func (d Direction) valid() bool { return d == Up || d == Down }
+
 func (d Direction) String() string {
 	if d == Down {
 		return "down"
 	}
-	return "up"
+	if d == Up {
+		return "up"
+	}
+	return fmt.Sprintf("invalid direction (%d)", d)
 }
 
 // Executor runs SQL. It is satisfied by *sql.DB, *sql.Tx and *sql.Conn. Go
@@ -188,8 +193,9 @@ func (t DownTarget) validate() (DownTarget, error) {
 type RunOption func(*runOptions)
 
 type runOptions struct {
-	expectPlan   string
-	expectTarget bool
+	expectPlan    string
+	expectPlanSet bool
+	expectTarget  bool
 }
 
 // ExpectPlan makes the run verify, under the migration lock, that it is about
@@ -197,13 +203,13 @@ type runOptions struct {
 // fail with ErrPlanChanged otherwise. It binds a human's or agent's approval
 // of a dry run to what actually runs.
 func ExpectPlan(id string) RunOption {
-	return func(o *runOptions) { o.expectPlan, o.expectTarget = id, false }
+	return func(o *runOptions) { o.expectPlan, o.expectPlanSet, o.expectTarget = id, true, false }
 }
 
 // ExpectTargetPlan only permits the SQL target and exact plan approved with
 // PlanWithID or PlanDownWithID. Legacy content-only PlanID values are rejected.
 func ExpectTargetPlan(id string) RunOption {
-	return func(o *runOptions) { o.expectPlan, o.expectTarget = id, true }
+	return func(o *runOptions) { o.expectPlan, o.expectPlanSet, o.expectTarget = id, true, true }
 }
 
 func applyRunOptions(opts []RunOption) runOptions {

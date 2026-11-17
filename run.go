@@ -106,6 +106,9 @@ func (m *Migrator) withLock(ctx context.Context, check func(context.Context, *sq
 
 func (m *Migrator) runLocked(ctx context.Context, opts []RunOption, fn func(context.Context, runner) error) error {
 	o := applyRunOptions(opts)
+	if o.expectPlanSet && o.expectPlan == "" {
+		return ErrPlanChanged
+	}
 	var check func(context.Context, *sql.Conn, dialect.Table) error
 	if o.expectTarget {
 		check = func(ctx context.Context, conn *sql.Conn, table dialect.Table) error {
@@ -136,7 +139,7 @@ func (r runner) verify(ctx context.Context, dir Direction, plan []*unit, s *snap
 		if approvedID(target, r.a.cat, dir, plan, s, baseline) != r.opts.expectPlan {
 			return ErrPlanChanged
 		}
-	} else if r.opts.expectPlan != "" && r.a.cat.planID(dir, plan) != r.opts.expectPlan {
+	} else if r.opts.expectPlanSet && r.a.cat.planID(dir, plan) != r.opts.expectPlan {
 		return ErrPlanChanged
 	}
 	return nil

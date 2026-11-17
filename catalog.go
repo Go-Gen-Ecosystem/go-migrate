@@ -119,6 +119,9 @@ func (c *catalog) lookupVersion(v string) (string, error) {
 
 // statements returns a copy of the SQL mig runs in dir (nil if unknown or Go).
 func (c *catalog) statements(mig Migration, dir Direction) []string {
+	if !dir.valid() {
+		return nil
+	}
 	if u, ok := c.byKey[historyKey(mig)]; ok {
 		return slices.Clone(u.stmts[dir])
 	}
