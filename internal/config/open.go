@@ -15,7 +15,6 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"      // registers "pgx"
 	mssql "github.com/microsoft/go-mssqldb" // registers "sqlserver"
 	_ "modernc.org/sqlite"                  // registers "sqlite" (pure Go, no cgo)
 
@@ -35,7 +34,6 @@ const (
 
 // driverNames maps a dialect to its registered database/sql driver.
 var driverNames = map[string]string{
-	dialect.Postgres:  "pgx",
 	dialect.MySQL:     "mysql",
 	dialect.SQLite:    "sqlite",
 	dialect.SQLServer: "sqlserver",
@@ -44,47 +42,23 @@ var driverNames = map[string]string{
 // Open resolves the dialect and DSN, opens the pool and verifies it with a
 // bounded ping. Errors never contain the DSN, which usually holds a password.
 func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
-	name, dsn, err := Resolve(db)
-	if err != nil {
-		return nil, "", err
-	}
-	conn, err := open(ctx, db, name, dsn)
-	if err != nil {
-		return nil, "", err
-	}
-	return conn, name, nil
+	conn, name, _, err := open(ctx, db, false)
+	return conn, name, err
 }
 
 // OpenWithEndpoint also returns the credential-free route used for approvals.
 func OpenWithEndpoint(ctx context.Context, db Database) (*sql.DB, string, string, error) {
+	return open(ctx, db, true)
+}
+
+func open(ctx context.Context, db Database, withEndpoint bool) (*sql.DB, string, string, error) {
 	name, dsn, err := Resolve(db)
 	if err != nil {
 		return nil, "", "", err
 	}
-	endpoint, err := approvalEndpoint(name, dsn)
+	conn, endpoint, err := preparePool(name, dsn, withEndpoint)
 	if err != nil {
 		return nil, "", "", err
-	}
-	conn, err := open(ctx, db, name, dsn)
-	if err != nil {
-		return nil, "", "", err
-	}
-	return conn, name, endpoint, nil
-}
-
-func open(ctx context.Context, db Database, name, dsn string) (*sql.DB, error) {
-	conn, err := openPool(name, dsn)
-	if err != nil {
-		if name == dialect.SQLServer {
-			return nil, errors.New("invalid SQL Server connection configuration")
-		}
-		if name == dialect.Oracle {
-			return nil, errors.New("invalid Oracle connection configuration")
-		}
-		if name == dialect.DB2 {
-			return nil, errors.New("invalid Db2 connection configuration")
-		}
-		return nil, fmt.Errorf("open %s database: %w", name, err)
 	}
 	maxOpen := db.MaxOpenConns
 	if maxOpen <= 0 {
@@ -104,18 +78,52 @@ func open(ctx context.Context, db Database, name, dsn string) (*sql.DB, error) {
 	defer cancel()
 	if err := conn.PingContext(pctx); err != nil {
 		_ = conn.Close()
-		if name == dialect.SQLServer {
-			return nil, sqlServerConnectError(pctx, err)
-		}
-		if name == dialect.Oracle {
-			return nil, oracleConnectError(pctx, err)
-		}
-		if name == dialect.DB2 {
-			return nil, db2ConnectError(pctx, err)
-		}
-		return nil, fmt.Errorf("connect to %s database: %w", name, scrub(err, db.Password))
+		return nil, "", "", connectError(pctx, db, name, err)
 	}
-	return conn, nil
+	return conn, name, endpoint, nil
+}
+
+func preparePool(name, dsn string, withEndpoint bool) (*sql.DB, string, error) {
+	if name == dialect.Postgres {
+		return openPostgresPool(dsn, withEndpoint)
+	}
+	var endpoint string
+	if withEndpoint {
+		var err error
+		endpoint, err = approvalEndpoint(name, dsn)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	conn, err := openPool(name, dsn)
+	if err == nil {
+		return conn, endpoint, nil
+	}
+	switch name {
+	case dialect.SQLServer:
+		return nil, "", errors.New("invalid SQL Server connection configuration")
+	case dialect.Oracle:
+		return nil, "", errors.New("invalid Oracle connection configuration")
+	case dialect.DB2:
+		return nil, "", errors.New("invalid Db2 connection configuration")
+	default:
+		return nil, "", fmt.Errorf("open %s database: %w", name, err)
+	}
+}
+
+func connectError(ctx context.Context, db Database, name string, err error) error {
+	switch name {
+	case dialect.Postgres:
+		return postgresConnectError(ctx, err)
+	case dialect.SQLServer:
+		return sqlServerConnectError(ctx, err)
+	case dialect.Oracle:
+		return oracleConnectError(ctx, err)
+	case dialect.DB2:
+		return db2ConnectError(ctx, err)
+	default:
+		return fmt.Errorf("connect to %s database: %w", name, scrub(err, db.Password))
+	}
 }
 
 func openPool(name, dsn string) (*sql.DB, error) {
@@ -416,7 +424,7 @@ func mergePostgresParams(db Database) (string, error) {
 	if strings.Contains(db.DSN, "://") {
 		u, err := url.Parse(db.DSN)
 		if err != nil {
-			return "", errors.New("invalid postgres URL") // the parser error can echo the DSN
+			return "", errInvalidPostgresConfig
 		}
 		q := u.Query()
 		for k, v := range extra {

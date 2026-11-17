@@ -6,14 +6,11 @@ package config
 import (
 	"encoding/json"
 	"errors"
-	"net"
 	"net/url"
-	"slices"
 	"strconv"
 
 	db2 "github.com/go-db2/go-db2"
 	mysqldriver "github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/microsoft/go-mssqldb/msdsn"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
@@ -27,25 +24,16 @@ func approvalEndpoint(name, dsn string) (string, error) {
 	if err != nil {
 		return "", errors.New("cannot identify the configured database endpoint")
 	}
+	return encodeEndpoint(fields), nil
+}
+
+func encodeEndpoint(fields []string) string {
 	data, _ := json.Marshal(fields) // []string cannot fail to marshal
-	return string(data), nil
+	return string(data)
 }
 
 func routeFields(name, dsn string) ([]string, error) {
 	switch name {
-	case dialect.Postgres:
-		p, err := pgconn.ParseConfig(dsn)
-		if err != nil {
-			return nil, err
-		}
-		fields := []string{net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port)))}
-		for _, fallback := range p.Fallbacks {
-			route := net.JoinHostPort(fallback.Host, strconv.Itoa(int(fallback.Port)))
-			if !slices.Contains(fields, route) {
-				fields = append(fields, route)
-			}
-		}
-		return fields, nil
 	case dialect.MySQL:
 		m, err := mysqldriver.ParseDSN(dsn)
 		if err != nil {
