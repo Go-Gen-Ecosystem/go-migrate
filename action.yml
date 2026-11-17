@@ -20,7 +20,9 @@ branding:
 
 inputs:
   command:
-    description: "gomigrate command and flags, e.g. 'lint', 'status --fail-on-pending', 'up --sql', 'up'"
+    description: >-
+      gomigrate command and flags, e.g. lint, status --fail-on-pending, or down --sql --to-tag "Before release".
+      Use single or double quotes or backslash escapes to group arguments. Shell expansions are not performed.
     required: false
     default: lint
   dsn:
@@ -66,15 +68,21 @@ runs:
         GOMIGRATE_DRIVER: ${{ inputs.driver }}
         INPUT_COMMAND: ${{ inputs.command }}
         INPUT_DIR: ${{ inputs.dir }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        set +e -f
-        # Split the command into arguments without glob expansion.
-        read -ra args <<< "$INPUT_COMMAND"
-        flags=()
-        [ -n "$INPUT_DIR" ] && flags+=(--dir "$INPUT_DIR")
-        # Lint findings become inline pull-request annotations.
-        [ "${args[0]}" = lint ] && flags+=(-o github)
-        gomigrate "${flags[@]}" "${args[@]}"
-        code=$?
-        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
-        exit $code
+        code=1
+        if args_file=$(mktemp "${TMPDIR:-/tmp}/gomigrate-action.XXXXXXXX"); then
+          trap 'rm -f -- "$args_file"' EXIT
+          if GO111MODULE=off GOWORK=off go run "$ACTION_PATH/internal/actionrunner/main.go" > "$args_file"; then
+            args=()
+            while IFS= read -r -d '' arg; do args+=("$arg"); done < "$args_file"
+            flags=()
+            if [ -n "$INPUT_DIR" ]; then flags+=(--dir "$INPUT_DIR"); fi
+            # Lint findings become inline pull-request annotations.
+            if [ "${args[0]:-}" = lint ]; then flags+=(-o github); fi
+            code=0
+            gomigrate "${flags[@]}" "${args[@]}" || code=$?
+          fi
+        fi
+        printf 'exit-code=%s\n' "$code" >> "$GITHUB_OUTPUT"
+        exit "$code"
