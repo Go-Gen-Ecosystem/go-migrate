@@ -374,6 +374,43 @@ func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
 }
 
+// PostgresToken returns the next PostgreSQL token as written, and the remaining
+// SQL. Whitespace and comments are skipped; quoted names and literal bodies
+// are kept together so they cannot be mistaken for keywords or separators.
+func PostgresToken(sql string) (token, rest string) {
+	for len(sql) > 0 {
+		var end int
+		switch c := sql[0]; {
+		case isSpace(c):
+			sql = sql[1:]
+			continue
+		case strings.HasPrefix(sql, "--"):
+			sql = sql[skipLine(sql, 0):]
+			continue
+		case strings.HasPrefix(sql, "/*"):
+			sql = sql[skipBlock(sql, 0, true):]
+			continue
+		case c == '\'' || c == '"':
+			end = skipQuoted(sql, 0, c, false)
+		case c|0x20 == 'e' && len(sql) > 1 && sql[1] == '\'':
+			end = skipQuoted(sql, 1, '\'', true)
+		case c|0x20 == 'u' && len(sql) > 2 && sql[1] == '&' && (sql[2] == '"' || sql[2] == '\''):
+			end = skipQuoted(sql, 2, sql[2], false)
+		case c == '$':
+			end = skipDollar(sql, 0)
+		case isIdentByte(c):
+			end = 1
+			for end < len(sql) && (isIdentByte(sql[end]) || sql[end] == '$') {
+				end++
+			}
+		default:
+			end = 1
+		}
+		return sql[:end], sql[end:]
+	}
+	return "", ""
+}
+
 // Code returns sql with comments removed and string-literal contents
 // blanked (quotes kept), for pattern analysis that must never match text
 // inside comments or literals. Quoted identifiers are kept as written.

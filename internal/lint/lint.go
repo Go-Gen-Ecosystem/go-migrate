@@ -54,12 +54,15 @@ type Migration struct {
 
 // stmtCtx is what a rule sees for one statement.
 type stmtCtx struct {
-	dialect string
-	norm    string          // normalized statement
-	noTx    bool            // runs outside a transaction
-	created map[string]bool // tables created earlier in this migration
-	table   string          // ALTER TABLE target (normalized identifier), if any
-	actions []string        // ALTER TABLE actions, split at top-level commas
+	dialect      string
+	norm         string          // normalized statement
+	noTx         bool            // runs outside a transaction
+	created      map[string]bool // tables created earlier in this migration
+	table        string          // normalized target table, if any
+	actions      []string        // ALTER TABLE actions, split at top-level commas
+	createsTable bool            // guarantees a newly created table on success
+	createsIndex bool            // PostgreSQL CREATE INDEX
+	concurrent   bool            // PostgreSQL concurrent index operation
 }
 
 // existing reports whether the statement acts on a table that already
@@ -84,8 +87,6 @@ func (r rule) appliesTo(dialect string) bool {
 var (
 	reCreateTable = regexp.MustCompile(`^CREATE (?:TEMPORARY |TEMP |UNLOGGED )?TABLE (?:IF NOT EXISTS )?([^\s(]+)`)
 	reAlterTable  = regexp.MustCompile(`^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(\S+) (.+)$`)
-	reIndexOn     = regexp.MustCompile(`^CREATE (?:UNIQUE )?INDEX\b.*?\bON (?:ONLY )?([^\s(]+)`)
-	reConcurrent  = regexp.MustCompile(`^(?:CREATE (?:UNIQUE )?INDEX|DROP INDEX|REINDEX)\b.*\bCONCURRENTLY\b`)
 	reAddColumn   = regexp.MustCompile(`^ADD (?:COLUMN )?(?:IF NOT EXISTS )?(\S+) (\S+)`)
 	reDropColumn  = regexp.MustCompile(`^DROP (?:COLUMN )?(?:IF EXISTS )?(\S+)`)
 	reAlterType   = regexp.MustCompile(`^ALTER (?:COLUMN )?\S+ (?:SET DATA )?TYPE\b`)
@@ -137,12 +138,12 @@ var statementRules = []rule{
 		message: "CREATE INDEX without CONCURRENTLY blocks writes to the table while it builds",
 		hint:    "use CREATE INDEX CONCURRENTLY in a migration marked '-- +migrate Up notransaction'",
 		match: func(c *stmtCtx) bool {
-			return reIndexOn.MatchString(c.norm) && !strings.Contains(c.norm, "CONCURRENTLY") && c.existing()
+			return c.createsIndex && !c.concurrent && c.existing()
 		}},
 	{id: "concurrently-in-transaction", severity: Error, dialects: []string{"postgres"},
 		message: "CREATE/DROP INDEX CONCURRENTLY and REINDEX CONCURRENTLY cannot run inside a transaction block; this migration will fail",
 		hint:    "mark the migration '-- +migrate Up notransaction'",
-		match:   func(c *stmtCtx) bool { return reConcurrent.MatchString(c.norm) && !c.noTx }},
+		match:   func(c *stmtCtx) bool { return c.concurrent && !c.noTx }},
 	{id: "rename", severity: Warning, dialects: []string{"mysql"},
 		message: "renaming breaks application versions that still use the old name",
 		hint:    "add the new name, migrate readers and writers, then remove the old one",
@@ -239,8 +240,8 @@ func Check(m Migration) []Issue {
 		}
 		for _, stmt := range statements {
 			c := newStmtCtx(m, stmt, created)
-			if mt := reCreateTable.FindStringSubmatch(c.norm); mt != nil {
-				created[ident(mt[1])] = true
+			if c.createsTable {
+				created[c.table] = true
 				continue
 			}
 			if tm := reLockTimeout.FindStringSubmatch(c.norm); tm != nil && (!m.NoTx || tm[1] != "LOCAL ") {
@@ -276,10 +277,12 @@ func Check(m Migration) []Issue {
 
 func newStmtCtx(m Migration, stmt string, created map[string]bool) *stmtCtx {
 	c := &stmtCtx{dialect: m.Dialect, norm: Normalize(stmt, m.Lexical), noTx: m.NoTx, created: created}
-	if am := reAlterTable.FindStringSubmatch(c.norm); am != nil {
+	if m.Dialect == "postgres" {
+		c.parsePostgresDDL(stmt, m.Lexical)
+	} else if mt := reCreateTable.FindStringSubmatch(c.norm); mt != nil {
+		c.table, c.createsTable = ident(mt[1]), true
+	} else if am := reAlterTable.FindStringSubmatch(c.norm); am != nil {
 		c.table, c.actions = ident(am[1]), splitTopLevel(am[2])
-	} else if im := reIndexOn.FindStringSubmatch(c.norm); im != nil {
-		c.table = ident(im[1])
 	}
 	return c
 }

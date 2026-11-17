@@ -83,6 +83,8 @@ func TestCheck(t *testing.T) {
 		{name: "drop schema", dialect: "postgres", up: []string{"DROP SCHEMA app CASCADE"}, want: []string{"drop-schema"}},
 		{name: "where only inside a subquery", dialect: "sqlite", up: []string{"UPDATE t SET a = (SELECT b FROM u WHERE u.id = 1)"}, want: []string{"unbounded-write"}},
 		{name: "rename with IF EXISTS", dialect: "postgres", up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE IF EXISTS t RENAME TO t2"}, want: []string{"rename"}},
+		{name: "alter only with parenthesized target", dialect: "postgres", up: []string{"ALTER TABLE ONLY (app.t) ADD COLUMN c int NOT NULL"},
+			want: []string{"add-not-null-without-default", "missing-lock-timeout"}},
 		{name: "SET LOCAL does nothing outside a transaction", dialect: "postgres", noTx: true,
 			up: []string{"SET LOCAL lock_timeout = '5s'", "ALTER TABLE t ADD COLUMN a int"}, want: []string{"missing-lock-timeout"}},
 		{name: "sqlite multi-action alter is unsupported", dialect: "sqlite", up: []string{"ALTER TABLE t ADD COLUMN a INT, ADD COLUMN b INT"},
@@ -109,5 +111,64 @@ func TestIrreversibleAndStatementNumbers(t *testing.T) {
 	}
 	if ids := RuleIDs(); len(ids) < 15 || ids[0] > ids[len(ids)-1] {
 		t.Fatalf("RuleIDs = %v", ids)
+	}
+}
+
+func TestPostgresIndexConcurrency(t *testing.T) {
+	tests := []struct {
+		name string
+		stmt string
+		want []string
+	}{
+		{name: "quoted index and target", stmt: `CREATE INDEX "name ON CONCURRENTLY" ON "concurrently" (id)`, want: []string{"index-not-concurrent"}},
+		{name: "identifier suffix", stmt: `CREATE INDEX concurrently$archive ON t (id)`, want: []string{"index-not-concurrent"}},
+		{name: "column and tablespace", stmt: `CREATE INDEX ON t ("CONCURRENTLY") TABLESPACE "CONCURRENTLY"`, want: []string{"index-not-concurrent"}},
+		{name: "comments and literal", stmt: `CREATE INDEX /* concurrently */ i ON t (id) WHERE label = 'CONCURRENTLY'`, want: []string{"index-not-concurrent"}},
+		{name: "quoted drop target", stmt: `DROP INDEX IF EXISTS "CONCURRENTLY"`},
+		{name: "quoted reindex target", stmt: `REINDEX INDEX "CONCURRENTLY"`},
+		{name: "reindex tablespace containing separators", stmt: `REINDEX (TABLESPACE "), CONCURRENTLY (") INDEX i`},
+		{name: "concurrent unique create", stmt: `CREATE UNIQUE INDEX /* note */ CONCURRENTLY IF NOT EXISTS i ON ONLY t (id)`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent drop", stmt: `DROP INDEX CONCURRENTLY IF EXISTS "concurrently"`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex", stmt: `REINDEX (VERBOSE) TABLE CONCURRENTLY t`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex with implicit true", stmt: `REINDEX (CONCURRENTLY) INDEX i`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex with true", stmt: `REINDEX (VERBOSE, CONCURRENTLY true) INDEX i`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex with on", stmt: `REINDEX (CONCURRENTLY on) INDEX i`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex with one", stmt: `REINDEX (CONCURRENTLY 1) INDEX i`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex with signed one", stmt: `REINDEX (CONCURRENTLY +01) INDEX i`, want: []string{"concurrently-in-transaction"}},
+		{name: "concurrent reindex with quoted option and value", stmt: `REINDEX ("concurrently" 'ON') INDEX i`, want: []string{"concurrently-in-transaction"}},
+		{name: "reindex with false", stmt: `REINDEX (CONCURRENTLY false) TABLE t`},
+		{name: "reindex with off", stmt: `REINDEX (CONCURRENTLY off) TABLE t`},
+		{name: "reindex with zero", stmt: `REINDEX (CONCURRENTLY 0, TABLESPACE 'concurrently') TABLE t`},
+		{name: "reindex with quoted off", stmt: `REINDEX (CONCURRENTLY 'off') TABLE t`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Migration{Dialect: "postgres", Lexical: lexicals["postgres"], Up: []string{"SET lock_timeout = '1s'", tc.stmt}}
+			if got := rulesOf(Check(m)); !slices.Equal(got, tc.want) {
+				t.Fatalf("transactional rules = %v, want %v", got, tc.want)
+			}
+			if slices.Contains(tc.want, "concurrently-in-transaction") {
+				m.NoTx = true
+				if got := rulesOf(Check(m)); len(got) != 0 {
+					t.Fatalf("nontransactional rules = %v, want none", got)
+				}
+			}
+		})
+	}
+}
+
+func TestPostgresIndexesOnNewTables(t *testing.T) {
+	m := Migration{Dialect: "postgres", Lexical: lexicals["postgres"], Up: []string{
+		`CREATE TABLE app."fresh table" (id int)`,
+		`CREATE TABLE IF NOT EXISTS app."fresh table" (id int)`,
+		`CREATE INDEX "name ON existing" ON app . "fresh table" (id)`,
+		`ALTER TABLE app."fresh table" ADD COLUMN name text NOT NULL`,
+	}}
+	if got := rulesOf(Check(m)); len(got) != 0 {
+		t.Fatalf("rules for the new table = %v, want none", got)
+	}
+	m.Up = append(m.Up, `CREATE INDEX CONCURRENTLY i ON app."fresh table" (id)`)
+	if got := rulesOf(Check(m)); !slices.Equal(got, []string{"concurrently-in-transaction"}) {
+		t.Fatalf("rules for concurrent index on the new table = %v", got)
 	}
 }

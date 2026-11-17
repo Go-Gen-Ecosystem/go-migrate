@@ -72,6 +72,40 @@ func TestGitHubEscaping(t *testing.T) {
 	}
 }
 
+func TestPostgresLintIndexLocks(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("migrations", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const file = "migrations/1_change.sql"
+	pg := []string{"--driver", "postgres", "lint"}
+	t.Run("conditional create does not prove the table is empty", func(t *testing.T) {
+		write(t, file, `-- +migrate Up
+CREATE TABLE IF NOT EXISTS users (id int);
+CREATE INDEX users_id ON users (id);
+ALTER TABLE users ADD COLUMN email text NOT NULL;
+-- +migrate Down
+ALTER TABLE users DROP COLUMN email;`)
+		out, code := runCLI(t, nil, pg...)
+		if code != ExitLint || !strings.Contains(out, "index-not-concurrent") ||
+			!strings.Contains(out, "add-not-null-without-default") || !strings.Contains(out, "missing-lock-timeout") {
+			t.Fatalf("lint = %d\n%s", code, out)
+		}
+	})
+	t.Run("quoted identifiers are not modifiers", func(t *testing.T) {
+		write(t, file, `-- +migrate Up
+CREATE INDEX "name ON CONCURRENTLY" ON users ("CONCURRENTLY");
+DROP INDEX "CONCURRENTLY";
+REINDEX INDEX "CONCURRENTLY";
+-- +migrate Down
+DROP INDEX "name ON CONCURRENTLY";`)
+		out, code := runCLI(t, nil, pg...)
+		if code != ExitOK || !strings.Contains(out, "index-not-concurrent") || strings.Contains(out, "concurrently-in-transaction") {
+			t.Fatalf("lint = %d\n%s", code, out)
+		}
+	})
+}
+
 func TestSQLServerCLIReportsBatchFindings(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if err := os.Mkdir("migrations", 0o755); err != nil {
