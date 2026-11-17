@@ -250,8 +250,6 @@ claude mcp add gomigrate -- gomigrate mcp
 - **`apply` and `rollback`:** they require `confirm: true` and the `plan_id` of the plan the user approved. Without them they return the plan. If the resolved database, schema or plan differs, re-plan and get fresh approval. `apply` also refuses while pending migrations have lint errors.
 - **`create_migration`** takes typed inputs (`no_transaction`, `sequential`) and rejects `-- +migrate` directives in the SQL, so an agent cannot suppress lint or retarget a migration.
 
-See [AGENTS.md](AGENTS.md) for the workflow and error codes.
-
 ## CI/CD
 
 ```yaml
@@ -386,4 +384,4 @@ rejection checks, use a fixture certificate signed by its own CA and set
 `GOMIGRATE_TEST_DB2_TLS_MISMATCH_HOST` to an alias that resolves to the fixture
 and is absent from its certificate.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the design. Licensed under Apache-2.0.
+Licensed under [Apache-2.0](LICENSE).

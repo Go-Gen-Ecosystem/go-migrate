@@ -17,9 +17,6 @@ cover.out
 *.out
 test-output*/
 *.prof
-/_parked/tests/integration/testdata/test_*.db
-/_parked/tests/integration/testdata/test_*.db-shm
-/_parked/tests/integration/testdata/test_*.db-wal
 
 # Logs and local state
 *.log

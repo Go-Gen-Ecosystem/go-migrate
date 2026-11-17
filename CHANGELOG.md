@@ -6,13 +6,16 @@
 All notable changes to go-migrate are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] - Unreleased
+## [1.0.1] - 2026-11-17
+
+- Removed archived migration implementations and standalone project documents.
+
+## [1.0.0] - 2026-11-17
 
 First public release. The pre-release GORM-based engine (never published) was
 replaced by a lean core on `database/sql`; a pre-launch audit found 17 critical
 defects in it (non-exclusive locking, MySQL unusable, wrong rollback counts,
-temporary SQLite databases, failures reported as success). The old code is
-kept under `_parked/v0` for reference.
+temporary SQLite databases, failures reported as success).
 
 ### Added
 - `migrate` package (driver-free): `New(db, dialect, opts...)` with `Up`,
@@ -53,7 +56,7 @@ kept under `_parked/v0` for reference.
   (`migrate.ErrorCodes`), exit codes 0/1/2/3.
 - `gomigrate mcp`: Model Context Protocol server for AI agents, with
   `apply`/`rollback` gated on `confirm` plus the approved `plan_id`, a lint
-  gate, and directive-free typed migration authoring; `AGENTS.md`.
+  gate, and directive-free typed migration authoring.
 - Plan binding: `PlanID`, `ExpectPlan` and `--expect-plan` re-check the plan
   under the migration lock and fail with `plan_changed` instead of running
   anything the reviewer did not see. The ID covers the dialect, history
