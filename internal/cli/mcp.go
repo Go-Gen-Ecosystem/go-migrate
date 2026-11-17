@@ -194,7 +194,7 @@ func (t tools) lint(_ context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.
 	return respond("lint", newFindings(findings), err)
 }
 
-func (t tools) create(_ context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, envelope, error) {
+func (t tools) create(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, envelope, error) {
 	if directiveLine.MatchString(in.Up) || directiveLine.MatchString(in.Down) {
 		return respond("create_migration", nil, errDirectiveNotAllowed)
 	}
@@ -202,14 +202,15 @@ func (t tools) create(_ context.Context, _ *mcp.CallToolRequest, in createInput)
 	if err != nil {
 		return respond("create_migration", nil, err)
 	}
-	version, files, err := createMigration(cfg.Migrations.Dir, in.Name, in.Sequential, false, in.NoTransaction, in.Up, in.Down)
-	if err != nil {
-		return respond("create_migration", nil, err)
-	}
 	// Validate by loading and linting the whole set; a broken file is removed.
-	findings, err := lintMigrations(cfg)
+	draft := migrationDraft{name: in.Name, seq: in.Sequential, noTx: in.NoTransaction, up: in.Up, down: in.Down}
+	var findings []migrate.Finding
+	version, files, err := createMigration(ctx, cfg.Migrations.Dir, draft, func() error {
+		var lintErr error
+		findings, lintErr = lintMigrations(cfg)
+		return lintErr
+	})
 	if err != nil {
-		removeAll(files)
 		return respond("create_migration", nil, err)
 	}
 	own := make([]migrate.Finding, 0, len(findings))

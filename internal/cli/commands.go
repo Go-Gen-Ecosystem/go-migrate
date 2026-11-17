@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
 	migrate "github.com/go-gen-ecosystem/go-migrate"
@@ -28,6 +29,10 @@ const (
 	migrationPerm = 0o644
 	seqWidth      = 4
 	timestampFmt  = "20060102150405"
+
+	createLockName  = ".gomigrate-create.lock"
+	createLockPerm  = 0o660
+	createLockRetry = 10 * time.Millisecond
 )
 
 func newInitCmd(g *globals) *cobra.Command {
@@ -81,8 +86,8 @@ func newCreateCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			name := args[0]
-			version, written, err := createMigration(cfg.Migrations.Dir, name, seq, pair, false, "", "")
+			draft := migrationDraft{name: args[0], seq: seq, pair: pair}
+			version, written, err := createMigration(cmd.Context(), cfg.Migrations.Dir, draft, nil)
 			if err != nil {
 				return err
 			}
@@ -100,33 +105,46 @@ func newCreateCmd(g *globals) *cobra.Command {
 	return cmd
 }
 
-// createMigration writes a new migration named name to dir and returns its
-// version and files. up and down prefill the sections (empty: a scaffold).
-// Writing is all-or-nothing: a failure removes the files already written.
-func createMigration(dir, name string, seq, pair, noTx bool, up, down string) (string, []string, error) {
-	name = strings.Trim(nameSanitizer.ReplaceAllString(strings.ToLower(name), "_"), "_")
+type migrationDraft struct {
+	name            string
+	seq, pair, noTx bool
+	up, down        string
+}
+
+// createMigration reserves a version, writes its files and optionally validates
+// the result under one lock. A write or validation failure removes the new files.
+func createMigration(ctx context.Context, dir string, draft migrationDraft, validate func() error) (string, []string, error) {
+	name := strings.Trim(nameSanitizer.ReplaceAllString(strings.ToLower(draft.name), "_"), "_")
 	if name == "" {
 		return "", nil, errors.New("invalid migration name")
 	}
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return "", nil, err
 	}
+	// Keep the empty lock file in place so current holders and future contenders
+	// always lock the same file. It is ignored by the migration catalog.
+	guard := flock.New(filepath.Join(dir, createLockName), flock.SetPermissions(createLockPerm))
+	if _, err := guard.TryLockContext(ctx, createLockRetry); err != nil {
+		return "", nil, fmt.Errorf("lock migrations directory: %w", err)
+	}
+	defer func() { _ = guard.Close() }()
+
 	used, maxSeq, err := scanVersions(dir)
 	if err != nil {
 		return "", nil, err
 	}
 	version := fmt.Sprintf("%0*d", seqWidth, maxSeq+1)
-	if !seq {
+	if !draft.seq {
 		version = uniqueTimestamp(time.Now().UTC(), used)
 	}
 	upMarker := "-- +migrate Up\n"
-	if noTx {
+	if draft.noTx {
 		upMarker = "-- +migrate Up notransaction\n"
 	}
 	type file struct{ name, body string }
-	files := []file{{version + "_" + name + ".sql", upMarker + up + "\n\n-- +migrate Down\n" + down + "\n"}}
-	if pair {
-		files = []file{{version + "_" + name + ".up.sql", upMarker + up + "\n"}, {version + "_" + name + ".down.sql", down + "\n"}}
+	files := []file{{version + "_" + name + ".sql", upMarker + draft.up + "\n\n-- +migrate Down\n" + draft.down + "\n"}}
+	if draft.pair {
+		files = []file{{version + "_" + name + ".up.sql", upMarker + draft.up + "\n"}, {version + "_" + name + ".down.sql", draft.down + "\n"}}
 	}
 	written := make([]string, 0, len(files))
 	for _, f := range files {
@@ -136,6 +154,12 @@ func createMigration(dir, name string, seq, pair, noTx bool, up, down string) (s
 			return "", nil, fmt.Errorf("create %s: %w", path, err)
 		}
 		written = append(written, path)
+	}
+	if validate != nil {
+		if err := validate(); err != nil {
+			removeAll(written)
+			return "", nil, err
+		}
 	}
 	return version, written, nil
 }

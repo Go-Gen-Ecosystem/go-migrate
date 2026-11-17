@@ -240,12 +240,26 @@ func TestReviewFixes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, _ := os.ReadDir("migrations")
-	if len(entries) != 2 || entries[0].Name()[:14] == entries[1].Name()[:14] {
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var versions []string
+	for _, entry := range entries {
+		if entry.Name() == createLockName && entry.Type().IsRegular() {
+			continue
+		}
+		v, ok := strings.CutSuffix(entry.Name(), "_same.sql")
+		if entry.IsDir() || !ok || len(v) != len(timestampFmt) {
+			t.Fatalf("unexpected entry after create: %s", entry.Name())
+		}
+		versions = append(versions, v)
+	}
+	if len(versions) != 2 || versions[0] == versions[1] {
 		t.Fatalf("timestamp collision: %v", entries)
 	}
-	for _, e := range entries {
-		write(t, filepath.Join("migrations", e.Name()), "-- +migrate Up\nCREATE TABLE t_"+e.Name()[:14]+" (id INTEGER);\n-- +migrate Down\nDROP TABLE t_"+e.Name()[:14]+";")
+	for _, v := range versions {
+		write(t, filepath.Join("migrations", v+"_same.sql"), "-- +migrate Up\nCREATE TABLE t_"+v+" (id INTEGER);\n-- +migrate Down\nDROP TABLE t_"+v+";")
 	}
 
 	if _, err := run(t, none, "--dsn", "x.db", "up"); err != nil {
@@ -263,7 +277,7 @@ func TestReviewFixes(t *testing.T) {
 	if _, err := run(t, none, "--dsn", "x.db", "down", "--to", "0", "--all"); err == nil {
 		t.Fatal("--to with --all must be rejected")
 	}
-	out, err = run(t, none, "--dsn", "x.db", "mark-applied", entries[0].Name()[:14])
+	out, err = run(t, none, "--dsn", "x.db", "mark-applied", versions[0])
 	if err != nil || !strings.Contains(out, "Marked") {
 		t.Fatalf("mark-applied = %q, %v", out, err)
 	}
