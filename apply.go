@@ -165,6 +165,16 @@ func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st 
 	if err := a.dirtyTransition(ctx, tr.begin, u, st); err != nil {
 		return err
 	}
+	finalizeCtx := context.WithoutCancel(ctx)
+	if a.d.Name() == dialect.Postgres && u.fns[dir] != nil {
+		// An abandoned database/sql Tx using the Go migration context must
+		// release the pinned Conn on return. Keep the context live through the
+		// probe, and do not finalize if cancellation could have rolled the Tx back.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		finalizeCtx = ctx
+	}
 	if err := a.callbacks(ctx, q, ev.before); err != nil {
 		return fmt.Errorf("%w: %w", err, ErrDirty)
 	}
@@ -178,9 +188,9 @@ func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st 
 	if err := a.callbacks(ctx, q, ev.after); err != nil {
 		return fmt.Errorf("%w: %w", err, ErrDirty)
 	}
-	// The change is fully applied: record it even if ctx was cancelled after
-	// the last statement, rather than leaving a completed migration dirty.
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	// Record completed statements even if the caller cancelled after the
+	// last one, unless cancellation may have undone the migration's work.
+	cctx, cancel := context.WithTimeout(finalizeCtx, cleanupTimeout)
 	defer cancel()
 	if err := a.dirtyTransition(cctx, tr.finish, u, st); err != nil {
 		return fmt.Errorf("migration %s %s history row could not be finalized: %w: %w", u.Label(), dir, err, ErrDirty)
@@ -188,10 +198,17 @@ func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st 
 	return nil
 }
 
-// dirtyTransition commits SQLite history independently of NoTx statements.
-// In particular, an unfinished user transaction cannot record success.
+// dirtyTransition keeps NoTx history writes out of any unfinished user transaction.
 func (a *applier) dirtyTransition(ctx context.Context, change transition, u *unit, st step) error {
-	if a.d.Name() != dialect.SQLite {
+	switch a.d.Name() {
+	case dialect.Postgres:
+		if err := requirePostgresAutocommit(ctx, a.conn); err != nil {
+			return err
+		}
+		return change(a, ctx, a.conn, u, st)
+	case dialect.SQLite:
+		// The history transaction also fences SQLite's lease before writing.
+	default:
 		return change(a, ctx, a.conn, u, st)
 	}
 	tx, err := a.conn.BeginTx(ctx, nil)
@@ -206,6 +223,26 @@ func (a *applier) dirtyTransition(ctx context.Context, change transition, u *uni
 		return err
 	}
 	return tx.Commit()
+}
+
+// requirePostgresAutocommit sets a transaction-local value distinct from
+// the current setting. Only an open transaction retains it across two separate
+// statements; an aborted transaction rejects the probe altogether.
+func requirePostgresAutocommit(ctx context.Context, conn *sql.Conn) error {
+	const setting = "gomigrate.internal_transaction_probe"
+	var sentinel string
+	if err := conn.QueryRowContext(ctx, `SELECT pg_catalog.set_config($1,
+		CASE pg_catalog.current_setting($1, true) WHEN '0' THEN '1' ELSE '0' END, true)`, setting).Scan(&sentinel); err != nil {
+		return fmt.Errorf("check PostgreSQL autocommit: %w", err)
+	}
+	var open bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_catalog.current_setting($1, true) IS NOT DISTINCT FROM $2", setting, sentinel).Scan(&open); err != nil {
+		return fmt.Errorf("check PostgreSQL autocommit: %w", err)
+	}
+	if open {
+		return errors.New("PostgreSQL session is inside a transaction")
+	}
+	return nil
 }
 
 // markRan records u as applied without executing it (precondition
