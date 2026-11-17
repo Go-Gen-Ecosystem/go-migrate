@@ -156,8 +156,8 @@ type callbackJSON struct {
 }
 
 // newPlan describes a dry run; with sql each migration carries its exact statements.
-func newPlan(m *migrate.Migrator, dir migrate.Direction, ms []migrate.Migration, sql bool) planJSON {
-	out := planJSON{DryRun: true, Direction: dir.String(), PlanID: m.PlanID(dir, ms), Migrations: make([]migrationJSON, 0, len(ms))}
+func newPlan(m *migrate.Migrator, dir migrate.Direction, ms []migrate.Migration, id string, sql bool) planJSON {
+	out := planJSON{DryRun: true, Direction: dir.String(), PlanID: id, Migrations: make([]migrationJSON, 0, len(ms))}
 	for _, mig := range ms {
 		mj := describe(mig)
 		if sql {

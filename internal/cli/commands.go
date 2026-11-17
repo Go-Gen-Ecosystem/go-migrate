@@ -212,19 +212,23 @@ func newUpCmd(g *globals) *cobra.Command {
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
 				p := newPrinter(cmd, g)
 				if dryRun || showSQL {
-					plan, err := s.m.Plan(ctx, to)
+					plan, id, err := s.m.PlanWithID(ctx, to)
 					if err != nil {
 						return err
 					}
-					p.plan(s, migrate.Up, plan, showSQL)
+					p.plan(s, migrate.Up, plan, id, showSQL)
 					return p.result(nil)
 				}
 				var res *migrate.Result
 				var err error
+				var opts []migrate.RunOption
+				if cmd.Flags().Changed("expect-plan") {
+					opts = append(opts, migrate.ExpectTargetPlan(expectPlan))
+				}
 				if to != "" {
-					res, err = s.m.UpTo(ctx, to, migrate.ExpectPlan(expectPlan))
+					res, err = s.m.UpTo(ctx, to, opts...)
 				} else {
-					res, err = s.m.Up(ctx, migrate.ExpectPlan(expectPlan))
+					res, err = s.m.Up(ctx, opts...)
 				}
 				p.run("Applied", res, err)
 				return p.result(withData(err, newRun(res)))
@@ -260,14 +264,18 @@ func newDownCmd(g *globals) *cobra.Command {
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
 				p := newPrinter(cmd, g)
 				if dryRun || showSQL {
-					plan, err := s.m.PlanDown(ctx, target)
+					plan, id, err := s.m.PlanDownWithID(ctx, target)
 					if err != nil {
 						return err
 					}
-					p.plan(s, migrate.Down, plan, showSQL)
+					p.plan(s, migrate.Down, plan, id, showSQL)
 					return p.result(nil)
 				}
-				res, err := s.m.Down(ctx, target, migrate.ExpectPlan(expectPlan))
+				var opts []migrate.RunOption
+				if cmd.Flags().Changed("expect-plan") {
+					opts = append(opts, migrate.ExpectTargetPlan(expectPlan))
+				}
+				res, err := s.m.Down(ctx, target, opts...)
 				p.run("Rolled back", res, err)
 				return p.result(withData(err, newRun(res)))
 			})

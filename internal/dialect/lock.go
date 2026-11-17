@@ -107,19 +107,25 @@ func (l *Lock) Release(ctx context.Context) error {
 // within the same budget. A zero wait makes one attempt under the caller's
 // context. The acquired lock owns the connection until Release.
 func (d *Dialect) Lock(ctx context.Context, db *sql.DB, table Table, wait time.Duration) (*Lock, error) {
+	return d.LockChecked(ctx, db, table, wait, nil)
+}
+
+// LockChecked checks the resolved target on the pinned connection before
+// acquiring the migration lock that owns that connection.
+func (d *Dialect) LockChecked(ctx context.Context, db *sql.DB, table Table, wait time.Duration, check func(context.Context, *sql.Conn, Table) error) (*Lock, error) {
 	if wait <= 0 {
-		return d.acquireLock(ctx, db, table, true)
+		return d.acquireLock(ctx, db, table, true, check)
 	}
 	acquire, cancel := context.WithTimeoutCause(ctx, wait, ErrLockTimeout)
 	defer cancel()
-	held, err := d.acquireLock(acquire, db, table, false)
+	held, err := d.acquireLock(acquire, db, table, false, check)
 	if err != nil && errors.Is(context.Cause(acquire), ErrLockTimeout) {
 		return nil, fmt.Errorf("%w: %w", ErrLockTimeout, err)
 	}
 	return held, err
 }
 
-func (d *Dialect) acquireLock(ctx context.Context, db *sql.DB, table Table, once bool) (held *Lock, err error) {
+func (d *Dialect) acquireLock(ctx context.Context, db *sql.DB, table Table, once bool, check func(context.Context, *sql.Conn, Table) error) (held *Lock, err error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reserve lock connection: %w", err)
@@ -132,6 +138,11 @@ func (d *Dialect) acquireLock(ctx context.Context, db *sql.DB, table Table, once
 	table, err = d.ResolveTable(ctx, conn, table)
 	if err != nil {
 		return nil, err
+	}
+	if check != nil {
+		if err := check(ctx, conn, table); err != nil {
+			return nil, err
+		}
 	}
 	held, err = d.locker(d, ctx, conn, table, once)
 	if err != nil {

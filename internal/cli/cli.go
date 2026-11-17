@@ -153,7 +153,7 @@ func (g *globals) open(ctx context.Context) (*session, error) {
 	if st, err := os.Stat(cfg.Migrations.Dir); err != nil || !st.IsDir() {
 		return nil, fmt.Errorf("%q: %w", cfg.Migrations.Dir, errNoMigrationsDir)
 	}
-	db, dialectName, err := config.Open(ctx, cfg.Database)
+	db, dialectName, endpoint, err := config.OpenWithEndpoint(ctx, cfg.Database)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,8 @@ func (g *globals) open(ctx context.Context) (*session, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	m, err := migrate.New(db, dialectName, migratorOptions(cfg, logger)...)
+	opts := append(migratorOptions(cfg, logger), migrate.WithApprovalEndpoint(endpoint))
+	m, err := migrate.New(db, dialectName, opts...)
 	if err != nil {
 		_ = db.Close()
 		return nil, err

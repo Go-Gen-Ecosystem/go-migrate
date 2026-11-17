@@ -17,7 +17,15 @@ import (
 // session, as an agent would see it.
 func mcpClient(t *testing.T, env map[string]string) *mcp.ClientSession {
 	t.Helper()
-	g := &globals{output: "text", logLevel: "error", logFormat: "text", stderr: &bytes.Buffer{}, getenv: envFunc(env)}
+	return connectMCP(t, mcpGlobals(env))
+}
+
+func mcpGlobals(env map[string]string) *globals {
+	return &globals{output: "text", logLevel: "error", logFormat: "text", stderr: &bytes.Buffer{}, getenv: envFunc(env)}
+}
+
+func connectMCP(t *testing.T, g *globals) *mcp.ClientSession {
+	t.Helper()
 	server := newMCPServer(g, "test")
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(t.Context(), st, nil); err != nil {
@@ -160,7 +168,7 @@ func TestMCPAgentWorkflow(t *testing.T) {
 	}
 
 	// 7. Errors carry stable codes.
-	if e, isErr = call(t, cs, "rollback", map[string]any{"to_tag": "nope", "confirm": true, "plan_id": "x"}); !isErr || e.Error.Code != "tag_not_found" {
+	if e, isErr = call(t, cs, "rollback", map[string]any{"to_tag": "nope"}); !isErr || e.Error.Code != "tag_not_found" {
 		t.Fatalf("rollback to unknown tag = %+v", e)
 	}
 	if e, isErr = call(t, cs, "create_migration", map[string]any{"name": "!!!", "up": "SELECT 1;"}); !isErr || e.OK {

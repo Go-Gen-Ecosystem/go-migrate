@@ -213,7 +213,8 @@ such as `@`. See [the Db2 example](examples/db2).
   - PostgreSQL, SQLite, SQL Server and Db2 normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
   - MySQL, Oracle, and migrations marked `notransaction` commit a dirty row first. Oracle DDL commits implicitly. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
-- **Approval binds execution:** a plan ID hashes the dialect, history table, direction, versions, checksums, exact statements and the SQL callbacks that will run. `--expect-plan` (CLI), `ExpectPlan` (library) and `plan_id` (MCP) refuse to run anything else.
+- **Approval binds execution to the target:** CLI and MCP plan IDs cover the resolved database, history table, active schema or search path, and the exact plan (including callbacks and any automatic baseline). `--expect-plan` (CLI) and `plan_id` (MCP) check the approval under the migration lock before changing history or running migration SQL. Reissue IDs from older releases. Library callers can opt into the same check with `PlanWithID` or `PlanDownWithID` and `ExpectTargetPlan`; `PlanID` and `ExpectPlan` still check plan content only.
+- **Approval scope:** IDs use metadata from the live session and the configured network route. A PostgreSQL restart requires a fresh plan. SQLite binds canonical file paths and ordered attachment names; it cannot detect a file replaced at the same path. Re-plan after replacing a file. In-memory or temporary SQLite targets cannot receive a target-bound ID.
 - **Read-only means read-only:** `status`, `validate`, `lint` and dry runs never create tables.
 - **No connection secrets in output:** DSNs and passwords never appear in errors or logs. Placeholder values do appear in `--sql` plans and SQL excerpts, as they are part of the SQL; do not put secrets in placeholders.
 
@@ -245,7 +246,7 @@ claude mcp add gomigrate -- gomigrate mcp
 
 - **Read-only tools:** `status`, `validate`, `plan` (with SQL) and `lint`.
 - **`create_migration`:** writes the file, then validates and lints it.
-- **`apply` and `rollback`:** they require `confirm: true` and the `plan_id` of the plan the user approved. Without them they return the exact plan; if anything changed since approval they fail with `plan_changed`. `apply` also refuses while pending migrations have lint errors.
+- **`apply` and `rollback`:** they require `confirm: true` and the `plan_id` of the plan the user approved. Without them they return the plan. If the resolved database, schema or plan differs, re-plan and get fresh approval. `apply` also refuses while pending migrations have lint errors.
 - **`create_migration`** takes typed inputs (`no_transaction`, `sequential`) and rejects `-- +migrate` directives in the SQL, so an agent cannot suppress lint or retarget a migration.
 
 See [AGENTS.md](AGENTS.md) for the workflow and error codes.

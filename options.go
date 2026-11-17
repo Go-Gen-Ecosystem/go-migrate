@@ -25,19 +25,28 @@ const (
 type Option func(*options)
 
 type options struct {
-	fsys         fs.FS
-	goMigrations []GoMigration
-	table        string
-	lockWait     time.Duration
-	logger       halolog.Logger
-	allowOOO     bool
-	allowMissing bool
-	hooks        Hooks
-	installedBy  string
-	placeholders map[string]string
-	contexts     []string
-	labels       []string
-	baselineOnUp string
+	approvalEndpoint string
+	fsys             fs.FS
+	goMigrations     []GoMigration
+	table            string
+	lockWait         time.Duration
+	logger           halolog.Logger
+	allowOOO         bool
+	allowMissing     bool
+	hooks            Hooks
+	installedBy      string
+	placeholders     map[string]string
+	contexts         []string
+	labels           []string
+	baselineOnUp     string
+}
+
+// WithApprovalEndpoint adds a credential-free network endpoint identifier to
+// target-bound plan IDs. This distinguishes routes to servers with identical
+// reported names. Use the same endpoint identifier for preview and execution.
+// Never supply a DSN or authentication material.
+func WithApprovalEndpoint(endpoint string) Option {
+	return func(o *options) { o.approvalEndpoint = endpoint }
 }
 
 func defaults() options {

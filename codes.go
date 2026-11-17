@@ -30,6 +30,7 @@ var codes = []struct {
 	{ErrInvalidVersion, "invalid_version"},
 	{ErrInvalidArgument, "invalid_argument"},
 	{ErrPlanChanged, "plan_changed"},
+	{ErrApprovalTarget, "approval_target_unavailable"},
 	{ErrBadPrecondition, "bad_precondition"},
 	{ErrBadFileName, "bad_file_name"},
 	{ErrDuplicateVersion, "duplicate_version"},

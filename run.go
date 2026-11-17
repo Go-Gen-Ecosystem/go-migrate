@@ -5,12 +5,14 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/go-gen-ecosystem/halolog"
 
+	"github.com/go-gen-ecosystem/go-migrate/internal/dialect"
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
 	"github.com/go-gen-ecosystem/go-migrate/internal/script"
 	"github.com/go-gen-ecosystem/go-migrate/internal/source"
@@ -59,7 +61,7 @@ func (m *Migrator) Down(ctx context.Context, t DownTarget, opts ...RunOption) (*
 		return nil, err
 	}
 	res := &Result{Direction: Down}
-	err = m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a, opts).down(ctx, t, res) })
+	err = m.runLocked(ctx, opts, func(ctx context.Context, r runner) error { return r.down(ctx, t, res) })
 	return res, err
 }
 
@@ -68,13 +70,13 @@ func (m *Migrator) Down(ctx context.Context, t DownTarget, opts ...RunOption) (*
 // re-applied migration.
 func (m *Migrator) Redo(ctx context.Context) (*Result, error) {
 	res := &Result{Direction: Up}
-	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a, nil).redo(ctx, res) })
+	err := m.runLocked(ctx, nil, func(ctx context.Context, r runner) error { return r.redo(ctx, res) })
 	return res, err
 }
 
 func (m *Migrator) up(ctx context.Context, target string, opts []RunOption) (*Result, error) {
 	res := &Result{Direction: Up}
-	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return m.runner(a, opts).up(ctx, target, res) })
+	err := m.runLocked(ctx, opts, func(ctx context.Context, r runner) error { return r.up(ctx, target, res) })
 	return res, err
 }
 
@@ -85,7 +87,11 @@ func (m *Migrator) up(ctx context.Context, target string, opts []RunOption) (*Re
 // migration's SET search_path or USE cannot redirect history writes. The
 // lock is released even if fn panics or ctx is cancelled.
 func (m *Migrator) locked(ctx context.Context, fn func(context.Context, *applier) error) (err error) {
-	lock, err := m.dialect.Lock(ctx, m.db, m.table, m.opts.lockWait)
+	return m.withLock(ctx, nil, fn)
+}
+
+func (m *Migrator) withLock(ctx context.Context, check func(context.Context, *sql.Conn, dialect.Table) error, fn func(context.Context, *applier) error) (err error) {
+	lock, err := m.dialect.LockChecked(ctx, m.db, m.table, m.opts.lockWait, check)
 	if err != nil {
 		return err
 	}
@@ -98,21 +104,39 @@ func (m *Migrator) locked(ctx context.Context, fn func(context.Context, *applier
 		d: m.dialect, cat: m.cat, opts: &m.opts})
 }
 
-func (m *Migrator) runner(a *applier, opts []RunOption) runner {
-	return runner{a: a, plan: m.plan, opts: applyRunOptions(opts)}
+func (m *Migrator) runLocked(ctx context.Context, opts []RunOption, fn func(context.Context, runner) error) error {
+	o := applyRunOptions(opts)
+	var check func(context.Context, *sql.Conn, dialect.Table) error
+	if o.expectTarget {
+		check = func(ctx context.Context, conn *sql.Conn, table dialect.Table) error {
+			_, err := m.checkApprovalTarget(ctx, conn, table, o.expectPlan)
+			return err
+		}
+	}
+	return m.withLock(ctx, check, func(ctx context.Context, a *applier) error {
+		return fn(ctx, runner{a: a, m: m, opts: o})
+	})
 }
 
 // runner orchestrates applying and rolling back migrations under one lock.
 type runner struct {
 	a    *applier
-	plan planner
+	m    *Migrator
 	opts runOptions
 }
 
 // verify enforces ExpectPlan: the plan computed under the lock must be the
 // one that was approved.
-func (r runner) verify(dir Direction, plan []*unit) error {
-	if r.opts.expectPlan != "" && r.a.cat.planID(dir, plan) != r.opts.expectPlan {
+func (r runner) verify(ctx context.Context, dir Direction, plan []*unit, s *snapshot, baseline string) error {
+	if r.opts.expectTarget {
+		target, err := r.m.checkApprovalTarget(ctx, r.a.conn, r.a.table, r.opts.expectPlan)
+		if err != nil {
+			return err
+		}
+		if approvedID(target, r.a.cat, dir, plan, s, baseline) != r.opts.expectPlan {
+			return ErrPlanChanged
+		}
+	} else if r.opts.expectPlan != "" && r.a.cat.planID(dir, plan) != r.opts.expectPlan {
 		return ErrPlanChanged
 	}
 	return nil
@@ -124,22 +148,29 @@ func (r runner) snapshot(ctx context.Context) (*snapshot, error) {
 
 func (r runner) up(ctx context.Context, target string, res *Result) error {
 	a := r.a
-	if err := a.store.Ensure(ctx, a.conn); err != nil {
-		return err
-	}
 	s, err := r.snapshot(ctx)
 	if err != nil {
 		return err
 	}
-	if s, err = r.baselineOnMigrate(ctx, s); err != nil {
-		return err
-	}
-	plan, err := r.plan.up(s, target)
+	s, baseline, err := r.m.simulateBaseline(ctx, a.conn, a.table, s)
 	if err != nil {
 		return err
 	}
-	if err := r.verify(Up, plan); err != nil {
+	plan, err := r.m.plan.up(s, target)
+	if err != nil {
 		return err
+	}
+	if err := r.verify(ctx, Up, plan, s, baseline); err != nil {
+		return err
+	}
+	if err := a.store.Ensure(ctx, a.conn); err != nil {
+		return err
+	}
+	if baseline != "" {
+		if err := insertBaseline(ctx, a, baseline, "baseline on migrate", s.records[0].Rank); err != nil {
+			return err
+		}
+		a.opts.logger.Typed().Str(logVersion, baseline).Info("baselined existing schema")
 	}
 	if err := a.callbacks(ctx, a.conn, source.BeforeMigrate); err != nil {
 		return err
@@ -157,11 +188,11 @@ func (r runner) down(ctx context.Context, t DownTarget, res *Result) error {
 	if err != nil {
 		return err
 	}
-	plan, err := r.plan.down(s, t)
+	plan, err := r.m.plan.down(s, t)
 	if err != nil {
 		return err
 	}
-	if err := r.verify(Down, plan); err != nil {
+	if err := r.verify(ctx, Down, plan, s, ""); err != nil {
 		return err
 	}
 	return r.execute(ctx, plan, Down, s, res)
@@ -172,7 +203,7 @@ func (r runner) redo(ctx context.Context, res *Result) error {
 	if err != nil {
 		return err
 	}
-	plan, err := r.plan.down(s, DownTarget{Steps: 1})
+	plan, err := r.m.plan.down(s, DownTarget{Steps: 1})
 	if err != nil {
 		return err
 	}
@@ -238,24 +269,6 @@ func (r runner) bypass(ctx context.Context, u *unit, dir Direction, s *snapshot,
 	default:
 		return false, nil
 	}
-}
-
-// baselineOnMigrate inserts the configured baseline when the history is
-// empty but the schema already holds tables (WithBaselineOnMigrate).
-func (r runner) baselineOnMigrate(ctx context.Context, s *snapshot) (*snapshot, error) {
-	a, version := r.a, r.a.opts.baselineOnUp
-	if version == "" || len(s.records) > 0 {
-		return s, nil
-	}
-	n, err := a.d.CountTables(ctx, a.conn, a.table.Schema, a.table.Name, a.table.Name+"_lock")
-	if err != nil || n == 0 {
-		return s, err
-	}
-	if err := insertBaseline(ctx, a, version, "baseline on migrate", s.nextRank); err != nil {
-		return nil, err
-	}
-	a.opts.logger.Typed().Str(logVersion, version).Info("baselined existing schema")
-	return r.snapshot(ctx)
 }
 
 // insertBaseline records the baseline marker row at version.

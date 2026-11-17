@@ -60,11 +60,12 @@ func writeErrorJSON(w io.Writer, command string, err error) {
 	_ = encode(w, errEnvelope(command, err))
 }
 
-func (p *printer) plan(s *session, dir migrate.Direction, ms []migrate.Migration, sql bool) {
-	data := newPlan(s.m, dir, ms, sql)
+func (p *printer) plan(s *session, dir migrate.Direction, ms []migrate.Migration, id string, sql bool) {
+	data := newPlan(s.m, dir, ms, id, sql)
 	p.emit(data, func() {
 		if len(ms) == 0 && len(data.Callbacks) == 0 {
 			p.printf("Nothing to do.\n")
+			p.printf("Plan ID: %s\n", data.PlanID)
 			return
 		}
 		verb := map[migrate.Direction]string{migrate.Up: "apply", migrate.Down: "roll back"}[dir]

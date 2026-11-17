@@ -187,13 +187,24 @@ func (t DownTarget) validate() (DownTarget, error) {
 // RunOption adjusts one run (Up, UpTo, Down, Redo).
 type RunOption func(*runOptions)
 
-type runOptions struct{ expectPlan string }
+type runOptions struct {
+	expectPlan   string
+	expectTarget bool
+}
 
 // ExpectPlan makes the run verify, under the migration lock, that it is about
 // to execute exactly the plan identified by id (see Migrator.PlanID) and to
 // fail with ErrPlanChanged otherwise. It binds a human's or agent's approval
 // of a dry run to what actually runs.
-func ExpectPlan(id string) RunOption { return func(o *runOptions) { o.expectPlan = id } }
+func ExpectPlan(id string) RunOption {
+	return func(o *runOptions) { o.expectPlan, o.expectTarget = id, false }
+}
+
+// ExpectTargetPlan only permits the SQL target and exact plan approved with
+// PlanWithID or PlanDownWithID. Legacy content-only PlanID values are rejected.
+func ExpectTargetPlan(id string) RunOption {
+	return func(o *runOptions) { o.expectPlan, o.expectTarget = id, true }
+}
 
 func applyRunOptions(opts []RunOption) runOptions {
 	var o runOptions

@@ -5,6 +5,7 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -17,7 +18,7 @@ import (
 // and never creates the history table. Pending counts what Up would apply,
 // excluding RunAlways repeatables (they run every time and are never "behind").
 func (m *Migrator) Status(ctx context.Context) (*Status, error) {
-	s, err := m.readHistory(ctx, false)
+	s, err := m.readHistory(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +35,7 @@ func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 // Up fail: dirty rows, modified or missing applied migrations, and
 // out-of-order pending ones. It returns nil when Up could run.
 func (m *Migrator) Validate(ctx context.Context) error {
-	s, err := m.readHistory(ctx, false)
+	s, err := m.readHistory(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,32 +46,38 @@ func (m *Migrator) Validate(ctx context.Context) error {
 // applying it, including the effect of WithBaselineOnMigrate. Use it for dry
 // runs and bind an approval to it with PlanID and ExpectPlan.
 func (m *Migrator) Plan(ctx context.Context, target string) ([]Migration, error) {
-	s, err := m.readHistory(ctx, true)
-	if err != nil {
-		return nil, err
-	}
-	plan, err := m.plan.up(s, target)
-	if err != nil {
-		return nil, err
-	}
-	return migrationsOf(plan), nil
+	plan, _, err := m.planUp(ctx, target, false)
+	return plan, err
 }
 
 // PlanDown returns what Down(t) would roll back, without doing it.
 func (m *Migrator) PlanDown(ctx context.Context, t DownTarget) ([]Migration, error) {
+	plan, _, err := m.planDown(ctx, t, false)
+	return plan, err
+}
+
+// PlanWithID returns the dry run and its target-bound approval ID. Both the
+// plan and target are read on one session. Use the ID with ExpectTargetPlan.
+func (m *Migrator) PlanWithID(ctx context.Context, target string) ([]Migration, string, error) {
+	return m.planUp(ctx, target, true)
+}
+
+// PlanDownWithID returns the rollback plan and its target-bound approval ID
+// on one session. Use the ID with ExpectTargetPlan.
+func (m *Migrator) PlanDownWithID(ctx context.Context, t DownTarget) ([]Migration, string, error) {
+	return m.planDown(ctx, t, true)
+}
+
+func (m *Migrator) planUp(ctx context.Context, target string, bound bool) ([]Migration, string, error) {
+	return m.readPlan(ctx, Up, bound, func(s *snapshot) ([]*unit, error) { return m.plan.up(s, target) })
+}
+
+func (m *Migrator) planDown(ctx context.Context, t DownTarget, bound bool) ([]Migration, string, error) {
 	t, err := t.validate()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	s, err := m.readHistory(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	plan, err := m.plan.down(s, t)
-	if err != nil {
-		return nil, err
-	}
-	return migrationsOf(plan), nil
+	return m.readPlan(ctx, Down, bound, func(s *snapshot) ([]*unit, error) { return m.plan.down(s, t) })
 }
 
 // PlanID fingerprints a plan returned by Plan or PlanDown: its direction and
@@ -108,34 +115,71 @@ func (m *Migrator) Statements(mig Migration, dir Direction) []string {
 	return m.cat.statements(mig, dir)
 }
 
-// readHistory resolves and reads history on one session, including any
-// schema inspection needed for a dry run.
-func (m *Migrator) readHistory(ctx context.Context, baseline bool) (*snapshot, error) {
+func (m *Migrator) historySession(ctx context.Context, read func(*sql.Conn, dialect.Table) error) error {
 	conn, err := m.db.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reserve history connection: %w", err)
+		return fmt.Errorf("reserve history connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	table, err := m.dialect.ResolveTable(ctx, conn, m.table)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	s, err := readSnapshot(ctx, conn, history.New(m.dialect, table))
-	if err != nil || !baseline {
-		return s, err
-	}
-	return m.simulateBaseline(ctx, conn, table, s)
+	return read(conn, table)
+}
+
+func (m *Migrator) readHistory(ctx context.Context) (s *snapshot, err error) {
+	err = m.historySession(ctx, func(conn *sql.Conn, table dialect.Table) error {
+		var err error
+		s, err = readSnapshot(ctx, conn, history.New(m.dialect, table))
+		return err
+	})
+	return s, err
+}
+
+func (m *Migrator) readPlan(ctx context.Context, dir Direction, bound bool, selectPlan func(*snapshot) ([]*unit, error)) (ms []Migration, id string, err error) {
+	err = m.historySession(ctx, func(conn *sql.Conn, table dialect.Table) error {
+		var target string
+		if bound {
+			var err error
+			target, err = m.approvalTarget(ctx, conn, table)
+			if err != nil {
+				return err
+			}
+		}
+		s, err := readSnapshot(ctx, conn, history.New(m.dialect, table))
+		if err != nil {
+			return err
+		}
+		var baseline string
+		if dir == Up {
+			s, baseline, err = m.simulateBaseline(ctx, conn, table, s)
+			if err != nil {
+				return err
+			}
+		}
+		units, err := selectPlan(s)
+		if err != nil {
+			return err
+		}
+		if bound {
+			id = approvedID(target, m.cat, dir, units, s, baseline)
+		}
+		ms = migrationsOf(units)
+		return nil
+	})
+	return ms, id, err
 }
 
 // simulateBaseline projects the marker Up would insert on an existing schema.
-func (m *Migrator) simulateBaseline(ctx context.Context, q history.Querier, table dialect.Table, s *snapshot) (*snapshot, error) {
+func (m *Migrator) simulateBaseline(ctx context.Context, q history.Querier, table dialect.Table, s *snapshot) (*snapshot, string, error) {
 	if m.opts.baselineOnUp == "" || len(s.records) > 0 {
-		return s, nil
+		return s, "", nil
 	}
 	n, err := m.dialect.CountTables(ctx, q, table.Schema, table.Name, table.Name+"_lock")
 	if err != nil || n == 0 {
-		return s, err
+		return s, "", err
 	}
 	return newSnapshot([]history.Record{{Rank: 1, Version: source.Canonical(m.opts.baselineOnUp),
-		Kind: history.KindBaseline, Success: true}}), nil
+		Kind: history.KindBaseline, Success: true}}), m.opts.baselineOnUp, nil
 }

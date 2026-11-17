@@ -47,8 +47,11 @@ var (
 	// ErrInvalidArgument means a caller passed invalid or conflicting arguments.
 	ErrInvalidArgument = errors.New("invalid argument")
 	// ErrPlanChanged means the plan to execute no longer matches the one
-	// approved (ExpectPlan): migrations were added, edited or applied since.
-	ErrPlanChanged = errors.New("plan changed since it was approved")
+	// approved with ExpectPlan or ExpectTargetPlan.
+	ErrPlanChanged = errors.New("plan or target changed since it was approved")
+	// ErrApprovalTarget means the resolved database and schema could not be
+	// identified well enough to issue a target-bound approval.
+	ErrApprovalTarget = dialect.ErrApprovalTarget
 	// ErrInvalidVersion means a version is not numeric (digits, optionally dot-separated).
 	ErrInvalidVersion = errors.New("invalid version")
 	// ErrVersionNotFound means a requested target version does not exist.

@@ -36,8 +36,8 @@ var directiveLine = regexp.MustCompile(`(?im)^\s*--\s*\+(?:migrate|goose)\b`)
 const mcpInstructions = `gomigrate manages versioned database migrations (PostgreSQL, MySQL, SQLite, SQL Server, Oracle, Db2).
 Safe workflow: call status; author changes with create_migration; check them with lint;
 call plan to get the exact SQL and its plan_id; show that plan to the user; only after the
-user approves, call apply (or rollback) with confirm=true and that plan_id. If anything
-changed since the plan, the call fails with plan_changed: plan again. Every tool returns
+user approves, call apply (or rollback) with confirm=true and that plan_id. If the plan,
+database or schema changed, the call fails with plan_changed: plan again. Every tool returns
 {ok, data | error{code, message}}; branch on error.code.`
 
 func newMCPCmd(g *globals, version string) *cobra.Command {
@@ -160,11 +160,7 @@ func (t tools) plan(ctx context.Context, _ *mcp.CallToolRequest, in planInput) (
 			if in.Steps != 0 || in.ToTag != "" {
 				return nil, fmt.Errorf("steps and to_tag apply to direction=down: %w", migrate.ErrInvalidArgument)
 			}
-			ms, err := s.m.Plan(ctx, in.Target)
-			if err != nil {
-				return nil, err
-			}
-			return newPlan(s.m, migrate.Up, ms, true), nil
+			return planUp(ctx, s, in.Target)
 		case "down":
 			return planDown(ctx, s, migrate.DownTarget{Steps: in.Steps, To: in.Target, Tag: in.ToTag})
 		default:
@@ -173,12 +169,20 @@ func (t tools) plan(ctx context.Context, _ *mcp.CallToolRequest, in planInput) (
 	})
 }
 
-func planDown(ctx context.Context, s *session, target migrate.DownTarget) (any, error) {
-	ms, err := s.m.PlanDown(ctx, target)
+func planUp(ctx context.Context, s *session, target string) (planJSON, error) {
+	ms, id, err := s.m.PlanWithID(ctx, target)
 	if err != nil {
-		return nil, err
+		return planJSON{}, err
 	}
-	return newPlan(s.m, migrate.Down, ms, true), nil
+	return newPlan(s.m, migrate.Up, ms, id, true), nil
+}
+
+func planDown(ctx context.Context, s *session, target migrate.DownTarget) (planJSON, error) {
+	ms, id, err := s.m.PlanDownWithID(ctx, target)
+	if err != nil {
+		return planJSON{}, err
+	}
+	return newPlan(s.m, migrate.Down, ms, id, true), nil
 }
 
 func (t tools) lint(_ context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, envelope, error) {
@@ -228,21 +232,28 @@ func (t tools) create(_ context.Context, _ *mcp.CallToolRequest, in createInput)
 
 func (t tools) apply(ctx context.Context, _ *mcp.CallToolRequest, in applyInput) (*mcp.CallToolResult, envelope, error) {
 	return t.withSession(ctx, "apply", func(ctx context.Context, s *session) (any, error) {
-		pending, err := s.m.Plan(ctx, in.Target)
+		confirmed := in.Confirm && in.PlanID != ""
+		pending, id, err := s.m.PlanWithID(ctx, in.Target)
 		if err != nil {
+			if confirmed && errors.Is(err, migrate.ErrApprovalTarget) {
+				return nil, migrate.ErrPlanChanged
+			}
 			return nil, err
 		}
-		if !in.Confirm || in.PlanID == "" {
-			return newPlan(s.m, migrate.Up, pending, true), errConfirmationRequired
+		if !confirmed {
+			return newPlan(s.m, migrate.Up, pending, id, true), errConfirmationRequired
+		}
+		if id != in.PlanID {
+			return nil, migrate.ErrPlanChanged
 		}
 		if blocking := lintErrors(s.m.Lint(), pending); len(blocking) > 0 && !in.AllowLintErrors {
 			return newFindings(blocking), errLintBlocked
 		}
 		var res *migrate.Result
 		if in.Target != "" {
-			res, err = s.m.UpTo(ctx, in.Target, migrate.ExpectPlan(in.PlanID))
+			res, err = s.m.UpTo(ctx, in.Target, migrate.ExpectTargetPlan(in.PlanID))
 		} else {
-			res, err = s.m.Up(ctx, migrate.ExpectPlan(in.PlanID))
+			res, err = s.m.Up(ctx, migrate.ExpectTargetPlan(in.PlanID))
 		}
 		return newRun(res), err
 	})
@@ -251,14 +262,14 @@ func (t tools) apply(ctx context.Context, _ *mcp.CallToolRequest, in applyInput)
 func (t tools) rollback(ctx context.Context, _ *mcp.CallToolRequest, in rollbackInput) (*mcp.CallToolResult, envelope, error) {
 	return t.withSession(ctx, "rollback", func(ctx context.Context, s *session) (any, error) {
 		target := migrate.DownTarget{Steps: in.Steps, To: in.To, Tag: in.ToTag}
-		plan, err := planDown(ctx, s, target)
-		if err != nil {
-			return nil, err
-		}
 		if !in.Confirm || in.PlanID == "" {
+			plan, err := planDown(ctx, s, target)
+			if err != nil {
+				return nil, err
+			}
 			return plan, errConfirmationRequired
 		}
-		res, err := s.m.Down(ctx, target, migrate.ExpectPlan(in.PlanID))
+		res, err := s.m.Down(ctx, target, migrate.ExpectTargetPlan(in.PlanID))
 		return newRun(res), err
 	})
 }

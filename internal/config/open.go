@@ -48,18 +48,43 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	conn, err := open(ctx, db, name, dsn)
+	if err != nil {
+		return nil, "", err
+	}
+	return conn, name, nil
+}
+
+// OpenWithEndpoint also returns the credential-free route used for approvals.
+func OpenWithEndpoint(ctx context.Context, db Database) (*sql.DB, string, string, error) {
+	name, dsn, err := Resolve(db)
+	if err != nil {
+		return nil, "", "", err
+	}
+	endpoint, err := approvalEndpoint(name, dsn)
+	if err != nil {
+		return nil, "", "", err
+	}
+	conn, err := open(ctx, db, name, dsn)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return conn, name, endpoint, nil
+}
+
+func open(ctx context.Context, db Database, name, dsn string) (*sql.DB, error) {
 	conn, err := openPool(name, dsn)
 	if err != nil {
 		if name == dialect.SQLServer {
-			return nil, "", errors.New("invalid SQL Server connection configuration")
+			return nil, errors.New("invalid SQL Server connection configuration")
 		}
 		if name == dialect.Oracle {
-			return nil, "", errors.New("invalid Oracle connection configuration")
+			return nil, errors.New("invalid Oracle connection configuration")
 		}
 		if name == dialect.DB2 {
-			return nil, "", errors.New("invalid Db2 connection configuration")
+			return nil, errors.New("invalid Db2 connection configuration")
 		}
-		return nil, "", fmt.Errorf("open %s database: %w", name, err)
+		return nil, fmt.Errorf("open %s database: %w", name, err)
 	}
 	maxOpen := db.MaxOpenConns
 	if maxOpen <= 0 {
@@ -80,17 +105,17 @@ func Open(ctx context.Context, db Database) (*sql.DB, string, error) {
 	if err := conn.PingContext(pctx); err != nil {
 		_ = conn.Close()
 		if name == dialect.SQLServer {
-			return nil, "", sqlServerConnectError(pctx, err)
+			return nil, sqlServerConnectError(pctx, err)
 		}
 		if name == dialect.Oracle {
-			return nil, "", oracleConnectError(pctx, err)
+			return nil, oracleConnectError(pctx, err)
 		}
 		if name == dialect.DB2 {
-			return nil, "", db2ConnectError(pctx, err)
+			return nil, db2ConnectError(pctx, err)
 		}
-		return nil, "", fmt.Errorf("connect to %s database: %w", name, scrub(err, db.Password))
+		return nil, fmt.Errorf("connect to %s database: %w", name, scrub(err, db.Password))
 	}
-	return conn, name, nil
+	return conn, nil
 }
 
 func openPool(name, dsn string) (*sql.DB, error) {
