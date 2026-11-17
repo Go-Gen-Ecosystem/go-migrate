@@ -34,6 +34,69 @@ func decode(t *testing.T, out string) testEnvelope {
 	return e
 }
 
+func TestRepairCommandRequiresOneTargetAndAction(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("migrations", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, "migrations/1_a.sql", "CREATE TABLE a (id INT);")
+	write(t, "migrations/2_bad.sql", "-- +migrate Up notransaction\nINSERT INTO missing VALUES (1);")
+	env := map[string]string{"GOMIGRATE_DSN": "app.db"}
+	if out, code := runCLI(t, env, "-o", "json", "up"); code != ExitError {
+		t.Fatalf("seed failed migration = %d %s", code, out)
+	} else if e := decode(t, out); e.Error == nil || e.Error.Migration == nil || e.Error.Migration.Version != "2" || !e.Error.Migration.Dirty {
+		t.Fatalf("seed failed migration = %s", out)
+	}
+	write(t, "migrations/1_a.sql", "CREATE TABLE a (id BIGINT);")
+	for _, args := range [][]string{
+		{"repair"},
+		{"repair", "2"},
+		{"repair", "--clear-failed"},
+		{"repair", "1", "2", "--accept-checksum"},
+		{"repair", "2", "--clear-failed", "--accept-checksum"},
+	} {
+		out, code := runCLI(t, env, append([]string{"-o", "json"}, args...)...)
+		e := decode(t, out)
+		if code != ExitError || e.Error == nil || e.Error.Code != "invalid_argument" {
+			t.Fatalf("%v = %d %s", args, code, out)
+		}
+	}
+	out, code := runCLI(t, env, "-o", "json", "repair", "0001", "--accept-checksum", "--dry-run")
+	var preview struct {
+		DryRun         bool   `json:"dry_run"`
+		Migration      string `json:"migration"`
+		State          string `json:"state"`
+		StoredChecksum string `json:"stored_checksum"`
+		NewChecksum    string `json:"new_checksum"`
+	}
+	if err := json.Unmarshal(decode(t, out).Data, &preview); code != ExitOK || err != nil || !preview.DryRun || preview.Migration != "1" ||
+		preview.State != "modified" || preview.StoredChecksum == "" || preview.NewChecksum == "" || preview.StoredChecksum == preview.NewChecksum {
+		t.Fatalf("repair dry run = %d %s (%v)", code, out, err)
+	}
+	out, code = runCLI(t, env, "repair", "2", "--clear-failed", "--dry-run")
+	if code != ExitOK {
+		t.Fatalf("clear dry run = %d %s", code, out)
+	}
+	mustContain(t, out, "Would remove history row for 2 (state: failed)")
+	out, code = runCLI(t, env, "status")
+	if code != ExitOK {
+		t.Fatalf("status after previews = %d %s", code, out)
+	}
+	mustContain(t, out, "modified", "failed", "Dirty: true")
+	if out, code = runCLI(t, env, "repair", "2", "--clear-failed"); code != ExitOK {
+		t.Fatalf("clear failed = %d %s", code, out)
+	}
+	mustContain(t, out, "Removed failed history row for 2")
+	if out, code = runCLI(t, env, "status"); code != ExitOK {
+		t.Fatalf("status after clear = %d %s", code, out)
+	}
+	mustContain(t, out, "modified", "pending", "Dirty: false")
+	if out, code = runCLI(t, env, "repair", "1", "--accept-checksum"); code != ExitOK {
+		t.Fatalf("accept checksum = %d %s", code, out)
+	}
+	mustContain(t, out, "Accepted checksum drift for version 1")
+}
+
 func TestJSONOutputContract(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if err := os.Mkdir("migrations", 0o755); err != nil {

@@ -6,26 +6,133 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-gen-ecosystem/go-migrate/internal/history"
+	"github.com/go-gen-ecosystem/go-migrate/internal/source"
 )
+
+// RepairAction selects one type of history repair.
+type RepairAction string
+
+const (
+	// RepairClearFailed removes a failed row after restoring the schema by hand.
+	RepairClearFailed RepairAction = "clear-failed"
+	// RepairAcceptChecksum accepts deliberate drift for an applied version.
+	RepairAcceptChecksum RepairAction = "accept-checksum"
+)
+
+// RepairTarget identifies exactly one migration and action.
+type RepairTarget struct {
+	// Migration is a version or, for RepairClearFailed, a repeatable label
+	// (R__<description>) or history key (R:<description>).
+	Migration string
+	Action    RepairAction
+}
+
+// RepairPlan describes a proposed history change. Migration is the canonical
+// history key and State is the current state. Checksum and kind fields show
+// the existing row and, for RepairAcceptChecksum, the proposed values.
+type RepairPlan struct {
+	RepairTarget
+	State                       State
+	StoredChecksum, NewChecksum string
+	StoredKind, NewKind         string
+}
 
 // RepairResult reports what Repair changed.
 type RepairResult struct {
-	// RemovedFailed is the number of dirty (failed) history rows removed.
+	// RemovedFailed is 1 when the selected failed row was removed.
 	RemovedFailed int64
-	// Realigned lists versions whose stored checksum was updated to match
-	// the current file.
+	// Realigned contains the selected version when its checksum was realigned.
 	Realigned []string
 }
 
-// Repair clears failed history rows (after you have fixed the schema by
-// hand) and realigns stored checksums of applied migrations with the current
-// files, accepting deliberate edits. It never touches the schema itself.
-func (m *Migrator) Repair(ctx context.Context) (*RepairResult, error) {
+// PlanRepair previews the selected history repair without taking a migration
+// lock or making any writes. Repair checks the current state again when run.
+func (m *Migrator) PlanRepair(ctx context.Context, target RepairTarget) (*RepairPlan, error) {
+	target, err := target.validate()
+	if err != nil {
+		return nil, err
+	}
+	s, err := m.readHistory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return m.cat.planRepair(s, target)
+}
+
+// Repair applies exactly one explicit history change. Clear a failed row
+// only after restoring the schema by hand; if you completed the migration,
+// use MarkApplied instead. Repair never runs migration SQL. A call without
+// exactly one target returns ErrInvalidArgument without writing history.
+func (m *Migrator) Repair(ctx context.Context, targets ...RepairTarget) (*RepairResult, error) {
 	res := &RepairResult{}
-	err := m.locked(ctx, func(ctx context.Context, a *applier) error { return maintenance{a}.repair(ctx, res) })
+	if len(targets) != 1 {
+		return res, fmt.Errorf("repair requires one migration and one action: %w", ErrInvalidArgument)
+	}
+	t, err := targets[0].validate()
+	if err != nil {
+		return res, err
+	}
+	err = m.locked(ctx, func(ctx context.Context, a *applier) error { return maintenance{a}.repair(ctx, t, res) })
 	return res, err
+}
+
+func (t RepairTarget) validate() (RepairTarget, error) {
+	if t.Action != RepairClearFailed && t.Action != RepairAcceptChecksum {
+		return t, fmt.Errorf("repair requires clear-failed or accept-checksum: %w", ErrInvalidArgument)
+	}
+	if goVersion.MatchString(t.Migration) {
+		t.Migration = source.Canonical(t.Migration)
+		return t, nil
+	}
+	name, repeatable := strings.CutPrefix(t.Migration, "R__")
+	if !repeatable {
+		name, repeatable = strings.CutPrefix(t.Migration, history.RepeatablePrefix)
+	}
+	if repeatable && name != "" {
+		if t.Action == RepairAcceptChecksum {
+			return t, fmt.Errorf("repeatable migration %q must be reapplied, not realigned: %w", t.Migration, ErrInvalidArgument)
+		}
+		t.Migration = history.RepeatablePrefix + strings.ToLower(name)
+		return t, nil
+	}
+	return t, fmt.Errorf("repair migration %q must be a version or repeatable label: %w", t.Migration, ErrInvalidArgument)
+}
+
+func (c *catalog) planRepair(s *snapshot, t RepairTarget) (*RepairPlan, error) {
+	rec := s.byKey[t.Migration]
+	if rec == nil {
+		return nil, fmt.Errorf("migration %q has no history row: %w", t.Migration, ErrHistoryRowNotFound)
+	}
+	p := &RepairPlan{RepairTarget: t, StoredChecksum: rec.Checksum, StoredKind: string(rec.Kind)}
+	if t.Action == RepairClearFailed {
+		if rec.Success || (rec.Kind != history.KindSQL && rec.Kind != history.KindGo && rec.Kind != history.KindRepeatable) {
+			return nil, fmt.Errorf("migration %q is not a failed migration: %w", t.Migration, ErrInvalidArgument)
+		}
+		p.State = StateFailed
+		return p, nil
+	}
+	if !rec.Success || (rec.Kind != history.KindSQL && rec.Kind != history.KindGo && rec.Kind != history.KindMarked) {
+		return nil, fmt.Errorf("migration %q is not an applied versioned migration: %w", t.Migration, ErrInvalidArgument)
+	}
+	u := c.byKey[t.Migration]
+	if u == nil {
+		return nil, fmt.Errorf("migration %q: %w", t.Migration, ErrMissingMigration)
+	}
+	if !drifted(u, rec) {
+		return nil, fmt.Errorf("migration %q has no checksum or kind drift: %w", t.Migration, ErrInvalidArgument)
+	}
+	kind := u.kind
+	if rec.Kind == history.KindMarked {
+		if kind != history.KindSQL {
+			return nil, fmt.Errorf("migration %q was marked as run; restore its SQL source: %w", t.Migration, ErrInvalidArgument)
+		}
+		kind = history.KindMarked // stays "recorded without running"
+	}
+	p.State, p.NewChecksum, p.NewKind = StateModified, u.Checksum, string(kind)
+	return p, nil
 }
 
 // MarkApplied records version as applied without running it: for a dirty
@@ -66,30 +173,41 @@ func (m *Migrator) Tag(ctx context.Context, tag string) error {
 // runs migration SQL.
 type maintenance struct{ a *applier }
 
-func (mt maintenance) repair(ctx context.Context, res *RepairResult) error {
+func (mt maintenance) repair(ctx context.Context, t RepairTarget, res *RepairResult) error {
 	a := mt.a
-	s, err := readSnapshot(ctx, a.conn, a.store)
-	if err != nil || len(s.records) == 0 {
+	tx, err := a.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin repair transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	s, err := readSnapshot(ctx, tx, a.store)
+	if err != nil {
 		return err
 	}
-	if res.RemovedFailed, err = a.store.DeleteFailed(ctx, a.conn); err != nil {
+	p, err := a.cat.planRepair(s, t)
+	if err != nil {
 		return err
 	}
-	for _, rec := range s.records {
-		u := a.cat.byKey[rec.Version]
-		if !rec.Success || u == nil || !drifted(u, &rec) {
-			continue
-		}
-		kind := u.kind
-		if rec.Kind == history.KindMarked {
-			kind = rec.Kind // stays "recorded without running"
-		}
-		if err := a.store.Realign(ctx, a.conn, rec.Version, u.Checksum, kind); err != nil {
-			return err
-		}
-		res.Realigned = append(res.Realigned, rec.Version)
+	if err := a.lock.Fence(ctx, tx); err != nil {
+		return err
 	}
-	a.opts.logger.Typed().Int64(logCount, res.RemovedFailed).Info("repair complete")
+	if p.Action == RepairClearFailed {
+		err = a.store.DeleteFailed(ctx, tx, p.Migration)
+	} else {
+		err = a.store.Realign(ctx, tx, p.Migration, p.NewChecksum, history.Kind(p.NewKind))
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit repair for %q: %w", p.Migration, err)
+	}
+	if p.Action == RepairClearFailed {
+		res.RemovedFailed = 1
+	} else {
+		res.Realigned = []string{p.Migration}
+	}
+	a.opts.logger.Typed().Str(logVersion, p.Migration).Info("repair complete")
 	return nil
 }
 

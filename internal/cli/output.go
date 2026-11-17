@@ -158,6 +158,22 @@ func (p *printer) status(st *migrate.Status) {
 	})
 }
 
+func (p *printer) repairPlan(plan *migrate.RepairPlan) {
+	data := map[string]any{"dry_run": true, "migration": plan.Migration, "action": plan.Action,
+		"state": plan.State, "stored_checksum": plan.StoredChecksum, "stored_kind": plan.StoredKind}
+	if plan.Action == migrate.RepairAcceptChecksum {
+		data["new_checksum"], data["new_kind"] = plan.NewChecksum, plan.NewKind
+	}
+	p.emit(data, func() {
+		if plan.Action == migrate.RepairClearFailed {
+			p.printf("Would remove history row for %s (state: %s). Restore the schema by hand before clearing it.\n", plan.Migration, plan.State)
+			return
+		}
+		p.printf("Would realign history for %s (state: %s):\n", plan.Migration, plan.State)
+		p.printf("  Stored checksum: %q (%s)\n  New checksum:    %q (%s)\n", plan.StoredChecksum, plan.StoredKind, plan.NewChecksum, plan.NewKind)
+	})
+}
+
 func (p *printer) findings(findings []migrate.Finding) {
 	p.emit(newFindings(findings), func() {
 		if len(findings) == 0 {

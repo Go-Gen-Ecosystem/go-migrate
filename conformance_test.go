@@ -169,6 +169,7 @@ func TestConformance(t *testing.T) {
 		t.Run(tg.dialect, func(t *testing.T) {
 			t.Run("lifecycle", func(t *testing.T) { conformLifecycle(t, tg) })
 			t.Run("failure", func(t *testing.T) { conformFailure(t, tg, false) })
+			t.Run("repair_scoped", func(t *testing.T) { conformScopedRepair(t, tg) })
 			t.Run("dialect SQL", func(t *testing.T) { conformSpecial(t, tg) })
 			t.Run("concurrent runs", func(t *testing.T) { conformConcurrent(t, tg) })
 			t.Run("status is read-only", func(t *testing.T) { conformReadOnly(t, tg) })
@@ -263,7 +264,7 @@ func conformFailure(t *testing.T, tg target, noTx bool) {
 		if _, err := db.Exec("DROP TABLE half"); err != nil {
 			t.Fatal(err)
 		}
-		if rr, err := m.Repair(ctx); err != nil || rr.RemovedFailed != 1 {
+		if rr, err := m.Repair(ctx, RepairTarget{Migration: "2", Action: RepairClearFailed}); err != nil || rr.RemovedFailed != 1 {
 			t.Fatalf("Repair = %+v, %v", rr, err)
 		}
 	} else {

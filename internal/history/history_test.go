@@ -88,8 +88,11 @@ func TestStoreLifecycle(t *testing.T) {
 	if _, err := s.Insert(ctx, db, Record{Version: "3", Kind: KindSQL, Success: false}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := s.DeleteFailed(ctx, db); err != nil || n != 1 {
-		t.Fatalf("DeleteFailed = %d, %v", n, err)
+	if err := s.DeleteFailed(ctx, db, "2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteFailed successful row = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteFailed(ctx, db, "3"); err != nil {
+		t.Fatalf("DeleteFailed = %v", err)
 	}
 	if err := s.Delete(ctx, db, "2"); err != nil {
 		t.Fatal(err)

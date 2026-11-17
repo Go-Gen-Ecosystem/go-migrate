@@ -132,7 +132,7 @@ func TestSQLiteNoTxExcludesLiveProcessAndRecoversCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	contender := newM(t, aliasDB, nil, WithTable("attached.GOMIGRATE_HISTORY"), WithLockWait(0))
-	if _, err := contender.Repair(ctx); !errors.Is(err, ErrLockTimeout) {
+	if _, err := contender.Repair(ctx, RepairTarget{Migration: "1", Action: RepairClearFailed}); !errors.Is(err, ErrLockTimeout) {
 		t.Fatalf("Repair while live holder is past lease expiry = %v, want ErrLockTimeout", err)
 	}
 	if _, err := stdin.Write([]byte{'x'}); err != nil {
@@ -187,7 +187,7 @@ func TestSQLiteNoTxExcludesLiveSharedMemoryHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	contender := newM(t, peer, nil, WithLockWait(0))
-	if _, err := contender.Repair(ctx); !errors.Is(err, ErrLockTimeout) {
+	if _, err := contender.Repair(ctx, RepairTarget{Migration: "1", Action: RepairClearFailed}); !errors.Is(err, ErrLockTimeout) {
 		t.Fatalf("Repair while shared memory holder is past lease expiry = %v, want ErrLockTimeout", err)
 	}
 }

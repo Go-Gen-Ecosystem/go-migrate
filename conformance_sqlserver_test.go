@@ -202,7 +202,7 @@ func conformSQLServerDirty(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "DROP TABLE half"); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := m.Repair(ctx); err != nil || res.RemovedFailed != 1 {
+	if res, err := m.Repair(ctx, RepairTarget{Migration: "1", Action: RepairClearFailed}); err != nil || res.RemovedFailed != 1 {
 		t.Fatalf("Repair = %+v, %v", res, err)
 	}
 }

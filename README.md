@@ -75,8 +75,8 @@ _, err = m.Up(ctx)
 
 - **Migrator methods:**
   - apply and roll back: `Up`, `UpTo`, `Down(ctx, migrate.DownTarget{Steps: 1})` (or `To: "3"`, or `Tag: "v1"`), `Redo`;
-  - read-only: `Plan`, `PlanDown`, `PlanID`, `Statements`, `Callbacks`, `Status`, `Validate`, `Lint`, `Migrations`;
-  - history administration: `Repair`, `MarkApplied`, `Baseline`, `Tag`.
+  - read-only: `Plan`, `PlanDown`, `PlanRepair`, `PlanID`, `Statements`, `Callbacks`, `Status`, `Validate`, `Lint`, `Migrations`;
+  - history administration: `Repair(ctx, migrate.RepairTarget{Migration: "3", Action: migrate.RepairClearFailed})`, `MarkApplied`, `Baseline`, `Tag`. To accept deliberate checksum drift, use `migrate.RepairAcceptChecksum` for that version. Bare `Repair(ctx)` returns `ErrInvalidArgument` and changes nothing.
 - **Approved plans:** `m.Up(ctx, migrate.ExpectPlan(id))` runs only if the plan, computed again under the lock, still has the ID that was reviewed; otherwise it fails with `ErrPlanChanged` and runs nothing.
 - **Options:**
   - `WithFS`, `WithGoMigrations`, `WithTable`, `WithLockWait`;
@@ -211,7 +211,7 @@ such as `@`. See [the Db2 example](examples/db2).
   - Session-lock connections are discarded afterwards, never returned to the pool.
 - **Atomicity.**
   - PostgreSQL, SQLite, SQL Server and Db2 normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
-  - MySQL, Oracle, and migrations marked `notransaction` commit a dirty row first. Oracle DDL commits implicitly. A partial failure blocks further runs (`dirty`) until you choose `repair` (you undid the change) or `mark-applied` (you finished it).
+  - MySQL, Oracle, and migrations marked `notransaction` commit a dirty row first. Oracle DDL commits implicitly. A partial failure blocks further runs. Restore the schema by hand, then use `repair MIGRATION --clear-failed` if you undid the change, or `mark-applied VERSION` if you completed the versioned migration.
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
 - **Approval binds execution to the target:** CLI and MCP plan IDs cover the resolved database, history table, active schema or search path, and the exact plan (including callbacks and any automatic baseline). `--expect-plan` (CLI) and `plan_id` (MCP) check the approval under the migration lock before changing history or running migration SQL. Reissue IDs from older releases. Library callers can opt into the same check with `PlanWithID` or `PlanDownWithID` and `ExpectTargetPlan`; `PlanID` and `ExpectPlan` still check plan content only.
 - **Approval scope:** IDs use metadata from the live session and the configured network route. A PostgreSQL restart requires a fresh plan. SQLite binds canonical file paths and ordered attachment names; it cannot detect a file replaced at the same path. Re-plan after replacing a file. In-memory or temporary SQLite targets cannot receive a target-bound ID.
@@ -322,11 +322,21 @@ Additional rules:
 | `redo` | roll back and re-apply the last migration |
 | `status [--fail-on-pending]` | show state; doubles as a CI gate |
 | `validate` | check drift, missing, out-of-order and failed migrations |
-| `repair` | clear failed rows and accept edited checksums |
+| `repair MIGRATION (--clear-failed \| --accept-checksum) [--dry-run]` | preview or change one history row |
 | `mark-applied V` | record V as applied without running it |
 | `baseline --version V` | adopt an existing database |
 | `tag NAME` | tag the current version |
 | `mcp` | serve AI agents over the Model Context Protocol |
+
+`repair 42 --clear-failed` removes version 42's failed history row after you
+undo its partial changes. For a failed repeatable, pass the label from
+`status`, for example `repair 'R__refresh views' --clear-failed`.
+`repair 42 --accept-checksum` accepts drift for version 42 only; prefer
+restoring the applied file and writing a new migration. Changed repeatables
+run again on `up` rather than accepting a checksum through repair.
+Add `--dry-run` to preview the selected row and, for checksum changes, compare
+its stored and proposed checksums. Repair rechecks the selected row under the
+migration lock and updates history in a transaction. It runs no migration SQL.
 
 Global flags:
 

@@ -146,10 +146,9 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustContain(t, out, "OK")
-	if out, err = run(t, none, "repair"); err != nil {
-		t.Fatal(err)
+	if _, err = run(t, none, "repair", "1", "--accept-checksum", "--dry-run"); !errors.Is(err, migrate.ErrInvalidArgument) {
+		t.Fatalf("repair with no drift = %v, want ErrInvalidArgument", err)
 	}
-	mustContain(t, out, "Removed 0 failed row(s)")
 	if out, err = run(t, none, "down", "--all"); err != nil {
 		t.Fatal(err)
 	}

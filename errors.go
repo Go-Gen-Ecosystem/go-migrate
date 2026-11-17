@@ -19,8 +19,8 @@ import (
 var (
 	// ErrDirty means a non-transactional migration failed part-way and left
 	// a history row with success = false. Bring the schema by hand to either
-	// side of the migration, then run Repair (schema as before it: the row
-	// is removed) or MarkApplied (schema as after it: the row is completed).
+	// side of the migration, then use Repair with RepairClearFailed (schema
+	// as before it) or MarkApplied (schema as after it).
 	ErrDirty = errors.New("database is dirty: a migration failed part-way; " + dirtyGuidance)
 	// ErrBelowBaseline means a rollback target lies below the baseline,
 	// which cannot be rolled back.
@@ -111,7 +111,7 @@ type MigrationError struct {
 // dirtyGuidance says how to recover from a dirty row in either direction:
 // the row is resolved by the state the schema is left in, not by which
 // direction failed.
-const dirtyGuidance = "make the schema consistent by hand, then run repair if the migration is now not applied, or mark-applied if it is"
+const dirtyGuidance = "make the schema consistent by hand, then run repair MIGRATION --clear-failed if the migration is not applied, or mark-applied VERSION if it is"
 
 func (e *MigrationError) Error() string {
 	msg := fmt.Sprintf("migration %s %s failed", e.Version, e.Direction)

@@ -101,7 +101,7 @@ func New(d *dialect.Dialect, t dialect.Table) *Store {
 		realign:      "UPDATE " + q + " SET checksum = " + p(1) + ", kind = " + p(2) + " WHERE " + textEqual("version", 3),
 		invalidate:   "UPDATE " + q + " SET checksum = '' WHERE kind = " + p(1),
 		delete:       "DELETE FROM " + q + " WHERE " + textEqual("version", 1),
-		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1),
+		deleteFailed: "DELETE FROM " + q + " WHERE success = " + p(1) + " AND " + textEqual("version", 2),
 		clearTag:     clearTag,
 		setTag:       "UPDATE " + q + " SET tag = " + p(1) + " WHERE " + textEqual("version", 2),
 		has:          "SELECT COUNT(*) FROM " + q + " WHERE " + textEqual("version", 1),
@@ -235,13 +235,16 @@ func (s *Store) Delete(ctx context.Context, q Querier, version string) error {
 	return s.exec(ctx, q, s.sql.delete, version)
 }
 
-// DeleteFailed removes every row with success = false and returns how many.
-func (s *Store) DeleteFailed(ctx context.Context, q Querier) (int64, error) {
-	n, err := s.affected(ctx, q, s.sql.deleteFailed, s.bindSuccess(false))
+// DeleteFailed removes version only if its row is failed.
+func (s *Store) DeleteFailed(ctx context.Context, q Querier, version string) error {
+	n, err := s.affected(ctx, q, s.sql.deleteFailed, s.bindSuccess(false), version)
 	if err != nil {
-		return 0, fmt.Errorf("delete failed history rows: %w", err)
+		return fmt.Errorf("delete failed history row %q: %w", version, err)
 	}
-	return n, nil
+	if n != 1 {
+		return fmt.Errorf("failed history row %q: %w", version, ErrNotFound)
+	}
+	return nil
 }
 
 func (s *Store) bindSuccess(success bool) any {

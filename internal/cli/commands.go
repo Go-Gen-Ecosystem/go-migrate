@@ -378,13 +378,30 @@ func newValidateCmd(g *globals) *cobra.Command {
 }
 
 func newRepairCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
-		Use:   "repair",
-		Short: "Remove failed history rows and realign checksums of edited migrations",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+	var clearFailed, acceptChecksum, dryRun bool
+	cmd := &cobra.Command{
+		Use:     "repair MIGRATION (--clear-failed | --accept-checksum) [--dry-run]",
+		Short:   "Repair one migration's history row",
+		Example: "  gomigrate repair 42 --accept-checksum --dry-run\n  gomigrate repair 'R__refresh views' --clear-failed",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 || clearFailed == acceptChecksum {
+				return fmt.Errorf("repair requires one migration and exactly one of --clear-failed or --accept-checksum: %w", migrate.ErrInvalidArgument)
+			}
+			target := migrate.RepairTarget{Migration: args[0], Action: migrate.RepairAcceptChecksum}
+			if clearFailed {
+				target.Action = migrate.RepairClearFailed
+			}
 			return g.withSession(cmd, func(ctx context.Context, s *session) error {
-				res, err := s.m.Repair(ctx)
+				p := newPrinter(cmd, g)
+				if dryRun {
+					plan, err := s.m.PlanRepair(ctx, target)
+					if err != nil {
+						return err
+					}
+					p.repairPlan(plan)
+					return p.result(nil)
+				}
+				res, err := s.m.Repair(ctx, target)
 				if err != nil {
 					return err
 				}
@@ -392,14 +409,21 @@ func newRepairCmd(g *globals) *cobra.Command {
 				if realigned == nil {
 					realigned = []string{}
 				}
-				p := newPrinter(cmd, g)
 				p.emit(map[string]any{"removed_failed": res.RemovedFailed, "realigned": realigned}, func() {
-					p.printf("Removed %d failed row(s); realigned %d checksum(s) %v\n", res.RemovedFailed, len(res.Realigned), res.Realigned)
+					if clearFailed {
+						p.printf("Removed failed history row for %s.\n", target.Migration)
+					} else {
+						p.printf("Accepted checksum drift for version %s.\n", target.Migration)
+					}
 				})
 				return p.result(nil)
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&clearFailed, "clear-failed", false, "remove a failed row after restoring the schema by hand")
+	cmd.Flags().BoolVar(&acceptChecksum, "accept-checksum", false, "accept deliberate drift of an applied versioned migration")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show the proposed history change without writing")
+	return cmd
 }
 
 func newMarkAppliedCmd(g *globals) *cobra.Command {

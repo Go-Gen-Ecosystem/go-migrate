@@ -9,6 +9,7 @@ package migrate
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -22,15 +23,20 @@ func TestMarkRanRollbackKeepsPreexistingObject(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO legacy VALUES (42)"); err != nil {
 		t.Fatal(err)
 	}
-	m := newM(t, db, files("1_legacy.sql",
-		"-- +migrate Precondition onFail=MARK_RAN expect=0 SELECT COUNT(*) FROM sqlite_master WHERE name = 'legacy'\n"+
-			"-- +migrate Up\nCREATE TABLE legacy (id INTEGER);\n-- +migrate Down\nDROP TABLE legacy;"))
+	const legacy = "-- +migrate Precondition onFail=MARK_RAN expect=0 SELECT COUNT(*) FROM sqlite_master WHERE name = 'legacy'\n" +
+		"-- +migrate Up\nCREATE TABLE legacy (id INTEGER);\n-- +migrate Down\n"
+	m := newM(t, db, files("1_legacy.sql", legacy+"DROP TABLE legacy;"))
 	res, err := m.Up(ctx)
 	if err != nil || !res.Applied[0].MarkedRan {
 		t.Fatalf("Up = %+v, %v", res, err)
 	}
 	if st, _ := m.Status(ctx); st.Migrations[0].State != StateMarkedRan {
 		t.Fatalf("state = %s, want %s", st.Migrations[0].State, StateMarkedRan)
+	}
+	edited := strings.Replace(legacy, "id INTEGER", "id INTEGER NOT NULL", 1)
+	m = newM(t, db, files("1_legacy.sql", edited+"DROP TABLE legacy;"))
+	if rr, err := m.Repair(ctx, RepairTarget{Migration: "1", Action: RepairAcceptChecksum}); err != nil || len(rr.Realigned) != 1 {
+		t.Fatalf("Repair marked migration = %+v, %v", rr, err)
 	}
 	res, err = m.Down(ctx, DownTarget{})
 	if err != nil || !res.Applied[0].MarkedRan {
@@ -86,7 +92,7 @@ func TestRepairNeverRealignsRepeatables(t *testing.T) {
 	}
 	fsys["R__v.sql"] = &fstest.MapFile{Data: []byte("DROP VIEW IF EXISTS v;\nCREATE VIEW v AS SELECT 2 AS x;")}
 	m := newM(t, db, fsys)
-	if rr, err := m.Repair(ctx); err != nil || len(rr.Realigned) != 0 {
+	if rr, err := m.Repair(ctx, RepairTarget{Migration: "R:v", Action: RepairAcceptChecksum}); !errors.Is(err, ErrInvalidArgument) || len(rr.Realigned) != 0 {
 		t.Fatalf("Repair = %+v, %v", rr, err)
 	}
 	if res, err := m.Up(ctx); err != nil || len(res.Applied) != 1 {

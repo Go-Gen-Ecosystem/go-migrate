@@ -10,7 +10,8 @@
 // on PostgreSQL, MySQL, SQL Server, Oracle, and Db2 and a run-lifetime file lock with a lease on SQLite.
 // In-memory SQLite databases coordinate within the process. Transactional
 // migrations and their history row commit together. A failed nontransactional
-// migration leaves a "dirty" row that blocks further runs until Repair.
+// migration leaves a "dirty" row that blocks further runs. Restore the schema
+// by hand before clearing that row with Repair or completing it with MarkApplied.
 //
 // The package itself imports no SQL driver; register the one you use, e.g.
 //

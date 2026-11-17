@@ -240,7 +240,7 @@ func TestNoTxFailureIsDirtyUntilRepair(t *testing.T) {
 	}
 	fsys["1_notx.sql"] = &fstest.MapFile{Data: []byte("-- +migrate Up notransaction\nCREATE TABLE part (id INTEGER);")}
 	m = newM(t, db, fsys)
-	rr, err := m.Repair(ctx)
+	rr, err := m.Repair(ctx, RepairTarget{Migration: "1", Action: RepairClearFailed})
 	if err != nil || rr.RemovedFailed != 1 {
 		t.Fatalf("Repair = %+v, %v", rr, err)
 	}
@@ -270,7 +270,7 @@ func TestChecksumDriftAndRepair(t *testing.T) {
 	if tableExists(t, db, "b") {
 		t.Fatal("drift must block the whole run")
 	}
-	rr, err := m.Repair(ctx)
+	rr, err := m.Repair(ctx, RepairTarget{Migration: "1", Action: RepairAcceptChecksum})
 	if err != nil || len(rr.Realigned) != 1 {
 		t.Fatalf("Repair = %+v, %v", rr, err)
 	}
