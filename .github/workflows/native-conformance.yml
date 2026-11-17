@@ -5,6 +5,12 @@ on:
   schedule:
     - cron: '23 4 * * 1'
   workflow_dispatch:
+    inputs:
+      source:
+        description: Source to test
+        type: choice
+        options: [main, v1.0.1]
+        default: main
 
 permissions:
   contents: read
@@ -19,6 +25,7 @@ defaults:
 
 env:
   GOWORK: 'off'
+  GOMIGRATE_NATIVE_SOURCE_SHA: ${{ inputs.source == 'v1.0.1' && '7650c2b6b8aa04a767ad7fa5d7684183f56eeca5' || github.sha }}
 
 jobs:
   local-fixtures:
@@ -38,7 +45,7 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --label project=go-migrate --label run=${{ github.run_id }}-${{ github.run_attempt }}
-          --health-cmd 'pg_isready -U postgres' --health-interval 2s --health-timeout 5s --health-retries 30
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
       mysql:
         image: ${{ matrix.engine == 'mysql' && 'mysql:8.4.13' || '' }}
         env:
@@ -46,7 +53,7 @@ jobs:
         ports: ['3306:3306']
         options: >-
           --label project=go-migrate --label run=${{ github.run_id }}-${{ github.run_attempt }}
-          --health-cmd 'mysqladmin ping -h 127.0.0.1 -ppw' --health-interval 2s --health-timeout 5s --health-retries 60
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ppw" --health-interval 2s --health-timeout 5s --health-retries 60
       sqlserver:
         # An empty image disables a GitHub service before setup starts.
         image: ${{ matrix.engine == 'sqlserver' && vars.GOMIGRATE_CI_SQLSERVER_ACCEPT_EULA == 'Y' && 'mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f' || '' }}
@@ -54,10 +61,11 @@ jobs:
           ACCEPT_EULA: 'Y'
           MSSQL_PID: Developer
           MSSQL_SA_PASSWORD: 'Gomigrate-Only-Test-2022!'
+          SQLCMDPASSWORD: 'Gomigrate-Only-Test-2022!'
         ports: ['1433:1433']
         options: >-
           --label project=go-migrate --label run=${{ github.run_id }}-${{ github.run_attempt }}
-          --health-cmd 'SQLCMDPASSWORD="$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q "SELECT 1" -b'
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q 'SELECT 1' -b"
           --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
       - name: Check SQL Server fixture authorization
@@ -67,7 +75,7 @@ jobs:
           exit 1
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.GOMIGRATE_NATIVE_SOURCE_SHA }}
           persist-credentials: false
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -81,76 +89,46 @@ jobs:
           GOMIGRATE_TEST_SQLSERVER_SELF_SIGNED: ${{ matrix.engine == 'sqlserver' && '1' || '' }}
         run: |
           set -o pipefail
+          test "$(git rev-parse HEAD)" = "$GOMIGRATE_NATIVE_SOURCE_SHA"
           selector="^TestConformance$/^${ENGINE}$"
           case "$ENGINE" in
             postgres) selector+='|^TestPostgresNoTxConformance$' ;;
             mysql) selector+='|^TestMySQLRunCallbackAutocommit$' ;;
           esac
           go test -json -race -count=1 -timeout=10m -run "$selector" . 2>&1 | go run ./internal/nativecheck "$ENGINE"
-          printf 'Native conformance passed for **%s** at `%s`.\n' "$ENGINE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Native conformance passed for **%s** at source `%s` with workflow `%s`.\n' "$ENGINE" "$GOMIGRATE_NATIVE_SOURCE_SHA" "$GITHUB_WORKFLOW_SHA" >> "$GITHUB_STEP_SUMMARY"
 
-  managed-fixtures:
+  disposable-fixtures:
     name: Native conformance (${{ matrix.engine }})
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         engine: [oracle, db2]
-    # Each environment must be restricted to main and contain credentials for
-    # a dedicated disposable fixture reachable from the GitHub-hosted runner.
+    # The dedicated fixture environments must be restricted to the main branch.
     environment: native-conformance-${{ matrix.engine }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.GOMIGRATE_NATIVE_SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .native-fixture-workflow
+          sparse-checkout: .github/scripts
           persist-credentials: false
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
-      - name: Run Oracle conformance
-        if: matrix.engine == 'oracle'
+      - name: Run native conformance with a disposable local database
         env:
-          GOMIGRATE_TEST_ORACLE_DSN: ${{ secrets.GOMIGRATE_TEST_ORACLE_DSN }}
+          ENGINE: ${{ matrix.engine }}
+          GOMIGRATE_NATIVE_FIXTURE_SEED: ${{ secrets.GOMIGRATE_NATIVE_FIXTURE_SEED }}
+          CI_DB2_ACCEPT_LICENSE: ${{ vars.GOMIGRATE_CI_DB2_ACCEPT_LICENSE }}
         run: |
-          set -o pipefail
-          : "${GOMIGRATE_TEST_ORACLE_DSN:?Oracle fixture DSN is required}"
-          go test -json -race -count=1 -timeout=10m -run '^TestConformance$/^oracle$' . 2>&1 | go run ./internal/nativecheck oracle
-          printf 'Native conformance passed for **oracle** at `%s`.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
-      - name: Run Db2 conformance
-        if: matrix.engine == 'db2'
-        env:
-          GOMIGRATE_TEST_DB2_DSN: ${{ secrets.GOMIGRATE_TEST_DB2_DSN }}
-          GOMIGRATE_TEST_DB2_APP_DSN: ${{ secrets.GOMIGRATE_TEST_DB2_APP_DSN }}
-          GOMIGRATE_TEST_DB2_CA_PEM: ${{ secrets.GOMIGRATE_TEST_DB2_CA_PEM }}
-          GOMIGRATE_TEST_DB2_TLS_MISMATCH_HOST: ${{ secrets.GOMIGRATE_TEST_DB2_TLS_MISMATCH_HOST }}
-        run: |
-          set -o pipefail
-          : "${GOMIGRATE_TEST_DB2_DSN:?Db2 fixture admin DSN is required}"
-          : "${GOMIGRATE_TEST_DB2_APP_DSN:?Db2 fixture application DSN is required}"
-          : "${GOMIGRATE_TEST_DB2_CA_PEM:?Db2 fixture CA PEM is required}"
-          : "${GOMIGRATE_TEST_DB2_TLS_MISMATCH_HOST:?Db2 fixture certificate mismatch alias is required}"
-
-          ca=$(mktemp "$RUNNER_TEMP/gomigrate-db2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.XXXXXXXX")
-          trap 'rm -f -- "$ca"' EXIT
-          trap 'exit 130' INT
-          trap 'exit 143' TERM
-          printf '%s\n' "$GOMIGRATE_TEST_DB2_CA_PEM" > "$ca"
-          unset GOMIGRATE_TEST_DB2_CA_PEM
-          openssl x509 -in "$ca" -noout
-
-          # The environment provides the DSNs without a runner-local ssl_ca path.
-          with_ca() {
-            if [[ "$1" == *'#'* || "$1" == *'ssl_ca='* || ! "$ca" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
-              echo '::error::Db2 fixture DSNs must omit fragments and ssl_ca, and the temporary path must be URL-safe.' >&2
-              return 1
-            fi
-            local separator='?'
-            if [[ "$1" == *'?'* ]]; then separator='&'; fi
-            printf '%s%s%s' "$1" "$separator" "ssl_ca=$ca"
-          }
-          GOMIGRATE_TEST_DB2_DSN=$(with_ca "$GOMIGRATE_TEST_DB2_DSN")
-          GOMIGRATE_TEST_DB2_APP_DSN=$(with_ca "$GOMIGRATE_TEST_DB2_APP_DSN")
-          go test -json -race -count=1 -timeout=10m -run '^TestConformance$/^db2$' . 2>&1 | go run ./internal/nativecheck db2
-          printf 'Native conformance passed for **db2** at `%s`.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          test "$(git -C .native-fixture-workflow rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"
+          bash .native-fixture-workflow/.github/scripts/native-fixture.sh "$ENGINE"
+          printf 'Native conformance passed for **%s** at source `%s` with workflow `%s`.\n' "$ENGINE" "$GOMIGRATE_NATIVE_SOURCE_SHA" "$GITHUB_WORKFLOW_SHA" >> "$GITHUB_STEP_SUMMARY"

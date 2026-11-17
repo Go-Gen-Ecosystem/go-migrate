@@ -6,8 +6,13 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v4"
 )
 
 func TestVerifyComplete(t *testing.T) {
@@ -101,6 +106,90 @@ func TestVerifyRedactsFixtureOutput(t *testing.T) {
 func TestVerifyRejectsUnsupportedEngine(t *testing.T) {
 	if err := verify("postgresql", eventStream(t, "postgres", nil), io.Discard, strings.NewReplacer()); err == nil {
 		t.Error("accepted unsupported engine")
+	}
+}
+
+func TestNativeWorkflowReplaysReleasedSource(t *testing.T) {
+	var workflow struct {
+		Env  map[string]string
+		Jobs map[string]struct {
+			If          string
+			Environment string
+			Strategy    struct{ Matrix struct{ Engine []string } }
+			Steps       []struct {
+				Uses, Run string
+				With, Env map[string]string
+			}
+		}
+	}
+	path := filepath.Join("..", "..", ".github", "workflows", "native-conformance.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	const source = "GOMIGRATE_NATIVE_SOURCE_SHA"
+	if !strings.Contains(workflow.Env[source], "inputs.source == 'v1.0.1' && '7650c2b6b8aa04a767ad7fa5d7684183f56eeca5'") {
+		t.Fatal("native workflow lost the exact v1.0.1 source replay")
+	}
+	for id, engines := range map[string][]string{
+		"local-fixtures":      {"sqlite", "postgres", "mysql", "sqlserver"},
+		"disposable-fixtures": {"oracle", "db2"},
+	} {
+		job := workflow.Jobs[id]
+		if job.If != "github.ref == 'refs/heads/main'" || !slices.Equal(job.Strategy.Matrix.Engine, engines) {
+			t.Fatalf("job %s lost its main-only engine matrix", id)
+		}
+		checkedSource := false
+		for _, step := range job.Steps {
+			checkedSource = checkedSource || (strings.HasPrefix(step.Uses, "actions/checkout@") &&
+				step.With["ref"] == "${{ env."+source+" }}" && step.With["path"] == "")
+		}
+		if !checkedSource {
+			t.Fatalf("job %s does not check out the selected source", id)
+		}
+	}
+	job := workflow.Jobs["disposable-fixtures"]
+	if job.Environment != "native-conformance-${{ matrix.engine }}" {
+		t.Fatal("Oracle and Db2 must use separate fixture environments")
+	}
+	for _, step := range job.Steps {
+		if strings.Contains(step.Run, `.github/scripts/native-fixture.sh "$ENGINE"`) &&
+			step.Env["GOMIGRATE_NATIVE_FIXTURE_SEED"] == "${{ secrets.GOMIGRATE_NATIVE_FIXTURE_SEED }}" {
+			return
+		}
+	}
+	t.Fatal("native workflow does not run the disposable fixtures with environment-scoped credentials")
+}
+
+func TestSQLServerServiceHealthCheckQuoting(t *testing.T) {
+	for file, job := range map[string]string{"ci.yml": "sqlserver-conformance", "native-conformance.yml": "local-fixtures"} {
+		t.Run(file, func(t *testing.T) {
+			var workflow struct {
+				Jobs map[string]struct {
+					Services map[string]struct {
+						Env     map[string]string
+						Options string
+					}
+				}
+			}
+			raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := yaml.Unmarshal(raw, &workflow); err != nil {
+				t.Fatal(err)
+			}
+			service := workflow.Jobs[job].Services["sqlserver"]
+			if !strings.Contains(service.Options, `--health-cmd "`) || !strings.Contains(service.Options, `-Q 'SELECT 1'`) {
+				t.Fatal("SQL Server health command must survive GitHub runner Docker argument parsing")
+			}
+			if service.Env["SQLCMDPASSWORD"] == "" || service.Env["SQLCMDPASSWORD"] != service.Env["MSSQL_SA_PASSWORD"] {
+				t.Fatal("sqlcmd must receive the fixture password through the service environment")
+			}
+		})
 	}
 }
 
