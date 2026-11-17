@@ -205,6 +205,11 @@ func (a *applier) dirtyProtocol(ctx context.Context, u *unit, dir Direction, st 
 	cctx, cancel := context.WithTimeout(finalizeCtx, cleanupTimeout)
 	defer cancel()
 	if err := a.dirtyTransition(cctx, tr.finish, u, st); err != nil {
+		// database/sql can report a closed connection when cancellation rolls
+		// back a Go migration's transaction before the autocommit probe.
+		if cause := finalizeCtx.Err(); cause != nil && !errors.Is(err, cause) {
+			err = errors.Join(err, cause)
+		}
 		return fmt.Errorf("migration %s %s history row could not be finalized: %w: %w", u.Label(), dir, err, ErrDirty)
 	}
 	return nil

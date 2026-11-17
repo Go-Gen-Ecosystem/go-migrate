@@ -50,11 +50,36 @@ func TestPostgresNoTxHistoryTransitions(t *testing.T) {
 	}
 }
 
+func TestPostgresNoTxCancellationDuringFinalization(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f := &postgresProbeFixture{value: "0", cancelDuringFinalize: cancel}
+	db := sql.OpenDB(f)
+	t.Cleanup(func() { _ = db.Close() })
+	m, err := New(db, "postgres", WithGoMigrations(GoMigration{Version: "1", NoTx: true,
+		Up: func(ctx context.Context, ex Executor) error {
+			_, err := ex.ExecContext(ctx, "SELECT 42")
+			return err
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.Up(ctx)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, driver.ErrBadConn) ||
+		!errors.Is(err, ErrDirty) || len(result.Applied) != 0 {
+		t.Fatalf("Up = %+v, %v; want cancellation, driver failure, and dirty history", result, err)
+	}
+	if !f.marker || !f.ranSQL || f.completed {
+		t.Fatalf("sent dirty marker = %t, ran migration = %t, sent history completion = %t", f.marker, f.ranSQL, f.completed)
+	}
+}
+
 type postgresProbeFixture struct {
 	driver.Conn                     // No prepared statements or Go-managed transactions in these scripts.
 	inTx, marker, completed, ranSQL bool
 	value                           string
-	cancel                          context.CancelFunc
+	cancel, cancelDuringFinalize    context.CancelFunc
 }
 
 func (f *postgresProbeFixture) Connect(context.Context) (driver.Conn, error) { return f, nil }
@@ -71,6 +96,10 @@ func (f *postgresProbeFixture) QueryContext(_ context.Context, q string, args []
 	case strings.HasPrefix(q, "SELECT COUNT(*) FROM information_schema.tables"):
 		value = int64(0)
 	case strings.HasPrefix(q, "SELECT pg_catalog.set_config("):
+		if f.ranSQL && f.cancelDuringFinalize != nil {
+			f.cancelDuringFinalize()
+			return nil, driver.ErrBadConn
+		}
 		sentinel := "0"
 		if f.value == sentinel {
 			sentinel = "1"
