@@ -58,6 +58,9 @@ func ErrorCodes(err error) []string {
 		return nil
 	}
 	var out []string
+	if errors.Is(err, ErrCallbackRecoveryRequired) {
+		out = append(out, "callback_recovery_required")
+	}
 	var me *MigrationError
 	if errors.As(err, &me) {
 		out = append(out, "migration_failed")

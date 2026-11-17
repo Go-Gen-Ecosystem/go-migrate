@@ -331,3 +331,31 @@ func TestDryRunShowsCallbacks(t *testing.T) {
 		t.Fatalf("JSON plan callbacks = %+v, %v", e.Data.Callbacks, err)
 	}
 }
+
+func TestCallbackRecoveryCLI(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("migrations", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, "migrations/1_a.sql", "CREATE TABLE a (id INTEGER);")
+	write(t, "migrations/afterMigrate.sql", "INSERT INTO a VALUES (1); INSERT INTO missing VALUES (2);")
+	env := map[string]string{"GOMIGRATE_DSN": "app.db"}
+	out, code := runCLI(t, env, "-o", "json", "up")
+	if e := decode(t, out); code != 1 || e.Error == nil || e.Error.Code != "callback_recovery_required" {
+		t.Fatalf("failed Up = %s, exit %d", out, code)
+	}
+	out, code = runCLI(t, env, "-o", "json", "status")
+	var st statusJSON
+	if err := json.Unmarshal(decode(t, out).Data, &st); err != nil || code != 0 || !st.Dirty || !st.CallbackRecoveryRequired || st.Current != "1" || len(st.Migrations) != 1 {
+		t.Fatalf("callback status = %s, exit %d, %v", out, code, err)
+	}
+	out, code = runCLI(t, env, "repair", migrate.RunCallbacksRepairKey, "--clear-failed", "--dry-run")
+	if code != 0 {
+		t.Fatalf("repair preview exited %d: %s", code, out)
+	}
+	mustContain(t, out, "Would remove", migrate.RunCallbacksRepairKey, "Inspect callback effects")
+	out, code = runCLI(t, env, "-o", "json", "validate")
+	if e := decode(t, out); code != 1 || e.Error == nil || e.Error.Code != "callback_recovery_required" {
+		t.Fatalf("validate after preview = %s, exit %d", out, code)
+	}
+}

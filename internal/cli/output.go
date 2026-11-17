@@ -155,6 +155,9 @@ func (p *printer) status(st *migrate.Status) {
 			current = "none"
 		}
 		p.printf("\nCurrent version: %s | Pending: %d | Dirty: %t\n", current, st.Pending, st.Dirty)
+		if st.CallbackRecoveryRequired {
+			p.printf("Run-level SQL callbacks need recovery. Inspect their effects before running repair %s --clear-failed.\n", migrate.RunCallbacksRepairKey)
+		}
 	})
 }
 
@@ -166,6 +169,10 @@ func (p *printer) repairPlan(plan *migrate.RepairPlan) {
 	}
 	p.emit(data, func() {
 		if plan.Action == migrate.RepairClearFailed {
+			if plan.Migration == migrate.RunCallbacksRepairKey {
+				p.printf("Would remove the %s marker. Inspect callback effects and make another run safe before clearing it.\n", plan.Migration)
+				return
+			}
 			p.printf("Would remove history row for %s (state: %s). Restore the schema by hand before clearing it.\n", plan.Migration, plan.State)
 			return
 		}

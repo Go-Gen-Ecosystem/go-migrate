@@ -24,10 +24,11 @@ func (m *Migrator) Status(ctx context.Context) (*Status, error) {
 	}
 	in := m.plan.inspect(s, true)
 	return &Status{
-		Current:    s.latest,
-		Dirty:      len(s.dirty) > 0,
-		Pending:    len(in.pending) - in.always,
-		Migrations: in.infos,
+		Current:                  s.latest,
+		Dirty:                    len(s.dirty) > 0 || s.callbackRecovery,
+		CallbackRecoveryRequired: s.callbackRecovery,
+		Pending:                  len(in.pending) - in.always,
+		Migrations:               in.infos,
 	}, nil
 }
 

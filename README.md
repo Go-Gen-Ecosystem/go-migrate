@@ -212,6 +212,7 @@ such as `@`. See [the Db2 example](examples/db2).
 - **Atomicity.**
   - PostgreSQL, SQLite, SQL Server and Db2 normally commit each migration with its history row. Mark SQL Server statements that require autocommit, such as `CREATE DATABASE`, with `notransaction`.
   - MySQL, Oracle, and migrations marked `notransaction` commit a dirty row first. Oracle DDL commits implicitly. A partial failure blocks further runs. Restore the schema by hand, then use `repair MIGRATION --clear-failed` if you undid the change, or `mark-applied VERSION` if you completed the versioned migration.
+  - Run-level SQL callbacks (`beforeMigrate`, `afterMigrate`, `afterMigrateError`) run on the same session as the migrations, outside their transactions. Before the first callback runs, go-migrate commits a recovery marker. It clears the marker only after the whole run succeeds. An interrupted run can leave committed callback effects even if no migrations were pending. While the marker remains, `status` reports `callback_recovery_required` separately from migration rows, and `validate`, `up`, `down` and `redo` report that recovery is required. Successful runs can run the callbacks again on the next `up`.
 - **Validation before execution:** drift, missing and out-of-order migrations, unknown targets, the baseline floor and irreversible rollbacks are all checked before any SQL runs.
 - **Approval binds execution to the target:** CLI and MCP plan IDs cover the resolved database, history table, active schema or search path, and the exact plan (including callbacks and any automatic baseline). `--expect-plan` (CLI) and `plan_id` (MCP) check the approval under the migration lock before changing history or running migration SQL. Reissue IDs from older releases. Library callers can opt into the same check with `PlanWithID` or `PlanDownWithID` and `ExpectTargetPlan`; `PlanID` and `ExpectPlan` still check plan content only.
 - **Approval scope:** IDs use metadata from the live session and the configured network route. A PostgreSQL restart requires a fresh plan. SQLite binds canonical file paths and ordered attachment names; it cannot detect a file replaced at the same path. Re-plan after replacing a file. In-memory or temporary SQLite targets cannot receive a target-bound ID.
@@ -321,7 +322,7 @@ Additional rules:
 | `down [--steps N \| --to V \| --to-tag T \| --all] [--dry-run \| --sql] [--expect-plan ID]` | roll back |
 | `redo` | roll back and re-apply the last migration |
 | `status [--fail-on-pending]` | show state; doubles as a CI gate |
-| `validate` | check drift, missing, out-of-order and failed migrations |
+| `validate` | check drift, missing, out-of-order and failed migrations, and callback recovery |
 | `repair MIGRATION (--clear-failed \| --accept-checksum) [--dry-run]` | preview or change one history row |
 | `mark-applied V` | record V as applied without running it |
 | `baseline --version V` | adopt an existing database |
@@ -331,6 +332,12 @@ Additional rules:
 `repair 42 --clear-failed` removes version 42's failed history row after you
 undo its partial changes. For a failed repeatable, pass the label from
 `status`, for example `repair 'R__refresh views' --clear-failed`.
+For run-level callbacks, inspect which effects committed and reconcile them
+so that it is safe to run the callbacks again. Preview the marker removal
+with `repair C:run-callbacks --clear-failed --dry-run`, then omit `--dry-run`
+to remove only that marker. Repair any failed migrations separately. After
+a connection loss during finalization, check `status` and callback effects
+before retrying: the database may already have committed the marker removal.
 `repair 42 --accept-checksum` accepts drift for version 42 only; prefer
 restoring the applied file and writing a new migration. Changed repeatables
 run again on `up` rather than accepting a checksum through repair.

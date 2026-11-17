@@ -122,8 +122,11 @@ type Info struct {
 type Status struct {
 	// Current is the highest applied version ("" if none).
 	Current string
-	// Dirty is true when a migration failed part-way (see ErrDirty).
+	// Dirty is true when a migration or run-level SQL callback needs recovery.
 	Dirty bool
+	// CallbackRecoveryRequired is true when a run-level callback may have
+	// changed the database. See ErrCallbackRecoveryRequired.
+	CallbackRecoveryRequired bool
 	// Pending counts migrations Up would apply.
 	Pending    int
 	Migrations []Info

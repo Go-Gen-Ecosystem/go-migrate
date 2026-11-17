@@ -196,14 +196,16 @@ func newRun(r *migrate.Result) runJSON {
 }
 
 type statusJSON struct {
-	Current    string          `json:"current,omitempty"`
-	Dirty      bool            `json:"dirty"`
-	Pending    int             `json:"pending"`
-	Migrations []migrationJSON `json:"migrations"`
+	Current                  string          `json:"current,omitempty"`
+	Dirty                    bool            `json:"dirty"`
+	CallbackRecoveryRequired bool            `json:"callback_recovery_required,omitempty"`
+	Pending                  int             `json:"pending"`
+	Migrations               []migrationJSON `json:"migrations"`
 }
 
 func newStatus(st *migrate.Status) statusJSON {
-	out := statusJSON{Current: st.Current, Dirty: st.Dirty, Pending: st.Pending, Migrations: make([]migrationJSON, 0, len(st.Migrations))}
+	out := statusJSON{Current: st.Current, Dirty: st.Dirty, CallbackRecoveryRequired: st.CallbackRecoveryRequired,
+		Pending: st.Pending, Migrations: make([]migrationJSON, 0, len(st.Migrations))}
 	for _, mi := range st.Migrations {
 		mj := describe(mi.Migration)
 		mj.State, mj.Checksum, mj.Tag, mj.InstalledBy = string(mi.State), mi.Checksum, mi.Tag, mi.InstalledBy

@@ -14,12 +14,13 @@ import (
 
 // snapshot is the history table, read with one query and indexed by key.
 type snapshot struct {
-	records  []history.Record
-	byKey    map[string]*history.Record
-	baseline string   // version of the baseline row, if any
-	latest   string   // highest successfully applied version (incl. baseline)
-	dirty    []string // versions with success = false
-	nextRank int64    // installed_rank for the next inserted row
+	records          []history.Record
+	byKey            map[string]*history.Record
+	baseline         string   // version of the baseline row, if any
+	latest           string   // highest successfully applied version (incl. baseline)
+	dirty            []string // migration versions with success = false
+	callbackRecovery bool
+	nextRank         int64 // installed_rank for the next inserted row
 }
 
 func newSnapshot(rs []history.Record) *snapshot {
@@ -29,6 +30,8 @@ func newSnapshot(rs []history.Record) *snapshot {
 		s.byKey[r.Version] = r
 		s.nextRank = max(s.nextRank, r.Rank+1)
 		switch {
+		case r.Version == RunCallbacksRepairKey:
+			s.callbackRecovery = true
 		case !r.Success:
 			s.dirty = append(s.dirty, r.Version)
 		case r.Kind == history.KindRepeatable:
@@ -67,6 +70,9 @@ func (p planner) inspect(s *snapshot, withStatus bool) inspection {
 	var in inspection
 	if withStatus {
 		in.infos = make([]Info, 0, len(p.cat.units)+len(s.records))
+	}
+	if s.callbackRecovery {
+		in.problems = append(in.problems, ErrCallbackRecoveryRequired)
 	}
 	for _, v := range s.dirty {
 		in.problems = append(in.problems, fmt.Errorf("version %s: %w", v, ErrDirty))
@@ -113,7 +119,7 @@ func (p planner) inspect(s *snapshot, withStatus bool) inspection {
 	}
 	for i := range s.records {
 		r := &s.records[i]
-		if _, known := p.cat.byKey[r.Version]; known || r.Kind == history.KindBaseline {
+		if _, known := p.cat.byKey[r.Version]; known || r.Kind == history.KindBaseline || r.Version == RunCallbacksRepairKey {
 			continue
 		}
 		if withStatus {
@@ -167,6 +173,9 @@ func (p planner) up(s *snapshot, target string) ([]*unit, error) {
 // down returns the migrations to roll back, newest application first.
 // Every one is checked for drift and reversibility before anything runs.
 func (p planner) down(s *snapshot, t DownTarget) ([]*unit, error) {
+	if s.callbackRecovery {
+		return nil, ErrCallbackRecoveryRequired
+	}
 	if len(s.dirty) > 0 {
 		return nil, fmt.Errorf("version %s: %w", s.dirty[0], ErrDirty)
 	}

@@ -16,7 +16,8 @@ import (
 type RepairAction string
 
 const (
-	// RepairClearFailed removes a failed row after restoring the schema by hand.
+	// RepairClearFailed removes a failed row after inspecting and reconciling
+	// the database by hand.
 	RepairClearFailed RepairAction = "clear-failed"
 	// RepairAcceptChecksum accepts deliberate drift for an applied version.
 	RepairAcceptChecksum RepairAction = "accept-checksum"
@@ -25,7 +26,7 @@ const (
 // RepairTarget identifies exactly one migration and action.
 type RepairTarget struct {
 	// Migration is a version or, for RepairClearFailed, a repeatable label
-	// (R__<description>) or history key (R:<description>).
+	// (R__<description>) or history key (R:<description>), or RunCallbacksRepairKey.
 	Migration string
 	Action    RepairAction
 }
@@ -64,7 +65,9 @@ func (m *Migrator) PlanRepair(ctx context.Context, target RepairTarget) (*Repair
 
 // Repair applies exactly one explicit history change. Clear a failed row
 // only after restoring the schema by hand; if you completed the migration,
-// use MarkApplied instead. Repair never runs migration SQL. A call without
+// use MarkApplied instead. Clear RunCallbacksRepairKey only after inspecting
+// callback effects and making another run safe. Repair never runs SQL from
+// migrations or callbacks. A call without
 // exactly one target returns ErrInvalidArgument without writing history.
 func (m *Migrator) Repair(ctx context.Context, targets ...RepairTarget) (*RepairResult, error) {
 	res := &RepairResult{}
@@ -87,6 +90,12 @@ func (t RepairTarget) validate() (RepairTarget, error) {
 		t.Migration = source.Canonical(t.Migration)
 		return t, nil
 	}
+	if t.Migration == RunCallbacksRepairKey {
+		if t.Action != RepairClearFailed {
+			return t, fmt.Errorf("callback recovery requires clear-failed: %w", ErrInvalidArgument)
+		}
+		return t, nil
+	}
 	name, repeatable := strings.CutPrefix(t.Migration, "R__")
 	if !repeatable {
 		name, repeatable = strings.CutPrefix(t.Migration, history.RepeatablePrefix)
@@ -98,7 +107,7 @@ func (t RepairTarget) validate() (RepairTarget, error) {
 		t.Migration = history.RepeatablePrefix + strings.ToLower(name)
 		return t, nil
 	}
-	return t, fmt.Errorf("repair migration %q must be a version or repeatable label: %w", t.Migration, ErrInvalidArgument)
+	return t, fmt.Errorf("repair target %q must be a version, repeatable label or %s: %w", t.Migration, RunCallbacksRepairKey, ErrInvalidArgument)
 }
 
 func (c *catalog) planRepair(s *snapshot, t RepairTarget) (*RepairPlan, error) {
@@ -108,7 +117,11 @@ func (c *catalog) planRepair(s *snapshot, t RepairTarget) (*RepairPlan, error) {
 	}
 	p := &RepairPlan{RepairTarget: t, StoredChecksum: rec.Checksum, StoredKind: string(rec.Kind)}
 	if t.Action == RepairClearFailed {
-		if rec.Success || (rec.Kind != history.KindSQL && rec.Kind != history.KindGo && rec.Kind != history.KindRepeatable) {
+		repairable := rec.Kind == history.KindSQL || rec.Kind == history.KindGo || rec.Kind == history.KindRepeatable
+		if t.Migration == RunCallbacksRepairKey {
+			repairable = rec.Kind == history.KindCallbacks
+		}
+		if rec.Success || !repairable {
 			return nil, fmt.Errorf("migration %q is not a failed migration: %w", t.Migration, ErrInvalidArgument)
 		}
 		p.State = StateFailed
@@ -270,7 +283,7 @@ func (mt maintenance) tag(ctx context.Context, tag string) error {
 // row (by installed_rank), or nil.
 func (s *snapshot) latestApplied() *history.Record {
 	for i := len(s.records) - 1; i >= 0; i-- {
-		if r := &s.records[i]; r.Success && r.Kind != history.KindRepeatable {
+		if r := &s.records[i]; r.Success && r.Kind != history.KindRepeatable && r.Version != RunCallbacksRepairKey {
 			return r
 		}
 	}

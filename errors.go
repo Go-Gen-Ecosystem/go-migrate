@@ -17,11 +17,13 @@ import (
 // Sentinel errors. Use errors.Is to test for them; most are wrapped with the
 // offending version.
 var (
-	// ErrDirty means a non-transactional migration failed part-way and left
-	// a history row with success = false. Bring the schema by hand to either
-	// side of the migration, then use Repair with RepairClearFailed (schema
-	// as before it) or MarkApplied (schema as after it).
+	// ErrDirty means a non-transactional migration or run-level callback may
+	// have changed the database. For a migration, bring the schema by hand to
+	// either side, then use Repair with RepairClearFailed or MarkApplied.
 	ErrDirty = errors.New("database is dirty: a migration failed part-way; " + dirtyGuidance)
+	// ErrCallbackRecoveryRequired also matches ErrDirty. Inspect the callback
+	// effects, then clear RunCallbacksRepairKey only when another run is safe.
+	ErrCallbackRecoveryRequired error = callbackRecoveryError{}
 	// ErrBelowBaseline means a rollback target lies below the baseline,
 	// which cannot be rolled back.
 	ErrBelowBaseline = errors.New("target version is below the baseline")
@@ -67,6 +69,14 @@ var (
 	// ErrLockLost means the migration lock expired or was taken over while held.
 	ErrLockLost = dialect.ErrLockLost
 )
+
+type callbackRecoveryError struct{}
+
+func (callbackRecoveryError) Error() string {
+	return "run-level SQL callbacks require recovery; inspect their effects before running repair " + RunCallbacksRepairKey + " --clear-failed"
+}
+
+func (callbackRecoveryError) Unwrap() error { return ErrDirty }
 
 // Errors from loading migrations (New) and from the database layer,
 // re-exported so callers can test for them with errors.Is.

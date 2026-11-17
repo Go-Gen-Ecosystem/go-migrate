@@ -170,6 +170,7 @@ func TestConformance(t *testing.T) {
 			t.Run("lifecycle", func(t *testing.T) { conformLifecycle(t, tg) })
 			t.Run("failure", func(t *testing.T) { conformFailure(t, tg, false) })
 			t.Run("repair_scoped", func(t *testing.T) { conformScopedRepair(t, tg) })
+			t.Run("run callback recovery", func(t *testing.T) { conformRunCallbackRecovery(t, tg) })
 			t.Run("dialect SQL", func(t *testing.T) { conformSpecial(t, tg) })
 			t.Run("concurrent runs", func(t *testing.T) { conformConcurrent(t, tg) })
 			t.Run("status is read-only", func(t *testing.T) { conformReadOnly(t, tg) })

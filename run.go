@@ -175,15 +175,23 @@ func (r runner) up(ctx context.Context, target string, res *Result) error {
 		}
 		a.opts.logger.Typed().Str(logVersion, baseline).Info("baselined existing schema")
 	}
-	if err := a.callbacks(ctx, a.conn, source.BeforeMigrate); err != nil {
-		return err
+	guard := runCallbackGuard{a: a, s: s}
+	if err := guard.run(ctx, source.BeforeMigrate); err != nil {
+		return guard.protect(err)
 	}
 	if err := r.execute(ctx, plan, Up, s, res); err != nil {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
-		return errors.Join(err, a.callbacks(cctx, a.conn, source.AfterMigrateError))
+		return guard.protect(errors.Join(err, guard.run(cctx, source.AfterMigrateError)))
 	}
-	return a.callbacks(ctx, a.conn, source.AfterMigrate)
+	if err := guard.run(ctx, source.AfterMigrate); err != nil {
+		return guard.protect(err)
+	}
+	if err := guard.finish(ctx); err != nil {
+		return guard.protect(err)
+	}
+	r.logComplete(res)
+	return nil
 }
 
 func (r runner) down(ctx context.Context, t DownTarget, res *Result) error {
@@ -198,7 +206,11 @@ func (r runner) down(ctx context.Context, t DownTarget, res *Result) error {
 	if err := r.verify(ctx, Down, plan, s, ""); err != nil {
 		return err
 	}
-	return r.execute(ctx, plan, Down, s, res)
+	if err := r.execute(ctx, plan, Down, s, res); err != nil {
+		return err
+	}
+	r.logComplete(res)
+	return nil
 }
 
 func (r runner) redo(ctx context.Context, res *Result) error {
@@ -217,7 +229,11 @@ func (r runner) redo(ctx context.Context, res *Result) error {
 		return err
 	}
 	// Re-apply through execute so preconditions are evaluated again.
-	return r.execute(ctx, plan, Up, s, res)
+	if err := r.execute(ctx, plan, Up, s, res); err != nil {
+		return err
+	}
+	r.logComplete(res)
+	return nil
 }
 
 // execute runs plan in order, appending each success to res, and stops at
@@ -237,8 +253,11 @@ func (r runner) execute(ctx context.Context, plan []*unit, dir Direction, s *sna
 		}
 		res.Applied = append(res.Applied, Applied{Migration: u.Migration, Duration: d})
 	}
-	r.a.opts.logger.Typed().Int(logCount, len(res.Applied)).Str(logDirection, dir.String()).Info("migration run complete")
 	return nil
+}
+
+func (r runner) logComplete(res *Result) {
+	r.a.opts.logger.Typed().Int(logCount, len(res.Applied)).Str(logDirection, res.Direction.String()).Info("migration run complete")
 }
 
 // bypass handles migrations whose SQL must not run: on Up, a failed

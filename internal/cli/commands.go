@@ -381,7 +381,7 @@ func newRepairCmd(g *globals) *cobra.Command {
 	var clearFailed, acceptChecksum, dryRun bool
 	cmd := &cobra.Command{
 		Use:     "repair MIGRATION (--clear-failed | --accept-checksum) [--dry-run]",
-		Short:   "Repair one migration's history row",
+		Short:   "Repair one migration or run callback history row",
 		Example: "  gomigrate repair 42 --accept-checksum --dry-run\n  gomigrate repair 'R__refresh views' --clear-failed",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 || clearFailed == acceptChecksum {

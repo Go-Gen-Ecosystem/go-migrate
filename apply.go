@@ -211,15 +211,19 @@ func (a *applier) dirtyTransition(ctx context.Context, change transition, u *uni
 	default:
 		return change(a, ctx, a.conn, u, st)
 	}
+	return a.fencedHistoryTransaction(ctx, func(tx *sql.Tx) error { return change(a, ctx, tx, u, st) })
+}
+
+func (a *applier) fencedHistoryTransaction(ctx context.Context, change func(*sql.Tx) error) error {
 	tx, err := a.conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin dirty history transaction: %w", err)
+		return fmt.Errorf("begin fenced history transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := a.lock.Fence(ctx, tx); err != nil {
 		return err
 	}
-	if err := change(a, ctx, tx, u, st); err != nil {
+	if err := change(tx); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -304,8 +308,17 @@ func (a *applier) record(u *unit, rank int64, elapsed time.Duration, success boo
 // callbacks executes every SQL callback file registered for event on q; an
 // empty event (no callbacks for this direction) is a no-op.
 func (a *applier) callbacks(ctx context.Context, q Executor, event string) error {
+	return a.execCallbacks(ctx, q, event, nil)
+}
+
+func (a *applier) execCallbacks(ctx context.Context, q Executor, event string, before func() error) error {
 	for _, cb := range a.cat.callbacks[event] {
 		for i, stmt := range cb.stmts {
+			if before != nil {
+				if err := before(); err != nil {
+					return fmt.Errorf("before %s callback %s statement %d: %w", event, cb.name, i+1, err)
+				}
+			}
 			if _, err := q.ExecContext(ctx, stmt); err != nil {
 				return fmt.Errorf("%s callback %s statement %d (%s): %w", event, cb.name, i+1, truncateSQL(stmt), err)
 			}

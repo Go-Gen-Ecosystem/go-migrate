@@ -29,6 +29,7 @@ const (
 	KindGo         Kind = "go"
 	KindRepeatable Kind = "repeatable"
 	KindBaseline   Kind = "baseline"
+	KindCallbacks  Kind = "callbacks" // recovery marker, never a migration
 	// KindMarked is a migration recorded without running (precondition
 	// onFail=MARK_RAN): rolling it back only removes the row.
 	KindMarked Kind = "marked"
