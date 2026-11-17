@@ -77,7 +77,7 @@ func newCreateCmd(g *globals) *cobra.Command {
 		Short: "Create a new migration file (timestamp version by default)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := g.loadConfig()
+			cfg, err := g.loadConfig(config.ForCreate)
 			if err != nil {
 				return err
 			}

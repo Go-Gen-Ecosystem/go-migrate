@@ -226,7 +226,7 @@ func TestReviewFixes(t *testing.T) {
 	if _, err := run(t, none, "init", "--init-dsn", "odd #name: *x.db"); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(config.DefaultPath, true)
+	cfg, err := config.Load(config.DefaultPath, true, config.Overrides{}, envFunc(nil), config.ForConnection)
 	if err != nil || cfg.Database.DSN != "odd #name: *x.db" {
 		t.Fatalf("round-tripped DSN = %q, %v", cfg.Database.DSN, err)
 	}

@@ -163,15 +163,7 @@ func Resolve(db Database) (string, string, error) {
 	return d.Name(), dsn, err
 }
 
-// Dialect returns the dialect name for db from its driver or DSN scheme
-// without needing a complete DSN (for database-free commands such as lint).
-func Dialect(db Database) (string, error) {
-	d, err := resolveDialect(db)
-	if err != nil {
-		return "", err
-	}
-	return d.Name(), nil
-}
+var errCannotInferDriver = errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite, sqlserver, oracle, db2)")
 
 func resolveDialect(db Database) (*dialect.Dialect, error) {
 	driver := db.Driver
@@ -182,7 +174,7 @@ func resolveDialect(db Database) (*dialect.Dialect, error) {
 		if db.DSN == "" && db.Name == "" {
 			return nil, ErrNoDatabase
 		}
-		return nil, errors.New("cannot infer the database driver: set database.driver or --driver (postgres, mysql, sqlite, sqlserver, oracle, db2)")
+		return nil, errCannotInferDriver
 	}
 	return dialect.Lookup(driver)
 }

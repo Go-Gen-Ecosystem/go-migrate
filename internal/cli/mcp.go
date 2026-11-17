@@ -186,28 +186,19 @@ func planDown(ctx context.Context, s *session, target migrate.DownTarget) (planJ
 }
 
 func (t tools) lint(_ context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, envelope, error) {
-	findings, err := t.lintAll()
+	cfg, err := t.g.loadConfig(config.ForLint)
+	if err != nil {
+		return respond("lint", newFindings(nil), err)
+	}
+	findings, err := lintMigrations(cfg)
 	return respond("lint", newFindings(findings), err)
-}
-
-// lintAll lints the configured migrations without a database connection.
-func (t tools) lintAll() ([]migrate.Finding, error) {
-	cfg, err := t.g.loadConfig()
-	if err != nil {
-		return nil, err
-	}
-	d, err := config.Dialect(cfg.Database)
-	if err != nil {
-		return nil, err
-	}
-	return migrate.Lint(d, migratorOptions(cfg, nil)...)
 }
 
 func (t tools) create(_ context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, envelope, error) {
 	if directiveLine.MatchString(in.Up) || directiveLine.MatchString(in.Down) {
 		return respond("create_migration", nil, errDirectiveNotAllowed)
 	}
-	cfg, err := t.g.loadConfig()
+	cfg, err := t.g.loadConfig(config.ForLint)
 	if err != nil {
 		return respond("create_migration", nil, err)
 	}
@@ -216,7 +207,7 @@ func (t tools) create(_ context.Context, _ *mcp.CallToolRequest, in createInput)
 		return respond("create_migration", nil, err)
 	}
 	// Validate by loading and linting the whole set; a broken file is removed.
-	findings, err := t.lintAll()
+	findings, err := lintMigrations(cfg)
 	if err != nil {
 		removeAll(files)
 		return respond("create_migration", nil, err)

@@ -11,8 +11,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -77,11 +79,30 @@ func Default() Config {
 	return Config{Migrations: Migrations{Dir: "migrations"}}
 }
 
-// Load reads the config file at path. When explicit is false and the file
-// does not exist, the defaults are returned (so a DSN can come purely from
-// flags or the environment); when explicit is true a missing file is an
-// error, so a typo in --config never silently targets another database.
-func Load(path string, explicit bool) (Config, error) {
+// Use identifies the settings a command needs.
+type Use uint8
+
+// Config requirements for each command family.
+const (
+	ForConnection Use = iota // online migration commands
+	ForLint                  // offline SQL analysis, including MCP create
+	ForCreate                // CLI create only needs the migration directory
+)
+
+// Load reads a config, applies overrides, and expands the YAML values needed
+// for use. An implicit missing file uses defaults; an explicit one is an error.
+func Load(path string, explicit bool, o Overrides, lookup func(string) (string, bool), use Use) (Config, error) {
+	cfg, err := read(path, explicit)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.resolve(o, explicit, lookup, use); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func read(path string, explicit bool) (Config, error) {
 	cfg := Default()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -90,42 +111,24 @@ func Load(path string, explicit bool) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	loader, err := yaml.NewLoader(bytes.NewReader(raw), yaml.WithKnownFields())
+	if err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	// Expand ${VAR} after parsing, inside string values only: a secret such
-	// as "*abc" or "a: b" can then never change the YAML structure.
-	if err := cfg.expand(os.LookupEnv); err != nil {
-		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	if err := loader.Load(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return cfg, nil
+		}
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	// Validate the entire stream instead of silently ignoring later documents.
+	if err := loader.Load(new(yaml.Node)); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+		}
+		return Config{}, fmt.Errorf("parse config %s: expected one YAML document", path)
 	}
 	return cfg, nil
-}
-
-func (cfg *Config) expand(lookup func(string) (string, bool)) error {
-	db, mg := &cfg.Database, &cfg.Migrations
-	fields := []*string{&db.Driver, &db.DSN, &db.Host, &db.Name, &db.User, &db.Password, &db.SSLMode, &mg.Dir, &mg.Table}
-	for _, f := range fields {
-		v, err := ExpandEnv(*f, lookup)
-		if err != nil {
-			return err
-		}
-		*f = v
-	}
-	for k, v := range db.Params {
-		ev, err := ExpandEnv(v, lookup)
-		if err != nil {
-			return err
-		}
-		db.Params[k] = ev
-	}
-	for k, v := range mg.Placeholders {
-		ev, err := ExpandEnv(v, lookup)
-		if err != nil {
-			return err
-		}
-		mg.Placeholders[k] = ev
-	}
-	return nil
 }
 
 // Overrides are values from flags; empty fields leave the config unchanged.
@@ -135,66 +138,6 @@ type Overrides struct {
 	Contexts, Labels        []string
 	// Placeholders are merged over the file's, key by key.
 	Placeholders map[string]string
-}
-
-// Apply layers environment variables and then flags over cfg, in increasing
-// precedence: DATABASE_URL, GOMIGRATE_DSN / GOMIGRATE_DRIVER, flags.
-//
-// The generic DATABASE_URL is ignored when the config file was named
-// explicitly (--config), so an ambient variable never retargets a run aimed
-// at a specific database. When a DSN overrides the file and its scheme
-// identifies a driver (postgres://, mysql://, sqlite://, sqlserver://, oracle://, db2://), that driver wins
-// over any driver set at a lower level.
-func (cfg *Config) Apply(o Overrides, explicitConfig bool, lookup func(string) (string, bool)) {
-	const (
-		fromFile = iota
-		fromDatabaseURL
-		fromEnv
-		fromFlag
-	)
-	dsnLevel, driverLevel := fromFile, fromFile
-	set := func(dst *string, v string, level int, track *int) {
-		if v != "" {
-			*dst = v
-			if track != nil {
-				*track = level
-			}
-		}
-	}
-	if v, ok := lookup(EnvDatabaseURL); ok && !explicitConfig {
-		set(&cfg.Database.DSN, v, fromDatabaseURL, &dsnLevel)
-	}
-	if v, ok := lookup(EnvDSN); ok {
-		set(&cfg.Database.DSN, v, fromEnv, &dsnLevel)
-	}
-	if v, ok := lookup(EnvDriver); ok {
-		set(&cfg.Database.Driver, v, fromEnv, &driverLevel)
-	}
-	set(&cfg.Database.DSN, o.DSN, fromFlag, &dsnLevel)
-	set(&cfg.Database.Driver, o.Driver, fromFlag, &driverLevel)
-	set(&cfg.Migrations.Dir, o.Dir, fromFlag, nil)
-	set(&cfg.Migrations.Table, o.Table, fromFlag, nil)
-	set(&cfg.Migrations.BaselineOnMigrate, o.BaselineOnMigrate, fromFlag, nil)
-	if len(o.Contexts) > 0 {
-		cfg.Migrations.Contexts = o.Contexts
-	}
-	if len(o.Labels) > 0 {
-		cfg.Migrations.Labels = o.Labels
-	}
-	if len(o.Placeholders) > 0 {
-		if cfg.Migrations.Placeholders == nil {
-			cfg.Migrations.Placeholders = map[string]string{}
-		}
-		for k, v := range o.Placeholders {
-			cfg.Migrations.Placeholders[k] = v
-		}
-	}
-
-	if dsnLevel > driverLevel {
-		if d := inferDriver(cfg.Database.DSN); d != "" {
-			cfg.Database.Driver = d
-		}
-	}
 }
 
 // ExpandEnv replaces ${VAR} and ${VAR:-default} in s. A bare '$' is never

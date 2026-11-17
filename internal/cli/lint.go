@@ -42,15 +42,11 @@ func newLintCmd(g *globals) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("invalid --fail-on %q (error, warning, info, never)", failOn)
 			}
-			cfg, err := g.loadConfig()
+			cfg, err := g.loadConfig(config.ForLint)
 			if err != nil {
 				return err
 			}
-			dialectName, err := config.Dialect(cfg.Database)
-			if err != nil {
-				return err
-			}
-			findings, err := migrate.Lint(dialectName, migratorOptions(cfg, nil)...)
+			findings, err := lintMigrations(cfg)
 			if err != nil {
 				return err
 			}
@@ -74,6 +70,10 @@ func newLintCmd(g *globals) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&failOn, "fail-on", "error", "exit with code 3 when a finding has at least this severity: error | warning | info | never")
 	return cmd
+}
+
+func lintMigrations(cfg config.Config) ([]migrate.Finding, error) {
+	return migrate.Lint(cfg.Database.Driver, migrationSourceOptions(cfg.Migrations)...)
 }
 
 // writeGitHub prints GitHub Actions workflow commands, which render as

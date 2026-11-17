@@ -141,12 +141,12 @@ func TestExpandEnv(t *testing.T) {
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "c.yaml")
-	t.Setenv("GM_TEST_PW", "pw")
+	lookup := env(map[string]string{"GM_TEST_PW": "pw"})
 	body := "database:\n  driver: postgres\n  name: app\n  password: ${GM_TEST_PW}\nmigrations:\n  dir: db/migrations\n  lock_timeout: 90s\n  allow_out_of_order: true\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(path, true)
+	cfg, err := Load(path, true, Overrides{}, lookup, ForConnection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,77 +155,76 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 
-	if _, err := Load(filepath.Join(dir, "typo.yaml"), true); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := Load(filepath.Join(dir, "typo.yaml"), true, Overrides{}, lookup, ForConnection); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("explicit missing config = %v, want not-exist error", err)
 	}
-	cfg, err = Load(filepath.Join(dir, "absent.yaml"), false)
+	cfg, err = Load(filepath.Join(dir, "absent.yaml"), false, Overrides{}, lookup, ForConnection)
 	if err != nil || cfg.Migrations.Dir != "migrations" {
 		t.Fatalf("implicit missing config = %+v, %v", cfg, err)
 	}
 	if err := os.WriteFile(path, []byte("database: [unclosed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path, true); err == nil {
+	if _, err := Load(path, true, Overrides{}, lookup, ForConnection); err == nil {
 		t.Fatal("invalid yaml must error")
 	}
 }
 
-func TestApplyPrecedence(t *testing.T) {
-	cfg := Default()
-	cfg.Database.DSN = "from-file"
-	cfg.Apply(Overrides{}, false, env(map[string]string{EnvDatabaseURL: "from-database-url"}))
+func loadFixture(t *testing.T, body string, explicit bool, o Overrides, values map[string]string) Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, explicit, o, env(values), ForConnection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestLoadPrecedence(t *testing.T) {
+	const fixture = "database: {dsn: from-file}"
+	cfg := loadFixture(t, fixture, false, Overrides{}, map[string]string{EnvDatabaseURL: "from-database-url"})
 	if cfg.Database.DSN != "from-database-url" {
 		t.Fatalf("DATABASE_URL should override file: %s", cfg.Database.DSN)
 	}
-	cfg.Apply(Overrides{}, false, env(map[string]string{EnvDatabaseURL: "x", EnvDSN: "from-gomigrate-dsn", EnvDriver: "mysql"}))
+	cfg = loadFixture(t, fixture, false, Overrides{}, map[string]string{EnvDatabaseURL: "x", EnvDSN: "from-gomigrate-dsn", EnvDriver: "mysql"})
 	if cfg.Database.DSN != "from-gomigrate-dsn" || cfg.Database.Driver != "mysql" {
 		t.Fatalf("GOMIGRATE_* should win over DATABASE_URL: %+v", cfg.Database)
 	}
-	cfg.Apply(Overrides{DSN: "flag", Driver: "sqlite", Dir: "d", Table: "t"}, false, env(map[string]string{EnvDSN: "env"}))
+	cfg = loadFixture(t, fixture, false, Overrides{DSN: "flag", Driver: "sqlite", Dir: "d", Table: "t"}, map[string]string{EnvDSN: "env"})
 	if cfg.Database.DSN != "flag" || cfg.Database.Driver != "sqlite" || cfg.Migrations.Dir != "d" || cfg.Migrations.Table != "t" {
 		t.Fatalf("flags should win: %+v", cfg)
 	}
 }
 
-func TestApplyDriverFollowsOverridingDSN(t *testing.T) {
-	cfg := Default()
-	cfg.Database.Driver, cfg.Database.DSN = "sqlite", "app.db" // as written by `gomigrate init`
-	cfg.Apply(Overrides{}, false, env(map[string]string{EnvDatabaseURL: "postgres://u:p@db/prod"}))
+func TestLoadDriverFollowsOverridingDSN(t *testing.T) {
+	cfg := loadFixture(t, "database: {driver: sqlite, dsn: app.db}", false, Overrides{}, map[string]string{EnvDatabaseURL: "postgres://u:p@db/prod"})
 	if cfg.Database.Driver != "postgres" {
 		t.Fatalf("driver = %s; a postgres:// DATABASE_URL must not be opened with the file's sqlite driver", cfg.Database.Driver)
 	}
-	cfg = Default()
-	cfg.Apply(Overrides{DSN: "postgres://x/y", Driver: "pgx"}, false, env(nil))
+	cfg = loadFixture(t, "# comment-only YAML uses defaults", false, Overrides{DSN: "postgres://x/y", Driver: "pgx"}, nil)
 	if cfg.Database.Driver != "pgx" {
 		t.Fatalf("a driver given at the same level as the DSN must be kept: %s", cfg.Database.Driver)
 	}
 }
 
-func TestApplyExplicitConfigIgnoresDatabaseURL(t *testing.T) {
-	cfg := Default()
-	cfg.Database.DSN = "prod-from-file"
-	cfg.Apply(Overrides{}, true, env(map[string]string{EnvDatabaseURL: "postgres://ambient/dev"}))
+func TestLoadExplicitConfigIgnoresDatabaseURL(t *testing.T) {
+	cfg := loadFixture(t, "database: {dsn: prod-from-file}", true, Overrides{}, map[string]string{EnvDatabaseURL: "postgres://ambient/dev"})
 	if cfg.Database.DSN != "prod-from-file" {
 		t.Fatalf("explicit --config must not be retargeted by DATABASE_URL: %s", cfg.Database.DSN)
 	}
 }
 
 func TestLoadExpandsAfterParsing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "c.yaml")
-	t.Setenv("GM_ODD_PW", "*abc: x #y")
 	body := `# ${GM_NOT_SET} in a comment is fine
 database:
   password: ${GM_ODD_PW}
   params:
     application_name: ${GM_APP:-gomigrate}
 `
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadFixture(t, body, true, Overrides{}, map[string]string{"GM_ODD_PW": "*abc: x #y"})
 	if cfg.Database.Password != "*abc: x #y" || cfg.Database.Params["application_name"] != "gomigrate" {
 		t.Fatalf("cfg = %+v", cfg.Database)
 	}

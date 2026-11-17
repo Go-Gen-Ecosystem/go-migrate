@@ -129,24 +129,19 @@ type session struct {
 
 func (s *session) Close() error { return s.db.Close() }
 
-func (g *globals) loadConfig() (config.Config, error) {
+func (g *globals) loadConfig(use config.Use) (config.Config, error) {
 	path, explicit := g.configPath, g.configPath != ""
 	if !explicit {
 		path = config.DefaultPath
 	}
-	cfg, err := config.Load(path, explicit)
-	if err != nil {
-		return config.Config{}, err
-	}
-	cfg.Apply(g.overrides, explicit, g.getenv)
-	return cfg, nil
+	return config.Load(path, explicit, g.overrides, g.getenv, use)
 }
 
 func (g *globals) open(ctx context.Context) (*session, error) {
 	if out := strings.ToLower(g.output); out != "text" && out != "json" {
 		return nil, fmt.Errorf("invalid --output %q (text, json)", g.output)
 	}
-	cfg, err := g.loadConfig()
+	cfg, err := g.loadConfig(config.ForConnection)
 	if err != nil {
 		return nil, err
 	}
@@ -173,25 +168,31 @@ func (g *globals) open(ctx context.Context) (*session, error) {
 
 func migratorOptions(cfg config.Config, logger halolog.Logger) []migrate.Option {
 	mc := cfg.Migrations
-	opts := []migrate.Option{
-		migrate.WithFS(os.DirFS(mc.Dir)),
+	opts := append(migrationSourceOptions(mc),
 		migrate.WithLogger(logger),
 		migrate.WithAllowOutOfOrder(mc.AllowOutOfOrder),
 		migrate.WithAllowMissing(mc.AllowMissing),
+	)
+	if mc.LockTimeout > 0 {
+		opts = append(opts, migrate.WithLockWait(mc.LockTimeout))
+	}
+	if mc.BaselineOnMigrate != "" {
+		opts = append(opts, migrate.WithBaselineOnMigrate(mc.BaselineOnMigrate))
+	}
+	return opts
+}
+
+func migrationSourceOptions(mc config.Migrations) []migrate.Option {
+	opts := []migrate.Option{
+		migrate.WithFS(os.DirFS(mc.Dir)),
 		migrate.WithContexts(mc.Contexts...),
 		migrate.WithLabels(mc.Labels...),
 	}
 	if mc.Table != "" {
-		opts = append(opts, migrate.WithTable(mc.Table))
-	}
-	if mc.LockTimeout > 0 {
-		opts = append(opts, migrate.WithLockWait(mc.LockTimeout))
+		opts = append(opts, migrate.WithTable(mc.Table)) // also sets the ${migrate:table} placeholder
 	}
 	if mc.Placeholders != nil {
 		opts = append(opts, migrate.WithPlaceholders(mc.Placeholders))
-	}
-	if mc.BaselineOnMigrate != "" {
-		opts = append(opts, migrate.WithBaselineOnMigrate(mc.BaselineOnMigrate))
 	}
 	return opts
 }
