@@ -3,11 +3,9 @@
 -->
 # go-migrate
 
-**Database migrations for Go teams, CI pipelines and AI agents.** Versioned SQL and
-Go migrations for PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, Oracle Database and IBM Db2 LUW, delivered as a driver-free library
-and one static CLI. It has Flyway's safety model and Liquibase's targeting, needs no JVM,
-lints migration SQL for production risks, and includes an MCP server so agents can
-migrate safely.
+Run versioned SQL migrations from a standalone CLI, or embed the runner in a Go application.
+go-migrate supports PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, Oracle Database and IBM Db2 LUW.
+Preview the SQL, then require its plan ID at deployment to check the plan, database and schema under the migration lock.
 
 [![Latest release](https://img.shields.io/github/v/release/Go-Gen-Ecosystem/go-migrate?label=release)](https://github.com/Go-Gen-Ecosystem/go-migrate/releases/latest)
 [![Integration statement coverage](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2FGo-Gen-Ecosystem%2Fgo-migrate%2Fcommits%2Fmain%2Fcheck-runs%3Fcheck_name%3Dstatement-coverage&query=%24.check_runs%5B0%5D.output.title&label=coverage)](https://github.com/Go-Gen-Ecosystem/go-migrate/actions/workflows/ci.yml?query=branch%3Amain)
@@ -19,27 +17,72 @@ go install github.com/go-gen-ecosystem/go-migrate/cmd/gomigrate@latest
 
 ## Why go-migrate
 
-| | go-migrate | golang-migrate v4 | goose v3 |
-|---|---|---|---|
-| Migration + history row commit atomically (PostgreSQL, SQLite, SQL Server) | ✅ | ❌ | ✅ |
-| Checksums detect edited applied migrations | ✅ | ❌ | ❌ |
-| Repeatable migrations, baseline, repair (Flyway) | ✅ | ❌ | ❌ |
-| Contexts, labels, preconditions, tags (Liquibase) | ✅ | ❌ | ❌ |
-| Placeholders and SQL callbacks (Flyway) | ✅ | ❌ | ❌ |
-| Go migrations in the same ordered sequence | ✅ | ❌ | ✅ |
-| Out-of-order apply, opt-in | ✅ | ❌ | ✅ |
-| Dry run with the exact SQL | ✅ | ❌ | ❌ |
-| Static risk linter (locks, rewrites, data loss) | ✅ | ❌ | ❌ |
-| Stable JSON output and error codes for CI and agents | ✅ | ❌ | ❌ |
-| MCP server for AI agents | ✅ | ❌ | ❌ |
-| Cross-process lock on every supported database | ✅ | partial | partial |
-| Reads golang-migrate and goose file formats | ✅ | — | — |
-| CGO-free binary including SQLite | ✅ | depends on build | depends on build |
+The table compares built-in capabilities in three pinned releases. A dash means we found no built-in equivalent for that row.
 
-**Memory per 100 migrations** (same SQL, same pure-Go SQLite, `benchmarks/compare`, Linux,
-Go 1.26, 6 runs, `benchstat`): go-migrate **596 KiB**, goose 1.14 MiB, golang-migrate
-10.66 MiB, with a similar number of allocations. Wall time is dominated by the database and
-is within noise between tools.
+| Capability | go-migrate v1.0.1 | golang-migrate v4.20.1 | goose v3.30.1 |
+|---|---|---|---|
+| Versioned SQL migrations | Yes | Yes | Yes |
+| SQL and registered Go functions in one version sequence | Library or custom binary | — | Library or custom binary |
+| Apply missing versions out of order | Opt-in | — | Opt-in |
+| Substitution inside SQL | Configured placeholders | — | Opt-in `ENVSUB` |
+| Read migrations directly from Amazon S3 in the stock CLI | — | Yes | — |
+| SQLite without CGO on Linux amd64 | Stock build | Custom build with the `sqlite` driver | Stock build |
+| Detect edits to applied versioned Up SQL by checksum | Yes | — | — |
+| Repeat SQL when its checksum changes | Yes | — | Unversioned mode reruns files without a checksum check |
+| Migration selection | Contexts, labels, preconditions and rollback tags | Target version or step count | Provider can exclude versions or filenames |
+| Named SQL callbacks around an Up run | Yes | — | — |
+| Require a reviewed SQL plan bound to the database and schema | `--expect-plan` | — | — |
+| Offline SQL risk linting | Rules vary by dialect | — | `validate` checks migration structure |
+| Cross-process locking | Engine-specific, including a file lock for disk-backed SQLite | Native locks on PostgreSQL, MySQL and SQL Server. SQLite guard is per driver instance | Opt-in provider locks, including PostgreSQL and MySQL |
+| Automation | CLI JSON results, error codes and bundled MCP server | Typed library errors and logger interface | Typed provider results, partial errors and structured logging |
+
+For transactional SQL migrations on PostgreSQL, SQLite and SQL Server, go-migrate and goose can commit the change and its history row in the same transaction. golang-migrate records a dirty version, executes the migration, then marks the version clean separately. Its `force V` command lets an operator set the version and clear dirty state after checking the database. [go-migrate execution](https://github.com/Go-Gen-Ecosystem/go-migrate/blob/v1.0.1/apply.go) · [golang-migrate execution and recovery](https://github.com/golang-migrate/migrate/blob/v4.20.1/migrate.go) · [goose transactional SQL](https://github.com/pressly/goose/blob/v3.30.1/migration_sql.go)
+
+Packaging and feature comparisons use the tagged source and build configuration. [golang-migrate release drivers](https://github.com/golang-migrate/migrate/blob/v4.20.1/Makefile) · [goose SQL annotations](https://github.com/pressly/goose/blob/v3.30.1/README.md) · [goose SQLite driver](https://github.com/pressly/goose/blob/v3.30.1/cmd/goose/driver_sqlite3.go) · [goose release build](https://github.com/pressly/goose/blob/v3.30.1/.goreleaser.yaml)
+
+### SQLite allocations per 100 migrations
+
+Each operation constructs a library runner and applies 100 migrations to a fresh SQLite database. Each migration creates a table and inserts one row. All three use the same SQL bodies and pure-Go driver (`modernc.org/sqlite v1.62.0`), with WAL and `synchronous=OFF`. The table shows medians of six samples per configuration on Linux/amd64, Go 1.26.11, Intel Core Ultra 9 285HX. B/op is cumulative Go heap allocation per batch. [Benchmark source](https://github.com/Go-Gen-Ecosystem/go-migrate/blob/v1.0.1/benchmarks/compare/compare_test.go)
+
+| Library configuration | Allocated per batch | Allocations per batch |
+|---|---:|---:|
+| go-migrate v1.0.1, default | 727.8 KiB | 10,873.5 |
+| golang-migrate v4.20.1, default | 10.66 MiB | 9,420 |
+| goose v3.30.1, default | 1.14 MiB | 8,547 |
+| golang-migrate v4.20.1, 4 KiB buffer | 892.2 KiB | 9,361 |
+
+At defaults, go-migrate allocated the fewest bytes and goose made the fewest allocations. The golang-migrate result was sensitive to its 100,000-byte buffer per migration. The fourth row changes only that setting. Larger SQL files, remote sources and durable storage are different workloads. [golang-migrate buffer implementation](https://github.com/golang-migrate/migrate/blob/v4.20.1/migration.go)
+
+<details>
+<summary>Samples and reproduction</summary>
+
+Each column lists bytes allocated per batch for the six samples, in execution order.
+
+| Sample | go-migrate | golang-migrate | goose | golang-migrate, 4 KiB |
+|---|---:|---:|---:|---:|
+| 1 | 754,551 | 11,181,571 | 1,194,601 | 918,816 |
+| 2 | 744,524 | 11,180,188 | 1,194,292 | 911,948 |
+| 3 | 747,631 | 11,182,817 | 1,194,418 | 913,354 |
+| 4 | 742,457 | 11,181,530 | 1,194,792 | 916,509 |
+| 5 | 743,558 | 11,180,337 | 1,194,205 | 913,784 |
+| 6 | 745,914 | 11,180,937 | 1,194,240 | 912,850 |
+
+Start in a disposable checkout of `v1.0.1`. Go 1.26.11 needs to refresh the tagged benchmark module's `go.mod` and `go.sum`, which is why the command uses `-mod=mod`.
+
+```bash
+cd benchmarks/compare
+GOWORK=off CGO_ENABLED=0 GOTOOLCHAIN=go1.26.11 go test -mod=mod -run '^$' -bench '^BenchmarkUp100_' -benchmem -count=6 .
+```
+
+For the fourth row, add these lines at the start of `BenchmarkUp100_GolangMigrate` in that checkout and repeat the command with `-bench '^BenchmarkUp100_GolangMigrate$'`.
+
+```go
+old := gm.DefaultBufferSize
+gm.DefaultBufferSize = 4096
+defer func() { gm.DefaultBufferSize = old }()
+```
+
+</details>
 
 ## Quick start
 
@@ -93,7 +136,7 @@ _, err = m.Up(ctx)
 
 | File | Meaning |
 |---|---|
-| `001_users.sql`, `V1.2__index.sql` | versioned; `-- +migrate Up` / `Down` markers (or `-- +goose …`) |
+| `001_users.sql`, `V1.2__index.sql` | Versioned SQL with `-- +migrate Up` and `Down` markers. Also accepts goose `Up`, `Down`, `StatementBegin`, `StatementEnd` and `NO TRANSACTION` annotations. |
 | `2024…_seed.up.sql` + `.down.sql` | versioned pair (golang-migrate layout) |
 | `R__views.sql` | repeatable: re-applied whenever it changes, and after rollbacks |
 | `beforeMigrate.sql`, `afterEachMigrate__x.sql`, … | SQL callbacks (Flyway names) |
@@ -115,7 +158,7 @@ Supporting rules:
 
 - **Placeholders:** `${name}` is replaced from `--placeholder name=value` or the `placeholders:` config. Built-ins are `${migrate:dialect}`, `${migrate:table}` and `${migrate:user}`.
 - **Versions** compare numerically: `9 < 10`, `1.9 < 1.10`, `001 == 1 == 1.0`.
-- **Checksums** cover the Up section and ignore line endings, BOMs and trailing whitespace. The SQL runs exactly as written.
+- **SQL checksums** cover the Up section. They normalize line endings, a leading BOM and insignificant whitespace outside literals, and preserve statement-block boundaries.
 - **Preconditions:** `HALT` fails the run, `MARK_RAN` records the migration without running it, and `CONTINUE` leaves it pending. Plans flag such migrations as `conditional`.
 - **Callbacks** appear in `--sql` plans (they run even when nothing is pending), are covered by the plan ID and are linted.
 
