@@ -1,6 +1,10 @@
 <!--
 @author Admilson B. F. Cossa
 -->
+<p align="center">
+  <img src="assets/go-migrate-logo.svg" alt="go-migrate's folded turquoise swift" width="140" height="140">
+</p>
+
 # go-migrate
 
 Run versioned SQL migrations from a standalone CLI, or embed the runner in a Go application.

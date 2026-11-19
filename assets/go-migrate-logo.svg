@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">go-migrate</title>
+  <desc id="desc">A turquoise swift in flight, folded from three angular planes, with an amber beak.</desc>
+  <rect x="4" y="4" width="248" height="248" rx="41" fill="#080e1e"/>
+  <path d="M201 123 166 166 54 207 99 164 165 149Z" fill="#00bc91"/>
+  <path d="m38 49 113 43 19 26 20-12 7 2 4 15-36 26-98 17 23-23 69-28-48 9Z" fill="#46e9dd"/>
+  <path d="m191 106 34 6-26 16Z" fill="#ffb62a"/>
+</svg>
