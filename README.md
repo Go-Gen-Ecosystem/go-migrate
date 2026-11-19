@@ -295,9 +295,32 @@ claude mcp add gomigrate -- gomigrate mcp
 ```
 
 - **Read-only tools:** `status`, `validate`, `plan` (with SQL) and `lint`.
-- **`create_migration`:** writes the file, then validates and lints it.
-- **`apply` and `rollback`:** they require `confirm: true` and the `plan_id` of the plan the user approved. Without them they return the plan. If the resolved database, schema or plan differs, re-plan and get fresh approval. `apply` also refuses while pending migrations have lint errors.
-- **`create_migration`** takes typed inputs (`no_transaction`, `sequential`) and rejects `-- +migrate` directives in the SQL, so an agent cannot suppress lint or retarget a migration.
+- **`create_migration`:** writes a migration file and validates and lints it. Use the typed `no_transaction` and `sequential` inputs. Embedded `-- +migrate` and `-- +goose` directives are rejected.
+
+By default, `apply` and `rollback` can preview a plan. In the operator's
+trusted environment, preview the intended change against the intended
+database (for example, `gomigrate -o json up --sql`). Review the SQL, callbacks
+and destination, then pass that preview's `plan_id` to a new MCP server using
+the same configuration and the corresponding operation:
+
+```sh
+gomigrate mcp --approve-apply "$REVIEWED_PLAN_ID"
+gomigrate mcp --approve-rollback "$REVIEWED_ROLLBACK_PLAN_ID"
+```
+
+The client must supply `confirm: true` and the matching `plan_id`. A matching
+request consumes the grant before it opens a database connection, even if the
+attempt fails or is cancelled. The runner also checks the current target and
+plan under the migration lock. Overriding lint errors requires both the
+operator's `--allow-lint-errors` on an apply grant and the client's
+`allow_lint_errors: true`.
+
+The launcher controls who can grant approval. Keep its configuration and
+database credentials outside the agent's control and record the review there
+if you need an audit of the approver. Each process start issues a new grant,
+so use a one-shot launch for execution. Keep the persistent planning server
+free of approval flags. After an interrupted attempt, inspect the database and
+review a fresh plan before launching again.
 
 ## CI/CD
 

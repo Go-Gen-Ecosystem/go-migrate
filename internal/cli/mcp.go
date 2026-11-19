@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -19,12 +21,11 @@ import (
 
 // Errors specific to the agent workflow. Their codes are part of the contract.
 var (
-	// errConfirmationRequired: a changing tool was called without confirm=true
-	// and the plan_id of the plan the user approved; the response carries
-	// that plan, its exact SQL and its plan_id.
-	errConfirmationRequired = errors.New("confirmation required: show the plan to the user, then call again with confirm=true and its plan_id")
+	// Return the preview when the caller omits its acknowledgment or plan ID.
+	errConfirmationRequired     = errors.New("confirmation required: review the plan before requesting execution with confirm=true and its plan_id")
+	errOperatorApprovalRequired = errors.New("operator approval required: the server needs an unused startup grant for this operation, plan and requested lint override")
 	// errLintBlocked: apply refused because pending migrations have lint errors.
-	errLintBlocked = errors.New("pending migrations have lint errors; fix them or call again with allow_lint_errors=true")
+	errLintBlocked = errors.New("pending migrations have lint errors; fix them or obtain an apply grant that permits a lint override")
 	// errDirectiveNotAllowed: agent-supplied SQL may not carry -- +migrate or
 	// -- +goose directives (they could suppress lint, change transaction mode
 	// or add preconditions invisibly); use the typed tool inputs instead.
@@ -35,32 +36,78 @@ var directiveLine = regexp.MustCompile(`(?im)^\s*--\s*\+(?:migrate|goose)\b`)
 
 const mcpInstructions = `gomigrate manages versioned database migrations (PostgreSQL, MySQL, SQLite, SQL Server, Oracle, Db2).
 Safe workflow: call status; author changes with create_migration; check them with lint;
-call plan to get the exact SQL and its plan_id; show that plan to the user; only after the
-user approves, call apply (or rollback) with confirm=true and that plan_id. If the plan,
-database or schema changed, the call fails with plan_changed: plan again. Every tool returns
+call plan to get the SQL and target-bound plan_id for review. Only the operator who starts
+the server can grant one apply or rollback attempt for that ID. The client acknowledges
+the request with confirm=true and the same plan_id. Without a matching startup grant,
+execution fails with operator_approval_required. If the live plan or target changed,
+the call fails with plan_changed: plan again and obtain a fresh grant. Every tool returns
 {ok, data | error{code, message}}; branch on error.code.`
 
 func newMCPCmd(g *globals, version string) *cobra.Command {
-	return &cobra.Command{
+	var applyID, rollbackID string
+	var allowLintErrors bool
+	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve gomigrate to AI agents over the Model Context Protocol (stdio)",
 		Long: "mcp runs a Model Context Protocol server on stdin/stdout, using the same config,\n" +
 			"flags and environment as every other command. Read-only tools: status, validate, plan,\n" +
 			"lint. Changing tools (create_migration, apply, rollback) are explicit; apply and\n" +
-			"rollback require confirm=true plus the plan_id of an approved plan.",
+			"rollback require a matching one-use grant from the server operator.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return newMCPServer(g, version).Run(cmd.Context(), &mcp.StdioTransport{})
+			var grant *mcpGrant
+			switch {
+			case cmd.Flags().Changed("approve-apply"):
+				grant = newMCPGrant("apply", applyID, allowLintErrors)
+			case cmd.Flags().Changed("approve-rollback"):
+				grant = newMCPGrant("rollback", rollbackID, false)
+			}
+			if grant != nil && strings.TrimSpace(grant.planID) == "" {
+				return fmt.Errorf("an approval requires a nonempty plan ID: %w", migrate.ErrInvalidArgument)
+			}
+			if allowLintErrors && applyID == "" {
+				return fmt.Errorf("--allow-lint-errors requires --approve-apply: %w", migrate.ErrInvalidArgument)
+			}
+			return newMCPServer(g, version, grant).Run(cmd.Context(), &mcp.StdioTransport{})
 		},
 	}
+	cmd.Flags().StringVar(&applyID, "approve-apply", "", "grant one apply attempt for this reviewed, target-bound plan ID")
+	cmd.Flags().StringVar(&rollbackID, "approve-rollback", "", "grant one rollback attempt for this reviewed, target-bound plan ID")
+	cmd.Flags().BoolVar(&allowLintErrors, "allow-lint-errors", false, "permit the approved apply to request a lint override")
+	cmd.MarkFlagsMutuallyExclusive("approve-apply", "approve-rollback")
+	return cmd
+}
+
+// A grant belongs to this server process and is shared by all its sessions.
+type mcpGrant struct {
+	action, planID  string
+	allowLintErrors bool
+	used            atomic.Bool
+}
+
+func newMCPGrant(action, planID string, allowLintErrors bool) *mcpGrant {
+	return &mcpGrant{action: action, planID: planID, allowLintErrors: allowLintErrors}
+}
+
+// Spend a matching grant before opening the execution session. An error,
+// cancellation or lost COMMIT reply must never make the grant reusable.
+func (g *mcpGrant) consume(action, planID string, allowLintErrors bool) error {
+	if g == nil || g.action != action || g.planID != planID || (allowLintErrors && !g.allowLintErrors) ||
+		!g.used.CompareAndSwap(false, true) {
+		return errOperatorApprovalRequired
+	}
+	return nil
 }
 
 // tools binds MCP tool handlers to the CLI's configuration.
-type tools struct{ g *globals }
+type tools struct {
+	g     *globals
+	grant *mcpGrant
+}
 
-func newMCPServer(g *globals, version string) *mcp.Server {
+func newMCPServer(g *globals, version string, grant *mcpGrant) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "gomigrate", Version: version}, &mcp.ServerOptions{Instructions: mcpInstructions})
-	t := tools{g: g}
+	t := tools{g: g, grant: grant}
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
 	destructive := true
 	mcp.AddTool(s, &mcp.Tool{Name: "status", Annotations: readOnly,
@@ -74,9 +121,9 @@ func newMCPServer(g *globals, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_migration", Annotations: &mcp.ToolAnnotations{DestructiveHint: new(bool)},
 		Description: "Write a new migration file with the given up and down SQL, then validate and lint it. Does not touch the database."}, t.create)
 	mcp.AddTool(s, &mcp.Tool{Name: "apply", Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive},
-		Description: "Apply pending migrations (all, or up to target). Requires confirm=true and the plan_id of the plan the user approved; refuses while pending migrations have lint errors unless allow_lint_errors=true."}, t.apply)
+		Description: "Apply pending migrations (all, or up to target). Requires confirm=true, the plan_id and a matching operator startup grant. A lint override also requires operator permission."}, t.apply)
 	mcp.AddTool(s, &mcp.Tool{Name: "rollback", Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive},
-		Description: "Roll back the last steps migrations, everything above version to, or back to tag to_tag (set one). Requires confirm=true and the plan_id of the plan the user approved."}, t.rollback)
+		Description: "Roll back the last steps migrations, everything above version to, or back to tag to_tag (set one). Requires confirm=true, the plan_id and a matching operator startup grant."}, t.rollback)
 	return s
 }
 
@@ -99,17 +146,17 @@ type createInput struct {
 
 type applyInput struct {
 	Target          string `json:"target,omitempty" jsonschema:"apply up to and including this version (default: all pending)"`
-	Confirm         bool   `json:"confirm,omitempty" jsonschema:"must be true; set it only after the user approved the plan"`
-	PlanID          string `json:"plan_id,omitempty" jsonschema:"plan_id from the plan the user approved"`
-	AllowLintErrors bool   `json:"allow_lint_errors,omitempty" jsonschema:"apply even if pending migrations have lint errors"`
+	Confirm         bool   `json:"confirm,omitempty" jsonschema:"caller acknowledgment to execute the reviewed plan"`
+	PlanID          string `json:"plan_id,omitempty" jsonschema:"target-bound plan ID matching the operator's apply grant"`
+	AllowLintErrors bool   `json:"allow_lint_errors,omitempty" jsonschema:"request a lint override permitted by the operator's apply grant"`
 }
 
 type rollbackInput struct {
 	Steps   int    `json:"steps,omitempty" jsonschema:"number of migrations to roll back (default 1)"`
 	To      string `json:"to,omitempty" jsonschema:"roll back every migration above this version (0 for all)"`
 	ToTag   string `json:"to_tag,omitempty" jsonschema:"roll back to the migration with this tag"`
-	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true; set it only after the user approved the plan"`
-	PlanID  string `json:"plan_id,omitempty" jsonschema:"plan_id from the plan the user approved"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"caller acknowledgment to execute the reviewed plan"`
+	PlanID  string `json:"plan_id,omitempty" jsonschema:"target-bound plan ID matching the operator's rollback grant"`
 }
 
 // respond turns (data, err) into the shared envelope; IsError tells the agent
@@ -223,8 +270,13 @@ func (t tools) create(ctx context.Context, _ *mcp.CallToolRequest, in createInpu
 }
 
 func (t tools) apply(ctx context.Context, _ *mcp.CallToolRequest, in applyInput) (*mcp.CallToolResult, envelope, error) {
+	confirmed := in.Confirm && in.PlanID != ""
+	if confirmed {
+		if err := t.grant.consume("apply", in.PlanID, in.AllowLintErrors); err != nil {
+			return respond("apply", nil, err)
+		}
+	}
 	return t.withSession(ctx, "apply", func(ctx context.Context, s *session) (any, error) {
-		confirmed := in.Confirm && in.PlanID != ""
 		pending, id, err := s.m.PlanWithID(ctx, in.Target)
 		if err != nil {
 			if confirmed && errors.Is(err, migrate.ErrApprovalTarget) {
@@ -252,9 +304,15 @@ func (t tools) apply(ctx context.Context, _ *mcp.CallToolRequest, in applyInput)
 }
 
 func (t tools) rollback(ctx context.Context, _ *mcp.CallToolRequest, in rollbackInput) (*mcp.CallToolResult, envelope, error) {
+	confirmed := in.Confirm && in.PlanID != ""
+	if confirmed {
+		if err := t.grant.consume("rollback", in.PlanID, false); err != nil {
+			return respond("rollback", nil, err)
+		}
+	}
 	return t.withSession(ctx, "rollback", func(ctx context.Context, s *session) (any, error) {
 		target := migrate.DownTarget{Steps: in.Steps, To: in.To, Tag: in.ToTag}
-		if !in.Confirm || in.PlanID == "" {
+		if !confirmed {
 			plan, err := planDown(ctx, s, target)
 			if err != nil {
 				return nil, err

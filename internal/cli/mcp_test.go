@@ -24,9 +24,17 @@ func mcpGlobals(env map[string]string) *globals {
 	return &globals{output: "text", logLevel: "error", logFormat: "text", stderr: &bytes.Buffer{}, getenv: envFunc(env)}
 }
 
-func connectMCP(t *testing.T, g *globals) *mcp.ClientSession {
+func connectMCP(t *testing.T, g *globals, grants ...*mcpGrant) *mcp.ClientSession {
 	t.Helper()
-	server := newMCPServer(g, "test")
+	var grant *mcpGrant
+	if len(grants) > 0 {
+		grant = grants[0]
+	}
+	return connectMCPServer(t, newMCPServer(g, "test", grant))
+}
+
+func connectMCPServer(t *testing.T, server *mcp.Server) *mcp.ClientSession {
+	t.Helper()
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(t.Context(), st, nil); err != nil {
 		t.Fatal(err)
@@ -62,7 +70,8 @@ func TestMCPAgentWorkflow(t *testing.T) {
 	if err := os.Mkdir("migrations", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cs := mcpClient(t, map[string]string{"GOMIGRATE_DSN": "agent.db"})
+	g := mcpGlobals(map[string]string{"GOMIGRATE_DSN": "agent.db"})
+	cs := connectMCP(t, g)
 
 	tools, err := cs.ListTools(t.Context(), nil)
 	if err != nil {
@@ -96,6 +105,8 @@ func TestMCPAgentWorkflow(t *testing.T) {
 		t.Fatalf("unconfirmed apply = %+v", e)
 	}
 	approved := planID(t, e)
+	// The operator pins this reviewed ID when starting a new server.
+	approvedSession := connectMCP(t, g, newMCPGrant("apply", approved, false))
 	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true}); e.Error == nil || e.Error.Code != "confirmation_required" {
 		t.Fatalf("confirm without plan_id must not run: %+v", e)
 	}
@@ -108,11 +119,12 @@ func TestMCPAgentWorkflow(t *testing.T) {
 		"down": "DROP TABLE later;", "sequential": true}); isErr {
 		t.Fatalf("create = %+v", e)
 	}
-	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true, "plan_id": approved}); e.Error == nil || e.Error.Code != "plan_changed" {
+	if e, _ = call(t, approvedSession, "apply", map[string]any{"confirm": true, "plan_id": approved}); e.Error == nil || e.Error.Code != "plan_changed" {
 		t.Fatalf("stale plan = %+v", e)
 	}
 	e, _ = call(t, cs, "plan", nil)
-	if e, isErr = call(t, cs, "apply", map[string]any{"confirm": true, "plan_id": planID(t, e)}); isErr || !e.OK {
+	current := planID(t, e)
+	if e, isErr = call(t, connectMCP(t, g, newMCPGrant("apply", current, false)), "apply", approvalArgs(current)); isErr || !e.OK {
 		t.Fatalf("confirmed apply = %+v", e)
 	}
 
@@ -123,7 +135,8 @@ func TestMCPAgentWorkflow(t *testing.T) {
 		t.Fatalf("create with risky SQL must report findings: %+v", e)
 	}
 	e, _ = call(t, cs, "plan", nil)
-	if e, _ = call(t, cs, "apply", map[string]any{"confirm": true, "plan_id": planID(t, e)}); e.Error == nil || e.Error.Code != "lint_blocked" {
+	current = planID(t, e)
+	if e, _ = call(t, connectMCP(t, g, newMCPGrant("apply", current, false)), "apply", approvalArgs(current)); e.Error == nil || e.Error.Code != "lint_blocked" {
 		t.Fatalf("lint gate = %+v", e)
 	}
 	if err := os.Remove("migrations/0003_add_tier.sql"); err != nil {
@@ -160,7 +173,8 @@ func TestMCPAgentWorkflow(t *testing.T) {
 	if e, _ = call(t, cs, "rollback", map[string]any{"steps": 2}); e.Error == nil || e.Error.Code != "confirmation_required" {
 		t.Fatalf("unconfirmed rollback = %+v", e)
 	}
-	if e, isErr = call(t, cs, "rollback", map[string]any{"steps": 2, "confirm": true, "plan_id": planID(t, e)}); isErr || !e.OK {
+	current = planID(t, e)
+	if e, isErr = call(t, connectMCP(t, g, newMCPGrant("rollback", current, false)), "rollback", map[string]any{"steps": 2, "confirm": true, "plan_id": current}); isErr || !e.OK {
 		t.Fatalf("confirmed rollback = %+v", e)
 	}
 	if e, isErr = call(t, cs, "validate", nil); isErr || !e.OK {

@@ -45,6 +45,7 @@ var cliCodes = []struct {
 	code string
 }{
 	{errConfirmationRequired, "confirmation_required"},
+	{errOperatorApprovalRequired, "operator_approval_required"},
 	{errLintBlocked, "lint_blocked"},
 	{errDirectiveNotAllowed, "directive_not_allowed"},
 	{config.ErrNoDatabase, "no_database"},

@@ -6,6 +6,13 @@
 All notable changes to go-migrate are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- MCP `apply` and `rollback` now require a one-use grant for the reviewed plan
+  at server startup. Existing clients can still preview plans. To execute,
+  start the server with `--approve-apply` or `--approve-rollback` and the
+  target-bound plan ID. Lint overrides also require `--allow-lint-errors`.
+
 ## [1.0.1] - 2026-11-17
 
 - Removed archived migration implementations and standalone project documents.

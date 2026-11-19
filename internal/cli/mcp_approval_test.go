@@ -63,8 +63,8 @@ func TestMCPApprovalTargetSQLite(t *testing.T) {
 				dsnA, dsnB = dsn+"side_a", dsn+"side_b"
 			}
 			execApprovalSQL(t, dbA, "CREATE TABLE seed (id INTEGER)")
-			a := approvalClient(t, dsnA, "main.gomigrate_history", "1")
-			b := approvalClient(t, dsnB, "main.gomigrate_history", "1")
+			a := approvalGlobals(dsnA, "main.gomigrate_history", "1")
+			b := approvalGlobals(dsnB, "main.gomigrate_history", "1")
 			assertTables := func(t *testing.T, db *sql.DB, want int) {
 				t.Helper()
 				assertApprovalCount(t, db, `SELECT count(*) FROM sqlite_schema WHERE name IN
@@ -131,8 +131,8 @@ func TestMCPApprovalTargetPostgres(t *testing.T) {
 				return u.String()
 			}
 			qualified := history + ".gomigrate_history"
-			a := approvalClient(t, targetDSN(dsnA, schemaA), qualified, "")
-			b := approvalClient(t, targetDSN(baseB, runtimeB), qualified, "")
+			a := approvalGlobals(targetDSN(dsnA, schemaA), qualified, "")
+			b := approvalGlobals(targetDSN(baseB, runtimeB), qualified, "")
 			assertTable := func(t *testing.T, db *sql.DB, schema, table string, want int) {
 				t.Helper()
 				assertApprovalCount(t, db, "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = $1 AND tablename = $2",
@@ -170,8 +170,10 @@ func TestMCPApprovalTargetUnavailable(t *testing.T) {
 	b := approvalClient(t, ":memory:", "", "")
 	bound := getApproval(t, a, "plan", nil)
 	assertApprovalError(t, b, "plan", nil, "approval_target_unavailable")
-	assertApprovalError(t, b, "apply", approvalArgs(bound.PlanID), "plan_changed")
-	assertApprovalError(t, b, "rollback", approvalArgs(bound.PlanID), "plan_changed")
+	for _, action := range []string{"apply", "rollback"} {
+		approved := connectMCP(t, approvalGlobals(":memory:", "", ""), newMCPGrant(action, bound.PlanID, false))
+		assertApprovalError(t, approved, action, approvalArgs(bound.PlanID), "plan_changed")
+	}
 }
 
 func TestCLIApprovalRejectsChangedBaselineBeforeHistoryWrites(t *testing.T) {
@@ -195,13 +197,14 @@ func TestCLIApprovalRejectsChangedBaselineBeforeHistoryWrites(t *testing.T) {
 	}
 	assertApprovalCount(t, db, `SELECT count(*) FROM sqlite_schema WHERE name IN
 		('gomigrate_history', 'approved_widget')`, 0)
-	a := approvalClient(t, dsn, "", "1")
-	assertSuccessfulApproval(t, a, "apply", getApproval(t, a, "plan", nil).PlanID)
+	a := approvalGlobals(dsn, "", "1")
+	id = getApproval(t, connectMCP(t, a), "plan", nil).PlanID
+	assertSuccessfulApproval(t, connectMCP(t, a, newMCPGrant("apply", id, false)), "apply", id)
 	assertApprovalCount(t, db, "SELECT COUNT(*) FROM gomigrate_history", 2)
 }
 
 type approvalGuard struct {
-	a, b                *mcp.ClientSession
+	a, b                *globals
 	assertRejectedApply func(*testing.T)
 	beforeRollback      func(*testing.T)
 	assertRejectedDown  func(*testing.T)
@@ -210,30 +213,31 @@ type approvalGuard struct {
 }
 
 func (g approvalGuard) run(t *testing.T) {
-	up := getApproval(t, g.a, "plan", nil)
-	if preview := getApproval(t, g.a, "apply", nil); !reflect.DeepEqual(up, preview) {
+	a, b := connectMCP(t, g.a), connectMCP(t, g.b)
+	up := getApproval(t, a, "plan", nil)
+	if preview := getApproval(t, a, "apply", nil); !reflect.DeepEqual(up, preview) {
 		t.Fatal("apply preview differs from MCP plan")
 	}
-	otherUp := getApproval(t, g.b, "plan", nil)
+	otherUp := getApproval(t, b, "plan", nil)
 	assertSameApprovalSQL(t, up, otherUp)
-	assertApprovalError(t, g.b, "apply", approvalArgs(up.PlanID), "plan_changed")
+	assertApprovalError(t, connectMCP(t, g.b, newMCPGrant("apply", up.PlanID, false)), "apply", approvalArgs(up.PlanID), "plan_changed")
 	g.assertRejectedApply(t)
-	assertSuccessfulApproval(t, g.a, "apply", up.PlanID)
+	assertSuccessfulApproval(t, connectMCP(t, g.a, newMCPGrant("apply", up.PlanID, false)), "apply", up.PlanID)
 	if g.setupRollbackTarget {
-		assertSuccessfulApproval(t, g.b, "apply", otherUp.PlanID)
+		assertSuccessfulApproval(t, connectMCP(t, g.b, newMCPGrant("apply", otherUp.PlanID, false)), "apply", otherUp.PlanID)
 	}
 	if g.beforeRollback != nil {
 		g.beforeRollback(t)
 	}
 	down := map[string]any{"direction": "down"}
-	rollback := getApproval(t, g.a, "plan", down)
-	if preview := getApproval(t, g.a, "rollback", nil); !reflect.DeepEqual(rollback, preview) {
+	rollback := getApproval(t, a, "plan", down)
+	if preview := getApproval(t, a, "rollback", nil); !reflect.DeepEqual(rollback, preview) {
 		t.Fatal("rollback preview differs from MCP plan")
 	}
-	assertSameApprovalSQL(t, rollback, getApproval(t, g.b, "plan", down))
-	assertApprovalError(t, g.b, "rollback", approvalArgs(rollback.PlanID), "plan_changed")
+	assertSameApprovalSQL(t, rollback, getApproval(t, b, "plan", down))
+	assertApprovalError(t, connectMCP(t, g.b, newMCPGrant("rollback", rollback.PlanID, false)), "rollback", approvalArgs(rollback.PlanID), "plan_changed")
 	g.assertRejectedDown(t)
-	assertSuccessfulApproval(t, g.a, "rollback", rollback.PlanID)
+	assertSuccessfulApproval(t, connectMCP(t, g.a, newMCPGrant("rollback", rollback.PlanID, false)), "rollback", rollback.PlanID)
 	g.assertSuccess(t)
 }
 
@@ -258,9 +262,13 @@ DROP TABLE approved_widget;
 
 func approvalClient(t *testing.T, dsn, table, baseline string) *mcp.ClientSession {
 	t.Helper()
+	return connectMCP(t, approvalGlobals(dsn, table, baseline))
+}
+
+func approvalGlobals(dsn, table, baseline string) *globals {
 	g := mcpGlobals(map[string]string{"GOMIGRATE_DSN": dsn})
 	g.overrides.Table, g.overrides.BaselineOnMigrate = table, baseline
-	return connectMCP(t, g)
+	return g
 }
 
 func getApproval(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]any) planJSON {
