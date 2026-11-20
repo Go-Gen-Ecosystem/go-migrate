@@ -417,56 +417,76 @@ func PostgresToken(sql string) (token, rest string) {
 func Code(sql string, lx Lexical) string { return code(sql, lx, true) }
 
 func code(sql string, lx Lexical, identifiers bool) string {
+	next := func(from int) codeEdit { return nextCodeEdit(sql, from, lx, identifiers) }
+	first := next(0)
+	if first.start == len(sql) {
+		return sql
+	}
+	// A single large literal can disappear, while many short ones can leave
+	// most of the SQL intact. Size the output for both cases.
+	size := len(sql)
+	for e := first; e.start < len(sql); e = next(e.end) {
+		size += len(e.text) - (e.end - e.start)
+	}
 	var b strings.Builder
-	b.Grow(len(sql))
-	for i := 0; i < len(sql); {
+	b.Grow(size)
+	from := 0
+	for e := first; e.start < len(sql); e = next(e.end) {
+		b.WriteString(sql[from:e.start])
+		b.WriteString(e.text)
+		from = e.end
+	}
+	b.WriteString(sql[from:])
+	return b.String()
+}
+
+type codeEdit struct {
+	start, end int
+	text       string
+}
+
+func nextCodeEdit(sql string, from int, lx Lexical, identifiers bool) codeEdit {
+	for i := from; i < len(sql); {
+		at := i
+		replacement := " "
 		c := sql[i]
 		switch {
 		case c == '\'':
 			backslash := lx.BackslashEscapes || (lx.DollarQuotes && isEStringPrefix(sql, i))
 			i = skipQuoted(sql, i, '\'', backslash)
-			b.WriteString("''")
+			replacement = "''"
 		case c == '"' || (c == '`' && lx.Backticks) || (c == '[' && lx.TSQL):
 			if c == '[' {
 				c = ']'
 			}
-			j := skipQuoted(sql, i, c, false)
+			i = skipQuoted(sql, i, c, false)
 			if identifiers {
-				b.WriteString(sql[i:j])
-			} else {
-				b.WriteByte(' ')
+				continue
 			}
-			i = j
 		case lx.Oracle && c|0x20 == 'q':
-			j := skipOracleQuote(sql, i)
-			if j == i+1 {
-				b.WriteByte(c)
-			} else {
-				b.WriteString("''")
+			i = skipOracleQuote(sql, i)
+			if i == at+1 {
+				continue
 			}
-			i = j
+			replacement = "''"
 		case c == '-' && i+1 < len(sql) && sql[i+1] == '-' &&
 			(!lx.MySQLComments || i+2 >= len(sql) || isSpace(sql[i+2])):
 			i = skipLine(sql, i)
-			b.WriteByte(' ')
 		case c == '#' && lx.HashComments:
 			i = skipLine(sql, i)
-			b.WriteByte(' ')
 		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
 			i = skipBlock(sql, i, lx.TSQL)
-			b.WriteByte(' ')
 		case c == '$' && lx.DollarQuotes:
-			j := skipDollar(sql, i)
-			if j > i+1 {
-				b.WriteString("$$")
-			} else {
-				b.WriteByte('$')
+			i = skipDollar(sql, i)
+			if i == at+1 {
+				continue
 			}
-			i = j
+			replacement = "$$"
 		default:
-			b.WriteByte(c)
 			i++
+			continue
 		}
+		return codeEdit{start: at, end: i, text: replacement}
 	}
-	return b.String()
+	return codeEdit{start: len(sql)}
 }

@@ -4,11 +4,11 @@
 package script
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"regexp"
 	"strings"
 	"unicode"
@@ -87,9 +87,25 @@ func (s Section) Checksum() string {
 			kind = 'v'
 		}
 		h.Write([]byte{0, kind})
-		h.Write([]byte(c.canon))
+		writeChecksumText(h, c.canon)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// Hash large SQL from bounded scratch space. Converting the entire string to
+// []byte for hash.Hash.Write would allocate another copy of each large chunk.
+func writeChecksumText(h hash.Hash, text string) {
+	const block = 4 << 10
+	if len(text) <= block {
+		h.Write([]byte(text))
+		return
+	}
+	var buf [block]byte
+	for len(text) > 0 {
+		n := copy(buf[:], text)
+		h.Write(buf[:n])
+		text = text[n:]
+	}
 }
 
 // Statements returns the section's statements in execution order.
@@ -185,24 +201,22 @@ var directive = regexp.MustCompile(`(?i)^\s*--\s*\+(?:migrate|goose)\s+(\S+)(?:\
 func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 	// Only line endings and the BOM are normalized for execution; trailing
 	// whitespace inside string literals must reach the database unchanged.
-	text := string(lineEndings(content))
+	text := lineEndings(content)
 	var (
 		sc        Script
 		cur       *Section
 		seen      [2]bool
 		markers   bool
 		inBlock   bool
-		buf       strings.Builder
-		canon     strings.Builder
+		buf       chunkBuilder
 		blockLine int
 		st        lexState
 	)
 	flush := func(verbatim bool) {
-		if buf.Len() > 0 && cur != nil {
-			cur.chunks = append(cur.chunks, chunk{sql: buf.String(), verbatim: verbatim, canon: strings.Trim(canon.String(), "\n")})
+		if buf.sql.Len() > 0 {
+			cur.chunks = append(cur.chunks, buf.chunk(verbatim))
 		}
-		buf.Reset()
-		canon.Reset()
+		buf = chunkBuilder{}
 	}
 	sectionFor := func(d Direction) *Section {
 		if d == Down {
@@ -214,8 +228,9 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 	preamble := preambleLexical
 	preamble.TSQL = lx.TSQL
 
-	for n, line := range strings.Split(text, "\n") {
-		lineNo := n + 1
+	lineNo := 0
+	for line := range strings.SplitSeq(text, "\n") {
+		lineNo++
 		if lx.TSQL && st.inCode() {
 			if goLine, valid := tsqlGoLine(line); goLine && (!valid || inBlock) {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrTSQLBatch)
@@ -229,13 +244,8 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 			m = directive.FindStringSubmatch(line)
 		}
 		if m == nil {
-			buf.WriteString(line)
-			buf.WriteByte('\n')
-			if st = st.line(line, lx); st.inCode() {
-				line = strings.TrimRight(line, " \t") // insignificant outside literals
-			}
-			canon.WriteString(line)
-			canon.WriteByte('\n')
+			st = st.line(line, lx)
+			buf.appendLine(line, st.inCode())
 			st = st.newline()
 			continue
 		}
@@ -253,12 +263,11 @@ func Parse(content []byte, def Direction, lx Lexical) (Script, error) {
 			if seen[d] {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrDuplicateMarker)
 			}
-			if !markers && HasStatement(buf.String(), preamble) {
+			if !markers && HasStatement(buf.sql.String(), preamble) {
 				return Script{}, fmt.Errorf("line %d: %w", lineNo, ErrContentBeforeMarker)
 			}
 			if !markers {
-				buf.Reset() // leading comments/whitespace belong to no section
-				canon.Reset()
+				buf = chunkBuilder{} // leading comments/whitespace belong to no section
 			} else {
 				flush(false)
 			}
@@ -393,17 +402,48 @@ func mayBeDirective(line string) bool {
 	return strings.HasPrefix(t, "--") && strings.IndexByte(t, '+') >= 0
 }
 
-var bom = []byte("\xEF\xBB\xBF")
+// Most SQL already has canonical whitespace. Share the immutable SQL in that
+// case, and build separate checksum text only from the first changed line.
+type chunkBuilder struct {
+	sql, canon strings.Builder
+	changed    bool
+}
+
+func (b *chunkBuilder) appendLine(line string, inCode bool) {
+	canonical := line
+	if inCode {
+		canonical = strings.TrimRight(line, " \t")
+	}
+	if !b.changed && len(canonical) != len(line) {
+		b.canon.WriteString(b.sql.String())
+		b.changed = true
+	}
+	b.sql.WriteString(line)
+	b.sql.WriteByte('\n')
+	if b.changed {
+		b.canon.WriteString(canonical)
+		b.canon.WriteByte('\n')
+	}
+}
+
+func (b *chunkBuilder) chunk(verbatim bool) chunk {
+	sql := b.sql.String()
+	canonical := sql
+	if b.changed {
+		canonical = b.canon.String()
+	}
+	return chunk{sql: sql, verbatim: verbatim, canon: strings.Trim(canonical, "\n")}
+}
 
 // preambleLexical recognises every comment style, for checking that only
 // comments precede the first Up/Down marker.
 var preambleLexical = Lexical{HashComments: true}
 
 // lineEndings strips a UTF-8 BOM and converts CRLF/CR to LF.
-func lineEndings(content []byte) []byte {
-	content = bytes.TrimPrefix(content, bom)
-	content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
-	return bytes.ReplaceAll(content, []byte("\r"), []byte("\n"))
+func lineEndings(content []byte) string {
+	text := strings.TrimPrefix(string(content), "\uFEFF")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
 }
 
 // IsTransactionControl reports whether stmt starts a, or ends the current,

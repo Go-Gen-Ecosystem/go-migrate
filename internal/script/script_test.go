@@ -4,7 +4,9 @@
 package script
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -190,6 +192,40 @@ func TestChecksumIgnoresOnlyInsignificantWhitespace(t *testing.T) {
 	block := upChecksum(t, "-- +migrate StatementBegin\nSELECT 1;\nSELECT 2;\n-- +migrate StatementEnd", Lexical{})
 	if plain == block {
 		t.Fatal("verbatim block boundaries must change the checksum")
+	}
+}
+
+func TestLargeSQLPreservesStatementsAndV1Checksum(t *testing.T) {
+	first := "SELECT '" + strings.Repeat("x", 128<<10) + "  \n-- +migrate Down\nend'"
+	data := []byte("\uFEFF-- +migrate Up\r\n" + strings.ReplaceAll(first, "\n", "\r") +
+		";\r\nSELECT 2; \t\r\n-- +migrate StatementBegin\r\nSELECT 3;\r\n-- +migrate StatementEnd")
+	sc, err := Parse(data, Up, pg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(data) // The caller can reuse its input after Parse returns.
+	if got := sc.Up.Statements(pg); !reflect.DeepEqual(got, []string{first, "SELECT 2", "SELECT 3"}) {
+		t.Fatal("large literal or statement boundary changed")
+	}
+	// v1 separates plain and verbatim chunks, excludes trailing code whitespace
+	// and preserves the spaces and directive-shaped line inside the literal.
+	want := sha256.Sum256([]byte("gomigrate/checksum/v1\x00p" + first + ";\nSELECT 2;\x00vSELECT 3;"))
+	if got := sc.Up.Checksum(); got != fmt.Sprintf("%x", want) {
+		t.Fatalf("checksum = %s, want %x", got, want)
+	}
+}
+
+func TestCodeAllocationsForBulkInsert(t *testing.T) {
+	const rows = 16 << 10
+	sql := "INSERT INTO t VALUES " + strings.Repeat("('x'),", rows-1) + "('x');"
+	want := "INSERT INTO t VALUES " + strings.Repeat("(''),", rows-1) + "('');"
+	var got string
+	allocs := testing.AllocsPerRun(5, func() { got = Code(sql, Lexical{}) })
+	if got != want {
+		t.Fatal("bulk INSERT projection changed")
+	}
+	if allocs > 1 {
+		t.Fatalf("Code allocated %.0f times, want at most one output buffer", allocs)
 	}
 }
 

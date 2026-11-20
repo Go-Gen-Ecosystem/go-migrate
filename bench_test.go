@@ -6,6 +6,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -32,6 +33,30 @@ func BenchmarkNew(b *testing.B) {
 		if _, err := New(db, "sqlite", WithFS(fsys)); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// A large SQL literal must not cause a file-sized allocation at every stage
+// of loading. Measure public New, including the FS read and transaction checks.
+func TestNewLargeLiteralAllocationBudget(t *testing.T) {
+	const payload = 128 << 10
+	data := []byte("-- +goose Up\nINSERT INTO t VALUES ('" + strings.Repeat("x", payload) + "');\n-- +goose Down\nDELETE FROM t;\n")
+	files := fstest.MapFS{"001_seed.sql": &fstest.MapFile{Data: data}}
+	db := openDB(t)
+	var loadErr error
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if _, loadErr = New(db, "sqlite", WithFS(files)); loadErr != nil {
+				return
+			}
+		}
+	})
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	// Allow four source-sized buffers plus headroom for metadata and allocator rounding.
+	if got, limit := result.AllocedBytesPerOp(), int64(4*len(data)+(32<<10)); got > limit {
+		t.Fatalf("New allocated %d bytes for %d bytes of SQL, budget %d", got, len(data), limit)
 	}
 }
 
